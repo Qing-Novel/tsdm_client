@@ -1,0 +1,76 @@
+name: My Build Android & Windows
+on:
+  workflow_dispatch: # ✅网页手动点击运行，小白模式
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive # tsdm_client必须开启子模块
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          cache: true
+
+      # 解码jks签名文件，过滤Windows回车符号\r，防止密钥损坏
+      - name: decode keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r' | base64 --decode > android/app/upload-keystore.jks
+        shell: bash
+
+      # 生成签名配置 key.properties
+      - name: write key.properties
+        run: |
+          cat > android/key.properties <<EOF
+storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+storeFile=upload-keystore.jks
+EOF
+
+      - run: flutter pub get
+      - run: flutter build apk --release --target-platform android-arm64,android-x64
+
+      - name: upload signed apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: zip windows release
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath windows-app.zip
+      - name: upload windows zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-zip
+          path: windows-app.zip
+
+  create-draft-release:
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Generate draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.sha }}
+          name: 手动构建版本
+          draft: true
+          files: |
+            signed-android-apk/app-release.apk
+            windows-build-zip/windows-app.zip
