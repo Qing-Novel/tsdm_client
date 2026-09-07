@@ -18,6 +18,11 @@ jobs:
           flutter-version: ${{ env.CI_FLUTTER_VERSION }}
           cache: true
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST_VERSION }}
+
       - name: decode keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r' | base64 --decode > android/app/upload-keystore.jks
@@ -50,6 +55,12 @@ jobs:
         with:
           flutter-version: ${{ env.CI_FLUTTER_VERSION }}
           cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST_VERSION }}
+
       - run: flutter pub get
       - run: flutter build windows --release
       - name: zip windows release
