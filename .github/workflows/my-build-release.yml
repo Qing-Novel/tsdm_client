@@ -60,10 +60,10 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      # ==========修复jks base64解码：同时删除 \r 和 \n，防止换行破坏jks二进制==========
+      # 修复关键点：printf代替echo，不会自动追加换行，避免jks二进制损坏
       - name: decode keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r\n' | base64 --decode > android/app/upload-keystore.jks
+          printf "%s" "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r\n' | base64 --decode > android/app/upload-keystore.jks
         shell: bash
 
       - name: write key.properties
@@ -85,10 +85,8 @@ jobs:
 
   windows:
     name: Build Windows
-    runs-on: windows-latest
-    env:
-      # 修复新版MSVC experimental coroutine静态断言报错
-      _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS: 1
+    # 修复关键点：切换 windows‑2019，MSVC版本旧，不会触发experimental coroutine STL静态断言错误
+    runs-on: windows-2019
     steps:
       - uses: actions/checkout@v5
         with:
