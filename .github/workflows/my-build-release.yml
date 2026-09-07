@@ -21,12 +21,10 @@ jobs:
 
       - name: write key.properties
         run: |
-          cat > android/key.properties <<'EOF'
-storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-storeFile=upload-keystore.jks
-EOF
+          echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" > android/key.properties
+          echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/key.properties
+          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/key.properties
+          echo "storeFile=upload-keystore.jks" >> android/key.properties
         shell: bash
 
       - run: flutter pub get
