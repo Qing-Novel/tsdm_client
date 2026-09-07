@@ -37,7 +37,7 @@ jobs:
         shell: bash
 
       - run: flutter pub get
-      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run build_runner build --release --delete-conflicting-outputs
       - run: flutter build apk --release --target-platform android-arm64,android-x64
 
       - name: upload signed apk
@@ -63,7 +63,7 @@ jobs:
           toolchain: ${{ env.CI_RUST_VERSION }}
 
       - run: flutter pub get
-      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run build_runner build --release --delete-conflicting-outputs
       - run: flutter build windows --release
       - name: zip windows release
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath windows-app.zip
