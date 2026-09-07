@@ -38,6 +38,7 @@ jobs:
 
       - run: flutter pub get
       - run: dart run build_runner build --release --delete-conflicting-outputs
+      - run: dart run drift_dev schema generate drift_schemas/ lib/shared/providers/storage_provider/models/database/schema/
       - run: flutter build apk --release --target-platform android-arm64,android-x64
 
       - name: upload signed apk
@@ -64,6 +65,7 @@ jobs:
 
       - run: flutter pub get
       - run: dart run build_runner build --release --delete-conflicting-outputs
+      - run: dart run drift_dev schema generate drift_schemas/ lib/shared/providers/storage_provider/models/database/schema/
       - run: flutter build windows --release
       - name: zip windows release
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath windows-app.zip
