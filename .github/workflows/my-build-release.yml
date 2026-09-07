@@ -55,16 +55,15 @@ jobs:
           ANDROID_NDK_LATEST_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
 
-      # ========== 核心：全部代码生成交给Makefile.dart，不再手写build_runner/drift_dev命令 ==========
       - name: Precompile (pub get + freezed + drift schema all in one)
         run: |
           flutter pub get
           dart ./Makefile.dart
 
-      # 你的签名配置（沿用你之前base64 secret方式）
+      # ==========修复jks base64解码：同时删除 \r 和 \n，防止换行破坏jks二进制==========
       - name: decode keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r' | base64 --decode > android/app/upload-keystore.jks
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r\n' | base64 --decode > android/app/upload-keystore.jks
         shell: bash
 
       - name: write key.properties
@@ -87,6 +86,9 @@ jobs:
   windows:
     name: Build Windows
     runs-on: windows-latest
+    env:
+      # 修复新版MSVC experimental coroutine静态断言报错
+      _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS: 1
     steps:
       - uses: actions/checkout@v5
         with:
@@ -97,7 +99,6 @@ jobs:
           flutter-version: ${{ env.CI_FLUTTER_VERSION }}
           cache: true
 
-      # 核心：Makefile.dart完成子模块、pub get、全部dart代码生成
       - name: Precompile
         shell: pwsh
         run: |
