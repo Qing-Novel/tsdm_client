@@ -7,13 +7,15 @@ env:
   CI_RUST_VERSION: "1.83.0"
 
 jobs:
-  android:
-    name: Build Android
+  # 独立job构建全量fat apk，和拆分包完全隔离，避免监视器冲突
+  android-fat:
+    name: Build Android Fat Full Package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          submodules: false
 
       - uses: actions/setup-java@v4
         with:
@@ -29,7 +31,14 @@ jobs:
         run: |
           sudo apt update -y
           sudo apt install -y ninja-build libgtk-3-dev make meson nasm
-          git submodule update --init --recursive --force
+
+      - name: Retry clone git submodules (fix github timeout)
+        run: |
+          for i in {1..5}; do
+            git submodule update --init --recursive --force && break
+            echo "Submodule clone retry $i ..."
+            sleep 5
+          done
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -65,42 +74,100 @@ jobs:
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      - name: Debug 查看生成的文件
-        run: |
-          echo "===== 查看 android 文件夹下文件 ====="
-          ls -la android/
-          echo -e "\n===== 查看 android/app 文件夹下文件 ====="
-          ls -la android/app/
-          echo -e "\n===== 打印 key.properties 的完整内容 ====="
-          cat android/key.properties
-
-      # 第一步构建全量fat apk
       - name: Build full fat apk
         run: flutter build apk --release
 
-      # 关键：clean，消除 Already watching path 监视器冲突
-      - name: Flutter clean
-        run: flutter clean
+      - name: upload fat apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-fat-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
 
-      # 第二步构建ABI拆分包
+  android-split:
+    name: Build Android Split ABI Packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Prepare system dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y ninja-build libgtk-3-dev make meson nasm
+
+      - name: Retry clone git submodules (fix github timeout)
+        run: |
+          for i in {1..5}; do
+            git submodule update --init --recursive --force && break
+            echo "Submodule clone retry $i ..."
+            sleep 5
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.CI_RUST_VERSION }}
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r29
+
+      - name: Update NDK path
+        run: |
+          echo "${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Build flutter_avif native library
+        run: |
+          cargo install cargo-ndk@3.5.4 --locked
+          ./scripts/build-flutter_avif-android.sh
+        env:
+          ANDROID_NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_LATEST_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      - name: Precompile (pub get + freezed + drift schema all in one)
+        run: |
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Setup Android sign key
+        run: |
+          echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
+          echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
+
       - name: Build split‑per‑abi apks
         run: flutter build apk --release --split-per-abi
 
-      - name: upload all android apks
+      - name: upload split apks
         uses: actions/upload-artifact@v4
         with:
-          name: signed-android-apk
+          name: android-split-apk
           path: |
-            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
 
   windows:
     name: Build Windows
-    # 改为windows‑2022，固定MSVC版本，避开STL1011静态断言，不需要任何宏
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          submodules: false
 
       - uses: subosito/flutter-action@v2
         with:
@@ -110,7 +177,9 @@ jobs:
       - name: Precompile
         shell: pwsh
         run: |
-          git submodule update --init --recursive --force
+          for($i=1;$i -le 5;$i++){
+            git submodule update --init --recursive --force; if($LASTEXITCODE -eq 0){break}; echo "submodule retry $i"; Start-Sleep 5
+          }
           flutter pub get
           dart ./Makefile.dart
 
@@ -133,6 +202,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          submodules: false
 
       - uses: subosito/flutter-action@v2
         with:
@@ -143,7 +213,14 @@ jobs:
         run: |
           sudo apt update -y
           sudo apt install -y ninja-build libgtk-3-dev make meson nasm
-          git submodule update --init --recursive --force
+
+      - name: Retry clone git submodules
+        run: |
+          for i in {1..5}; do
+            git submodule update --init --recursive --force && break
+            echo "Submodule clone retry $i ..."
+            sleep 5
+          done
 
       - name: Precompile
         run: |
@@ -166,6 +243,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          submodules: false
 
       - uses: subosito/flutter-action@v2
         with:
@@ -174,7 +252,11 @@ jobs:
 
       - name: Precompile
         run: |
-          git submodule update --init --recursive --force
+          for i in {1..5}; do
+            git submodule update --init --recursive --force && break
+            echo "Submodule clone retry $i ..."
+            sleep 5
+          done
           flutter pub get
           dart ./Makefile.dart
 
@@ -194,6 +276,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          submodules: false
 
       - uses: subosito/flutter-action@v2
         with:
@@ -202,7 +285,11 @@ jobs:
 
       - name: Precompile
         run: |
-          git submodule update --init --recursive --force
+          for i in {1..5}; do
+            git submodule update --init --recursive --force && break
+            echo "Submodule clone retry $i ..."
+            sleep 5
+          done
           flutter pub get
           dart ./Makefile.dart
 
@@ -216,7 +303,7 @@ jobs:
           path: build/ios/iphoneos/
 
   create-draft-release:
-    needs: [android, windows, linux, macos, ios]
+    needs: [android-fat, android-split, windows, linux, macos, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -229,7 +316,8 @@ jobs:
           name: 手动构建版本
           draft: true
           files: |
-            signed-android-apk/*.apk
+            android-fat-apk/app-release.apk
+            android-split-apk/*.apk
             windows-build-zip/windows-app.zip
             linux-build-bundle/*
             macos-build-app/*
