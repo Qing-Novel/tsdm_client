@@ -142,7 +142,8 @@ jobs:
         run: |
           flutter pub get
           dart ./Makefile.dart
-          flutter assemble --release --target lib/main.dart
+          # 修复：assemble 使用 --mode release，不要写--release
+          flutter assemble --mode release --target lib/main.dart
 
       - name: Setup Android sign key
         run: |
@@ -153,7 +154,7 @@ jobs:
         working-directory: ./android
         run: ./gradlew assembleRelease
 
-      - name: Debug list apks (可后续删掉)
+      - name: Debug list apks (构建成功后可删除)
         run: ls -la android/app/build/outputs/apk/release/
 
       - name: upload split apks
