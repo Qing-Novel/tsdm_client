@@ -1,4 +1,4 @@
-name: My Build Android & Windows
+name: My Release
 on:
   workflow_dispatch:
 
@@ -66,14 +66,30 @@ jobs:
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      - name: Build Android apk release
-        run: flutter build apk --release
+      - name: Debug 查看生成的文件
+        run: |
+          echo "===== 查看 android 文件夹下文件 ====="
+          ls -la android/
+          echo -e "\n===== 查看 android/app 文件夹下文件 ====="
+          ls -la android/app/
+          echo -e "\n===== 打印 key.properties 的完整内容 ====="
+          cat android/key.properties
 
-      - name: upload signed apk
+      - name: Build arm64‑v8a apk (64位手机)
+        run: flutter build apk --release --target-platform=android-arm64
+      - name: Build armeabi‑v7a apk (32位老手机)
+        run: flutter build apk --release --target-platform=android-arm
+      - name: Build x86‑64 apk (模拟器/平板)
+        run: flutter build apk --release --target-platform=android-x64
+
+      - name: upload signed android apks
         uses: actions/upload-artifact@v4
         with:
           name: signed-android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: |
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
 
   windows:
     name: Build Windows
@@ -107,8 +123,97 @@ jobs:
           name: windows-build-zip
           path: windows-app.zip
 
+  linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install linux dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y ninja-build libgtk-3-dev make meson nasm
+          git submodule update --init --recursive --force
+
+      - name: Precompile
+        run: |
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Build Linux release
+        run: flutter build linux --release
+
+      - name: upload linux bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-bundle
+          path: build/linux/x64/release/bundle/
+
+  macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Precompile
+        run: |
+          git submodule update --init --recursive --force
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Build macOS release
+        run: flutter build macos --release
+
+      - name: upload macos app
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-app
+          path: build/macos/Build/Products/Release/*.app
+
+  ios:
+    name: Build iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Precompile
+        run: |
+          git submodule update --init --recursive --force
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Build iOS archive (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: upload ios archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-archive
+          path: build/ios/iphoneos/
+
   create-draft-release:
-    needs: [android, windows]
+    needs: [android, windows, linux, macos, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -121,5 +226,8 @@ jobs:
           name: 手动构建版本
           draft: true
           files: |
-            signed-android-apk/app-release.apk
+            signed-android-apk/*
             windows-build-zip/windows-app.zip
+            linux-build-bundle/*
+            macos-build-app/*
+            ios-build-archive/*
