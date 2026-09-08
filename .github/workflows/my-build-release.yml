@@ -34,6 +34,207 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.CI_RUST_VERSION }}
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android
+
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r29
+
+      - name: Update NDK path
+        run: |
+          echo "${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Build flutter_avif native library
+        run: |
+          cargo install cargo-ndk@3.5.4 --locked
+          ./scripts/build-flutter_avif-android.sh
+        env:
+          ANDROID_NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_LATEST_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      - name: Precompile (pub get + freezed + drift schema all in one)
+        run: |
+          flutter pub get
+          dart ./Makefile.dart
+
+      # ========== 完全复刻上游官方签名逻辑 ==========
+      - name: Setup Android sign key
+        run: |
+          echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
+          echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
+
+      - name: Debug 查看生成的文件
+        run: |
+          echo "===== 查看 android 文件夹下文件 ====="
+          ls -la android/
+          echo -e "\n===== 查看 android/app 文件夹下文件 ====="
+          ls -la android/app/
+          echo -e "\n===== 打印 key.properties 的完整内容 ====="
+          cat android/key.properties
+
+      # 1. 构建全量fat包（arm64‑v8a + armeabi‑v7a）
+      - name: Build Android full fat apk
+        run: flutter build apk --release
+
+      # 2. 拆分ABI：只输出 arm64‑v8a、armeabi‑v7a，不生成x86_64
+      - name: Build Android split per abi apks
+        run: flutter build apk --release --split-per-abi
+
+      - name: upload all android apks
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-android-apk
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+
+  windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Precompile
+        shell: pwsh
+        run: |
+          git submodule update --init --recursive --force
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Silence MSVC experimental coroutine deprecation error
+        shell: pwsh
+        run: |
+          $env:CL="/D _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: zip windows release
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath windows-app.zip
+
+      - name: upload windows zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-zip
+          path: windows-app.zip
+
+  linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install linux dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y ninja-build libgtk-3-dev make meson nasm
+          git submodule update --init --recursive --force
+
+      - name: Precompile
+        run: |
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Build Linux release
+        run: flutter build linux --release
+
+      - name: upload linux bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-bundle
+          path: build/linux/x64/release/bundle/
+
+  macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Precompile
+        run: |
+          git submodule update --init --recursive --force
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Build macOS release
+        run: flutter build macos --release
+
+      - name: upload macos app
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-app
+          path: build/macos/Build/Products/Release/*.app
+
+  ios:
+    name: Build iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.CI_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Precompile
+        run: |
+          git submodule update --init --recursive --force
+          flutter pub get
+          dart ./Makefile.dart
+
+      - name: Build iOS archive (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: upload ios archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-archive
+          path: build/ios/iphoneos/
+
+  create-draft-release:
+    needs: [android, windows, linux, macos, ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Generate draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.sha }}
+          name: 手动构建版本
+          draft: true
+          files: |
+            signed-android-apk/*.apk
+            windows-build-zip/windows-app.zip
+            linux-build-bundle/*
+            macos-build-app/*
+            ios-build-archive/*
           targets: aarch64-linux-android,armv7-linux-androideabi
 
       - uses: nttld/setup-ndk@v1
