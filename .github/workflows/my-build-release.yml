@@ -34,7 +34,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.CI_RUST_VERSION }}
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -60,7 +60,7 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      # ========== 完全复刻上游官方签名逻辑，彻底抛弃printf/base64管道 ==========
+      # ========== 完全复刻上游官方签名逻辑 ==========
       - name: Setup Android sign key
         run: |
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
@@ -75,21 +75,20 @@ jobs:
           echo -e "\n===== 打印 key.properties 的完整内容 ====="
           cat android/key.properties
 
-      - name: Build arm64‑v8a apk (64位手机)
-        run: flutter build apk --release --target-platform=android-arm64
-      - name: Build armeabi‑v7a apk (32位老手机)
-        run: flutter build apk --release --target-platform=android-arm
-      - name: Build x86‑64 apk (模拟器/平板)
-        run: flutter build apk --release --target-platform=android-x64
+      # 1. 构建全量fat包（arm64‑v8a + armeabi‑v7a）
+      - name: Build Android full fat apk
+        run: flutter build apk --release
 
-      - name: upload signed android apks
+      # 2. 拆分ABI：只输出 arm64‑v8a、armeabi‑v7a，不生成x86_64
+      - name: Build Android split per abi apks
+        run: flutter build apk --release --split-per-abi
+
+      - name: upload all android apks
         uses: actions/upload-artifact@v4
         with:
           name: signed-android-apk
           path: |
-            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            build/app/outputs/flutter-apk/app-x86_64-release.apk
+            build/app/outputs/flutter-apk/*.apk
 
   windows:
     name: Build Windows
@@ -110,6 +109,11 @@ jobs:
           git submodule update --init --recursive --force
           flutter pub get
           dart ./Makefile.dart
+
+      - name: Silence MSVC experimental coroutine deprecation error
+        shell: pwsh
+        run: |
+          $env:CL="/D _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
 
       - name: Build Windows release
         run: flutter build windows --release
@@ -226,7 +230,7 @@ jobs:
           name: 手动构建版本
           draft: true
           files: |
-            signed-android-apk/*
+            signed-android-apk/*.apk
             windows-build-zip/windows-app.zip
             linux-build-bundle/*
             macos-build-app/*
