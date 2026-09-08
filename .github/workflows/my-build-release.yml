@@ -85,6 +85,8 @@ jobs:
   android-split:
     name: Build Android Split ABI Packages
     runs-on: ubuntu-latest
+    env:
+      FLUTTER_TOOLS_NO_WATCHER: true
     steps:
       - uses: actions/checkout@v5
         with:
@@ -142,28 +144,22 @@ jobs:
         run: |
           flutter pub get
           dart ./Makefile.dart
-          # 修复：assemble 使用 --mode release，不要写--release
-          flutter assemble --mode release --target lib/main.dart
 
       - name: Setup Android sign key
         run: |
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      - name: Direct gradle assembleRelease (bypass flutter cli bug)
-        working-directory: ./android
-        run: ./gradlew assembleRelease
-
-      - name: Debug list apks (构建成功后可删除)
-        run: ls -la android/app/build/outputs/apk/release/
+      - name: Build split‑per‑abi release APK
+        run: flutter build apk --release --split-per-abi
 
       - name: upload split apks
         uses: actions/upload-artifact@v4
         with:
           name: android-split-apk
           path: |
-            android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
-            android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
 
   windows:
     name: Build Windows
