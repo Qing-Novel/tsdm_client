@@ -142,27 +142,37 @@ jobs:
         run: |
           flutter pub get
           dart ./Makefile.dart
-          flutter assemble --release
 
       - name: Setup Android sign key
         run: |
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      - name: Gradle assembleRelease (split abi)
-        working-directory: ./android
-        run: ./gradlew assembleRelease
+      - name: Build split‑per‑abi release APK
+        run: |
+          flutter build apk --release --split-per-abi --no-tree-shake-icons
+
+      - name: Manually sign arm64-v8a apk
+        run: |
+          export APK_FILE="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          export KEYSTORE=android/app/key.jks
+          export KEY_PROP=android/key.properties
+          KEY_ALIAS=$(grep 'keyAlias' ${KEY_PROP} | cut -d'=' -f2)
+          KEY_PASS=$(grep 'keyPassword' ${KEY_PROP} | cut -d'=' -f2)
+          STORE_PASS=$(grep 'storePassword' ${KEY_PROP} | cut -d'=' -f2)
+          apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} ${APK_FILE}
+          echo "✅ arm64-v8a apk signed done"
 
       - name: List generated apks (debug)
-        run: ls -lh android/app/build/outputs/apk/release/
+        run: ls -lh build/app/outputs/flutter-apk/
 
       - name: upload split apks
         uses: actions/upload-artifact@v4
         with:
           name: android-split-apk
           path: |
-            android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
-            android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
 
   windows:
     name: Build Windows
