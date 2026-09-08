@@ -74,9 +74,7 @@ jobs:
           echo -e "\n===== 打印 key.properties 的完整内容 ====="
           cat android/key.properties
 
-      - name: Build Android full fat apk
-        run: flutter build apk --release
-
+      # 只执行这一条，会自动产出：全量fat包、arm64‑v8a、armeabi‑v7a 三个apk
       - name: Build Android split per abi apks
         run: flutter build apk --release --split-per-abi
 
@@ -110,7 +108,9 @@ jobs:
       - name: Silence MSVC experimental coroutine deprecation error
         shell: pwsh
         run: |
-          $env:CL="/D _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
+          # CMAKE 环境变量会被flutter调用的MSBuild继承，解决之前CL不生效问题
+          $env:CMAKE_CXX_FLAGS="/D _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
+          $env:CMAKE_C_FLAGS="/D _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
 
       - name: Build Windows release
         run: flutter build windows --release
