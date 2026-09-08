@@ -74,8 +74,16 @@ jobs:
           echo -e "\n===== 打印 key.properties 的完整内容 ====="
           cat android/key.properties
 
-      # 只执行这一条，会自动产出：全量fat包、arm64‑v8a、armeabi‑v7a 三个apk
-      - name: Build Android split per abi apks
+      # 第一步构建全量fat apk
+      - name: Build full fat apk
+        run: flutter build apk --release
+
+      # 关键：clean，消除 Already watching path 监视器冲突
+      - name: Flutter clean
+        run: flutter clean
+
+      # 第二步构建ABI拆分包
+      - name: Build split‑per‑abi apks
         run: flutter build apk --release --split-per-abi
 
       - name: upload all android apks
@@ -87,7 +95,8 @@ jobs:
 
   windows:
     name: Build Windows
-    runs-on: windows-latest
+    # 改为windows‑2022，固定MSVC版本，避开STL1011静态断言，不需要任何宏
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
         with:
@@ -104,13 +113,6 @@ jobs:
           git submodule update --init --recursive --force
           flutter pub get
           dart ./Makefile.dart
-
-      - name: Silence MSVC experimental coroutine deprecation error
-        shell: pwsh
-        run: |
-          # CMAKE 环境变量会被flutter调用的MSBuild继承，解决之前CL不生效问题
-          $env:CMAKE_CXX_FLAGS="/D _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
-          $env:CMAKE_C_FLAGS="/D _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
 
       - name: Build Windows release
         run: flutter build windows --release
