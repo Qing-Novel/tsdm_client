@@ -60,19 +60,11 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      # 修复关键点：printf代替echo，不会自动追加换行，避免jks二进制损坏
-      - name: decode keystore
+      # ========== 完全复刻上游官方签名逻辑，彻底抛弃printf/base64管道 ==========
+      - name: Setup Android sign key
         run: |
-          printf "%s" "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r\n' | base64 --decode > android/app/upload-keystore.jks
-        shell: bash
-
-      - name: write key.properties
-        run: |
-          echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" > android/key.properties
-          echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}" >> android/key.properties
-          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" >> android/key.properties
-          echo "storeFile=upload-keystore.jks" >> android/key.properties
-        shell: bash
+          echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
+          echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
       - name: Build Android apk release
         run: flutter build apk --release
@@ -85,7 +77,6 @@ jobs:
 
   windows:
     name: Build Windows
-    # 修复关键点：切换 windows‑2019，MSVC版本旧，不会触发experimental coroutine STL静态断言错误
     runs-on: windows-2019
     steps:
       - uses: actions/checkout@v5
