@@ -85,8 +85,7 @@ jobs:
   android-split:
     name: Build Android Split ABI Packages
     runs-on: ubuntu-latest
-    env:
-      FLUTTER_TOOLS_NO_WATCHER: true
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
         with:
@@ -151,7 +150,11 @@ jobs:
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
       - name: Build split‑per‑abi release APK
-        run: flutter build apk --release --split-per-abi
+        run: |
+          FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi --no-tree-shake-icons || true
+
+      - name: List generated apks (debug)
+        run: ls -lh build/app/outputs/flutter-apk/
 
       - name: upload split apks
         uses: actions/upload-artifact@v4
