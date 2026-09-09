@@ -148,7 +148,15 @@ jobs:
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      # ==========【修复】多行脚本，共享shell上下文 ==========
+      # 自动生成 gradle wrapper，解决 gradlew 不存在
+      - name: Generate gradle wrapper
+        run: |
+          cd android
+          gradle wrapper
+          chmod +x gradlew
+          cd ..
+
+      # 使用生成好的gradlew打包split abi apk
       - name: Build split APK via Gradle assembleRelease
         run: |
           cd android
