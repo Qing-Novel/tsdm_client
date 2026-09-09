@@ -148,9 +148,12 @@ jobs:
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      - name: Build split‑per‑abi release APK
+      # 直接调用Gradle，绕过flutter cli --split-per-abi的exit code bug
+      - name: Build split APK via Gradle assembleRelease
         run: |
-          flutter build apk --release --split-per-abi --no-tree-shake-icons
+          cd android
+          ./gradlew assembleRelease
+          cd ..
 
       - name: Manually sign arm64-v8a apk
         run: |
@@ -162,6 +165,12 @@ jobs:
           STORE_PASS=$(grep 'storePassword' ${KEY_PROP} | cut -d'=' -f2)
           apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} ${APK_FILE}
           echo "✅ arm64-v8a apk signed done"
+
+      - name: Verify APK signature
+        run: |
+          apksigner verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          apksigner verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          echo "✅ Signature verify passed"
 
       - name: List generated apks (debug)
         run: ls -lh build/app/outputs/flutter-apk/
