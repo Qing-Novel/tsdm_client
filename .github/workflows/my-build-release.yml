@@ -148,12 +148,10 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      # 核心改动：continue-on-error，绕过flutter watcher报错bug，产物实际已生成
       - name: Build split‑per‑abi release APK
         continue-on-error: true
         run: FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi
 
-      # 查找apk并输出标记，校验文件是否真实生成
       - name: Find generated APKs
         id: find_apk
         run: |
@@ -166,7 +164,6 @@ jobs:
             echo "apk_exist=false" >> $GITHUB_OUTPUT
           fi
 
-      # 校验失败则终止job，防止真编译错误继续执行
       - name: Check APK exists
         if: steps.find_apk.outputs.apk_exist != 'true'
         run: echo "ERROR: APK files missing!" && exit 1
