@@ -373,3 +373,118 @@ release 版大小：universal 60MB／arm64 30MB（debug 142MB／106MB）。
 - **檢查更新**：上游 `UpdateCubit` 讀的是原作者論壇帖（`ptid=1233425&pid=75311834`）裡的 JSON，官方版無法維護那篇帖子。改為讀取本倉庫 `version.json`（`upgradeVersionInfoUrl`），格式與 `LatestVersionInfo` 相同；`scripts/write_version_json.dart` 從 pubspec 與 CHANGELOG 對應版本段產生，`test_042` 保證檔案與 pubspec 一致。解析函式 `parseLatestVersionInfo` 接受字串／已解碼 Map／位元組，其他一律 `FormatException`，被 Cloudflare 擋下回傳 HTML 時只會顯示「檢查失敗」而不會崩潰。
 - **更新頁**：F-Droid 提示改為說明正式版來源；「公告帖」連結維持上游 tid=628244，待官方公告帖建立後再改。
 
+
+## 12. 收藏版塊（GitHub #1、#2，2026-09-09）
+
+### 12.1 論壇端協定（測試帳號實抓，fixture 已去識別化：uid 1000／Alice／XXXXXXXX）
+- **首頁收藏面板** `forum.php`：有收藏版塊的會員多出**第一個**分區 `div.bm.bmw.flg.cl`（class 多一個 `flg`、有雙空格，既有選擇器 `div.bm.bmw.cl` 照樣命中），
+  標題 `div.bm_h > h2 > a[href="home.php?mod=space&do=favorite&type=forum"]`「我收藏的版块」（一般分區的 h2 連到 `forum.php?gid=N`、bm_h 另有 `span.y` 分区版主），
+  內容 `div#category_0.bm_c > table.fl_tb`，每個收藏版塊一列展開式 `tr`（與一般分區相同），尾端一個空的 `tr.fl_row`。沒有收藏時整個面板不存在。
+  fixture：`forum_index_x5.html`／`forum_index_nofav_x5.html`。
+- **列表** `GET home.php?mod=space&do=favorite&type=forum`：與帖子列表同形，`ul#favorite_ul > li#fav_FAVID`，標題連結 `a[href*="mod=forumdisplay"]`，
+  勾選框 `vid` 為 fid，時間 `span.xg1 span[title]`；沒有備註就沒有 `div.quote`。空列表：`p.emp`「您还没有添加任何收藏」、沒有 `ul#favorite_ul`（不是需登入）。
+- **加入／取消**與帖子完全同一條路徑，只差 `type=forum`：`GET …ac=favorite&type=forum&id=FID&infloat=yes&handlekey=K&inajax=1` 取表單，
+  `POST …&spaceuid=0`（`favoritesubmit`、`referer`、`formhash`、`handlekey`、`description`）；刪除 `op=delete&favid=FAVID`（`type` 可省，App 仍送）。
+  **handlekey 由客戶端決定、伺服器原樣回音**：網頁用 `favoriteforum`／`a_delete_FAVID`，回 `succeedhandle_favoriteforum(...)`／`errorhandle_favoriteforum('抱歉，您已收藏…')`；
+  App 沿用 `k_favorite`／`favdelete`。解析器改為只認 `succeedhandle_<任意>(`／`errorhandle_<任意>(`。已收藏時同樣在 GET 那步就回錯誤、沒有表單。
+
+### 12.2 App 端行為
+- **#1 首頁分區不更新／刷新報錯**：`ForumHomeRepository` 多了 `documentStream`（BehaviorSubject）＋`dispose`，每次抓到 `forum.php` 都廣播；
+  `TopicsBloc` 訂閱它（首頁在登入／切換帳號後強制刷新的文件直接重新解析，不多發請求）、訂閱 `AuthenticationRepository.status`
+  （登出→靜默重抓訪客首頁；使用者變更但 5 秒內沒有新文件→自己補抓一次）、訂閱 `FavoriteRepository.forumFavoritesChanged`（收藏／取消版塊後靜默重抓）。
+  靜默刷新不切到 loading、失敗時保留原分區。`TopicsBloc` 只信任頁首使用者節點（`div#um strong.vwmy a`，與登入解析共用 `parseLoggedUserFromDocument`）等於目前使用者的文件：
+  切換帳號／登出後快取與 stream 重播仍是上一個帳號的頁面時，不顯示、不灌收藏快取，改強制重抓一次；每次登入狀態轉換（`TopicsBloc`、`HomepageBloc` 皆）都會 `invalidate()` 共用快取。
+  版塊頁「已在收藏中」但列表查到紀錄、或取消時列表已無紀錄，這兩種只改本機已知狀態的結果也經 `FavoriteRepository.notifyForumFavoritesChanged()` 觸發分區頁靜默重抓。
+  `TopicsPage` 在分區數改變時重建 `TabController`（釋放舊的、保存的分頁索引夾到範圍內、改用 `TickerProviderStateMixin`），
+  原本 `??=` 固定長度導致「Controller's length property (N) does not match the number of tabs (N+1)」；順帶去掉 dispose 裡的重複釋放。收藏面板沿用論壇自己的標題「我收藏的版块」，不另作置頂或改名。
+- **#2 收藏版塊**：`FavoriteType {thread, forum}`；模型 `FavoriteItem`（sealed）→ `FavoriteThread`／`FavoriteForum`；`FavoriteRepository`
+  `addForumFavorite`／`removeFavorite(type:)`／`findForumFavid`／`fetchListPageOf(type)`，快取改為 type → uid → id → favid（版塊可為 null＝「知道已收藏但不知 favid」），
+  `seedForumFavorites` 由分區頁的收藏面板灌入（整組取代、保留已知 favid）。版塊頁 App bar 選單「收藏本版／取消收藏本版」（備註對話框標題改可設定；取消時沒有 favid 就先掃列表補上）。
+  收藏頁分成「帖子／版块」兩個分頁（各自一個 `FavoriteBloc(type:)`），路由 `/favorite?type=forum`，`home.php?mod=space&do=favorite&type=forum` 連結直接開版塊分頁。
+- 測試：test_043（面板解析、TopicsBloc 三種觸發、TopicsPage 2→3→2 個分頁無例外且索引夾住；把 `_syncTabController` 退回舊行為可重現原錯誤）、
+  test_044（版塊列表／空列表／對話框／任意 handlekey、GET→POST 參數、已收藏不 POST、刪除、findForumFavid、seed、網址辨識）。test_023 原樣全過。
+
+- 1.19.1：分區頁解析後記錄分區名、收藏版塊 fid 與「頁面裡是否有收藏面板連結」（`forum index parsed:` 一行），單看日誌即可分辨「論壇沒渲染」與「解析失手」。登入者辨識加上「默认毛坯」風格的 `div.block_name` 名字連結，並以每頁都有的 `discuz_uid` 腳本變數作 uid 後備（`parseLoggedUidFromDocument`）。「我收藏的版块」分頁第一次出現時自動選取它（原本沿用先前的分頁索引，新分頁可能在可捲動分頁列的畫面外）；TabBarView 以控制器為 key 重建，避免舊頁面位置把新控制器的索引拖回去。
+
+## 13. 自動簽到提示列、各帳號今日簽到狀態、刪除帳號（GitHub #4、#9、#6，2026-09-09）
+
+### 13.1 論壇端事實
+- 沒有新協定。簽到協定見 §7.2；「今天是否已簽到」App 端只用本機資料判定：`Cookie.lastCheckin`（每帳號一欄，簽到成功或論壇回「已經簽到」時寫入），不向論壇探測（每帳號一個請求且會 429，決定不做）。
+- 登出：`GET home.php?mod=spacecp` 若已不見登入者節點（`div#um p strong.vwmy a`／`div#inner_stat > strong > a`）＝論壇端 session 已失效，沒有東西可登出。
+
+### 13.2 App 端行為
+- **#4 提示列兩行**：Flutter `SnackBar` 在「動作＋關閉鈕」寬度超過提示列 25%（`actionOverflowThreshold`）時把動作移到第二行；「查看详情」＋關閉鈕在 360dp 手機約 27%，於是變兩行。改為不放關閉鈕（下滑、點動作、4 秒逾時都能關），`showSnackBar` 新增 `actionOverflowThreshold` 透傳、App 層傳 0.6。test_045 在 320×640、字級 1.5 驗證單行且無關閉鈕。`RootSingleton` 裡的重複監聽器是死碼，未動。
+- **#9 各帳號簽到狀態**：`isCheckedInToday(last, now:)`（`lib/features/checkin/utils/checkin_day.dart`）＝裝置本地同一日曆日；`AutoCheckinBloc` 的略過判定改用同一函式（原本 `now.day > last.day` 逐欄比較）。
+  `StorageProvider.allUsersWithTimeStream()`（drift `watchAll`，`updateLastCheckinTime` 後會重發）；管理帳號頁每列副標題：uid、圖示＋「今日已簽到／今日未簽到」，
+  若本次啟動的自動簽到對該帳號失敗（且不是「已經簽到」）再多一行 `CheckinResult.message`（例如登入已失效、429）；「在线」chip 仍在 trailing。
+  `AutoCheckinRepository._updateSuccess` 原本建了 `VoidTask` 沒 `run()`，寫入實際上沒發生；現在每個帳號成功（或「已經簽到」）後由 repository 當下寫入，bloc 收尾不再整批重寫（整批結束時間跨日會把早簽到的帳號標成隔天已簽到）。
+  限制：本機日曆日與論壇 UTC+8 換日可能差幾小時；備份還原或從未在本機簽到的帳號 `lastCheckin` 為 null，顯示「未簽到」直到第一次簽到。
+- **#6 刪除帳號**：
+  - 管理帳號頁新增 `ManageAccountBloc`（`selecting`、`selectedUids`、`status idle/deleting/deleted/failed`、`deletedCount`）：長按帳號或 App bar「選擇」進入選取模式，點按切換、App bar 顯示數量、全選、刪除；關閉鈕／返回鍵離開選取模式（`PopScope`）。
+    刪除前 `showQuestionDialog(dangerous)`，訊息說明只刪本機登入記錄、不向論壇登出；包含目前帳號時加註「本機將退出登入狀態」。完成後 snackbar 顯示刪除數量並離開選取模式。
+  - 非目前帳號：`StorageProvider.deleteCookiesByUids`（先清 `_cookieCache`、一個 transaction，stream 只發一次）；目前帳號：`AuthenticationRepository.forgetCurrentUser()`（清 CookieProvider、刪列、`_markUnauthenticated`，不連網）。
+    「目前帳號」取 `AuthenticationRepository.effectiveCurrentUid`（`currentUser` → 全域 `CookieProvider.userLoginInfo.uid` → settings `loginUid`），離線啟動或 session 已過期、`currentUser` 仍為 null 時，在線 chip 與刪除路徑仍把它當目前帳號；刪除中忽略返回鍵的清除選取，選取快照在第一個 await 之前取得。
+  - 單帳號對話框：原「清除登录记录」改名為「刪除帳號」（i18n `switchAccount.dialog.deleteAccount`），加確認與 snackbar；目前帳號多一個「從本機移除」（`forgetCurrentUser`），與連網「退出登入」並列。
+  - `logout()`：論壇回訪客頁（有 `form#lsform`、無 `div#um`，與簽到／通知同一規則）時也清 CookieProvider、刪列再 `_markUnauthenticated`（原本只標記、列留著，帳號卡在「在线」無法刪除）；其他認不出的 200 頁（維護頁、攔截頁）只 `_markUnauthenticated`、列保留；改走可注入的 `currentUserClientFactory`（預設仍是 `NetClientProvider.build(userLoginInfo:)`），離線可測。
+  - 復活防護：`CookieProvider` 記住自己是否由 `loadCookieFromStorage` 或 `CookieProvider.build()` 載入（`_mirrorsStoredRow`）；是的話 `_syncCookie` 在 `getCookieByUidSync(uid) == null`（列已被刪）時不再 upsert，避免自動簽到進行中收到 Set-Cookie 把剛刪的帳號寫回。`updateUserInfo`（登入取得身分）與 `clearUserInfoAndCookie` 會重設旗標，登入建列不受影響。
+- 測試：test_045（#4）、test_046（同日判定邊界、stream 重發、repository 立即寫入、bloc＋頁面顯示已簽到／未簽到／失敗原因）、test_047（批次刪除、`forgetCurrentUser`、訪客頁 `logout()` 刪列、Set-Cookie 不復活但登入仍建列、頁面長按→計數→刪除→確認→列消失、全選／關閉／返回）。
+
+## 14. 通知權限與電池最佳化（GitHub #13、#3，2026-09-09）
+
+### 14.1 平台端事實（Android，不涉及論壇協定）
+- `targetSdk 36`：Android 13+ 的 `POST_NOTIFICATIONS` 是執行期權限，未取得前 `NotificationManager.notify` 是**無聲的 no-op**——flutter_local_notifications 的 `show()` 不檢查、不拋錯、不記 log。連續拒絕兩次後系統不再彈框（permanently denied），只能到 App 設定頁手動開。
+- 原本只在 `main.dart` 開機時、且當時 `autoSyncNoticeSeconds > 0` 才呼叫一次 `requestNotificationsPermission()`，結果丟棄不記；在設定頁把自動同步從「從不」改成有值時不會再問。App 內沒有任何地方顯示或重讀權限狀態。
+- 「忽略電池最佳化」對話框（`Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`）：permission_handler 只在 merged manifest 含 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` 時才會啟動，否則直接回 `denied`。此權限 Google Play 列為受限，App 走 GitHub release 不受影響。
+- 背景模型：自動同步是 UI isolate 裡的 `Timer.periodic`，返回鍵只 `moveTaskToBack`，沒有 WorkManager／AlarmManager／前景服務。Android 12+ 的 cached-app freezer（16 更積極）與各廠牌省電管理會在離開前景後不久凍結進程，計時器就停了；忽略電池最佳化只解除 Doze／App Standby 一類限制，**不阻止凍結、也不等於廠牌的自啟動／背景限制開關**。不承諾背景推播可靠。
+
+### 14.2 讀 log 時的判定
+- `fetched notification since …: notice=N pm=N bm=N`（`NotificationRepository`）數的是 since 視窗（最多 3 天）內的**全部**項目，不是新項目；有這行只證明抓取跑了。
+- 推播要 `freshNotifications(fetched, stored)` 非空才會走到 `NotificationInfoRepository.updateAutoSyncInfo`，那裡才有 `update auto sync info: NotificationAutoSyncInfo… notice=… pm=… bm=…`——**這行才代表嘗試推播**；沒有它＝沒有新東西，屬設計行為（§6.1）。
+- 新增兩行：開機 `boot notification permission granted=true/false/null`（null＝平台 plugin 未解析）；每次推播前 `push local notification enabled=true/false: NotificationAutoSyncInfoXxx`（`areNotificationsEnabled()`），`show()` 例外改由 `talker.handle` 記錄。有 `update auto sync info` 又有 `enabled=false`＝被權限／系統擋下。
+
+### 14.3 App 端行為
+- Manifest 明寫 `POST_NOTIFICATIONS`（原本只靠 plugin manifest 合併）與 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`（#3 的前提）。
+- `AndroidPermissionCubit`（`lib/features/settings/bloc/`）：state `{notification, ignoreBattery}`（`PermissionStatus?`，null＝尚未讀）；`refresh()`、`requestNotification({openSettingsWhenPermanentlyDenied})`（永久拒絕→`openAppSettings()`，否則 `Permission.notification.request()`；request 回 denied 且 `shouldShowRequestRationale` 為 false＝系統沒彈也不會再彈框——Android < 13、兩次都在開機提示拒絕、系統設定關掉通知——此後一律視為永久拒絕，state 直接發 `permanentlyDenied` 並在 refresh 時維持，直到讀到 granted；`isClosed` 後不再 emit）、`requestIgnoreBattery()`（`Permission.ignoreBatteryOptimizations.request()`）。`enabled` 預設 `isAndroid`，非 Android 全部 no-op；透過 `AndroidPermissionGateway` 注入假的 permission_handler 以便在 Linux 測試（`permission_handler_platform_interface` 是間接依賴，`depend_on_referenced_packages: error` 禁止直接 import）。
+- 設定頁持有該 cubit（`BlocProvider.value`），`initState` 讀一次，`WidgetsBindingObserver` 在 `resumed` 時重讀，從系統對話框／App 設定頁回來列即更新。
+- 行為區「自動同步訊息」之後（Android 才顯示）兩列 `AndroidPermissionTiles`：「通知權限」trailing 已允許／未允許／已永久拒絕（永久拒絕時先 `showQuestionDialog` 說明再跳 App 設定頁；未允許時先 request，若 cubit 因此翻成永久拒絕，同一輪點按接著出說明框再跳設定頁）；「忽略電池最佳化」trailing 已忽略／未忽略，副標題明說只在 App 留在背景時有幫助、廠牌開關另計、不保證背景推播。
+- 設定頁把自動同步設為 >0 時同時 `requestNotification(openSettingsWhenPermanentlyDenied: false)`：會彈系統框就彈，永久拒絕只記 log 不跳頁（旁邊那列會顯示狀態）。
+- Debug 區新增「發送測試通知」（Android）：以合成的 `NotificationAutoSyncInfoNotice` 呼叫 `showLocalNotification`，用來分辨「系統擋掉」與「沒有新訊息」。
+- `showLocalNotification` 移到 `lib/features/local_notice/show.dart`（App 層與 Debug 鈕共用）；`home_page.dart` 裡從未被呼叫的複本刪除。
+- 通知 channel 換成 `newNoticeChannelV2`（`Importance.high`／`Priority.high`，`buildLocalNotificationDetails` 純函式組出 `NotificationDetails`，小圖示照舊用 `initialize` 給的）：測試者的華為機 `notify()` 成功卻看不到任何東西，而原 channel `newNoticeChannel` 是以預設 importance 建立、Android 不允許程式碼事後調高，只能換 id。舊 id 保留為 `legacyLocalNoticeChannelId`，開機 `flnp.initialize` 之後（Android）呼叫 `deleteNotificationChannel` 刪掉，try/catch 記 log 不擋開機；每次推播前多記 `id=0 channel=newNoticeChannelV2`。
+- 冷啟動（GitHub #14 後半）：App 沒在跑時點通知，`onDidReceiveNotificationResponse` 不會被叫，開機改讀 `getNotificationAppLaunchDetails()`，`didNotificationLaunchApp` 且 payload 為 `openNotification` 時先存進 `stream.dart` 的 pending 槽，`HomePage` 第一幀後（`addPostFrameCallback`）用與 stream 事件相同的處理函式（同樣需已登入）消費一次，落到 `/notice`；取走即清空，頁面重建不會再推第二次。
+- 測試：test_053（channel 常數不同、`NotificationDetails` 用新 id 與 high importance／priority）、test_054（pending payload 只被處理一次、handler 丟例外也清空）。
+- 測試：test_048（manifest 含兩個權限字串；cubit refresh／denied→request／permanentlyDenied→openAppSettings／不跳頁模式／denied+rationale=false→permanentlyDenied+openAppSettings 且 refresh 後維持／首次真拒絕 rationale=true 不跳頁／plugin 自己回 permanentlyDenied 不再多跳／close 後 refresh 不 emit／battery request／disabled no-op；兩列 tile 顯示已允許／未允許／已永久拒絕／已忽略／未忽略、點按觸發 request、永久拒絕先出對話框取消不跳、確定才 openAppSettings）。
+
+## 15. 編輯器打 `@` 彈出提醒選單、選單列自己的好友（GitHub #8，2026-09-09）
+
+### 15.1 論壇端事實
+- 官方 `@` 名單：`GET misc.php?mod=getatuser&inajax=1` → `<root><![CDATA[Alice,Bob]]></root>`，只有名字、逗號分隔（§既有 `parseAtUserList`）。測試帳號（梦幻组，「允许 @ 的人数」＝0）拿到**空名單**，而測試者有 52 位好友——名單是否被身分組設定閘住無法離線驗證，所以 App **不依賴它**。
+- 自己的好友：`home.php?mod=space&uid=SELF&do=friend`（§10.1 的自己版面），24 位一頁、`div.pg > a.nxt` 下一頁；有 uid／頭像／群組；隱私或要求登入時是 `div.nfl h2.xs2`／`div#messagelogin`。
+- 送出格式不變：編輯器 chip `[@]name[/@]` → 發帖前 `toOfficialMentions` → 官方 `@name `（§既有）；身分組 allowat＝0 的帳號送出去仍是純文字、對方不會收到通知，App 無法改變。
+- 沒有做：站上的 `plugin.php?id=atgroup` 身分組 @（使用者定案不接手機）。
+
+### 15.2 App 端行為
+- `MentionRepository`（`lib/features/editor/repository/`）：同時抓自己的好友列表（`FriendRepository.listUrl(uid: selfUid)`，最多跟 5 頁、依 uid 去重；第 1 頁隱私／登入提示 → `friendsMessage`，後面某頁失敗保留已抓到的）與 getatuser；`loadCandidates({selfUid, force})` 回 `{friends: List<Friend>, others: List<String>（不在好友裡的名字，不分大小寫）, friendsMessage}`，**一邊失敗不算整體失敗**，兩邊都失敗（或未登入且 getatuser 失敗）才 Left。未登入（`selfUid == null`）只抓 getatuser。結果依 uid 快取在實例內，只有兩邊都成功才快取；`mention_picker.dart` 持有一個全 App 共用實例，所以重開選單不重抓，選單的重新整理鈕 `force: true`。getatuser 名單是每個帳號各自的（未登入為空），實例另記它是為哪個 uid 抓的，換帳號／登出後再開一律重抓，不會把上一個帳號的名單拿給下一個看；cubit `load()` 等待期間表被關掉就不再 emit。
+- `UserMentionCubit` 改為本地篩選：`load({force})`、`setKeyword()`；state `{recommendStatus, friends, others, keyword, friendsMessage}` ＋ `visibleFriends／visibleOthers／hasExactMatch`；換關鍵字不碰網路。舊的 `searchUserByName／randomFriend／formHash` 全刪（`EditorRepository.searchUserByName` 保留給 repository 內部與 test_022）。
+- 選單 `showMentionPicker`（`mention_picker.dart`）：`showCustomBottomSheet` 底部表，取代舊的 `CustomAlertDialog`；搜尋欄（150 ms debounce，Enter 直接用輸入的字）、「好友」區（頭像＋名字＋群組，右側開個人頁；載入中／失敗／`friendsUnavailable(message)`／`noFriends`／`noMatch`）、「其他 @ 名單」區、以及關鍵字沒有**完全相同**的候選時的「提醒 “關鍵字”」列（任何使用者名稱都還能打）。`showUsernamePickerDialog` 變成薄轉呼叫，工具列 `@` 鈕與點既有 chip（帶原名字進搜尋欄）都走同一張表；舊對話框刪除。
+- 打 `@` 觸發 `MentionTrigger`（`lib/features/editor/utils/mention_trigger.dart`）：flutter_quill 的 `characterShortcutEvents` 只吃實體鍵盤，所以改監聽 controller（`addListener`，換整份文件也還活著）。文件長度**恰好 +1** 才排 250 ms 計時；只改選取範圍不動計時器、長度變其他數字取消。到時再檢查：可編輯、編輯器有焦點、游標收合且前一字是 `@`、`@` 在文首或前面是空白（`a@b` 不觸發、貼上不觸發、250 ms 內接著打字不打斷）。選到名字：`replaceText(at, 1, '')` 刪掉 `@` 再 `insertMention(name)`（`BBCodeEditorControllerForum.insertMention`＝直接把 `bbcodeUserMention` embed 寫進 delta（同工具列 `@` 鈕，不經 BBCode 解析器，所以 `[TSDM]Alice`、`a]b`、`x[y` 這類名字也完整成一個 chip；`toOfficialMentions` 的正則同樣允許名字帶方括號）＋游標移到 chip 後）；取消保留 `@`。`RichEditor` 改成 StatefulWidget，有 focusNode 且非唯讀就掛 trigger，表關掉後 `requestFocus()` 把鍵盤叫回來；三個編輯器（回覆列、發帖／編輯、快速回覆範本）都自動得到。沒有設定開關（先不做）。
+- i18n `bbcodeEditor.userMention.{filterHint, others, useTyped(name), friendsUnavailable(message)}`。
+- 測試 test_049：repository 合併（自己版面 fixture、翻頁去重、getatuser 500 仍有好友且不快取、好友列表 500 仍有名單、隱私 fixture → message、未登入只抓 getatuser、雙失敗才 Left）；cubit 篩選不碰網路；MentionTrigger 在真 controller 上（文首／空白後觸發一次且 offset 正確、`a@b`／多字元／無焦點不觸發、取消保留 `@`、debounce 內續打不打斷、`toForumBBCode()=='hi [@]Alice[/@]'`、`toOfficialMentions`→`'hi @Alice '`、換文件後仍有效）；底部表 widget 測試（Bob 在好友區、點了回 'Bob'、關鍵字 zz 出「提醒 “zz”」、`showMentionPicker` 無登入也能開）。手機 IME 實機行為無法在此驗證。
+
+## 16. 一鍵同步所有帳號的通知（GitHub #10，2026-09-09）
+
+### 16.1 論壇端事實
+- 沒有新協定。三個頁面與 §6.1 相同：`home.php?mod=space&do=notice`（`div.nts > dl[id^=notice_]`，未讀＝`dd.ntc_body` 粗體）、`do=pm&filter=privatepm`（`dl[id^=pmlist_]`，未讀＝`div.newpm_avt`）、`do=pm&filter=announcepm`（`dl[id^=gpmlist_]`）；三頁的解析都不看目前帳號，用別的帳號的 cookie 抓回來就是該帳號的資料。
+- 列出一次就消耗論壇端的「新」標記（§6.1）：一鍵同步後其他帳號在網頁上也不再顯示「新」，只有 App 內的副本記得。
+- 登入過期：通知頁是登入表單（`form#lsform` 且無 `div#um`）→ 該帳號判定需要重新登入（與 §7.2 簽到相同規則）。
+- 429：每帳號三個 GET 同時發、帳號之間停 2 秒（比照 §7.2）；通知頁的限流門檻沒有實測數據。伺服器給 `Retry-After` 就等它（上限 60 秒）重試一次，沒給或重試仍 429 → 該帳號回報「限制了請求頻率」，下一個帳號照跑。
+
+### 16.2 App 端行為
+- `NotificationRepository.fetchNotificationWith(client, {timestamp})`：把原本 `fetchNotificationV2` 的抓取邏輯抽出來、不碰 status 串流；`fetchNotificationV2` 改為呼叫它，串流事件順序不變（Loading → Failure／Success）。
+- `persistFetchedNotification(storage, uid, fetched)`（`notification_bloc.dart` 頂層函式）：原 `NotificationBloc._onNoticeInfoFetched` 的「讀舊副本→`freshNotifications`→三類對帳→`saveNotification`」抽成共用，回傳 `{fresh, reconciled, unread}`；bloc 與一鍵同步走同一段，存法完全一致（test_033 不動）。`countUnreadNotification` 為從資料庫重算未讀的共用函式。
+- `NotificationSyncAllRepository`：每個帳號用 `ServiceKeys.empty` 的 `CookieProvider` `loadCookieFromStorage` ＋ `NetClientProvider.buildNoCookie(cookie:)` 建自己的 client（不碰全域 cookie、不切帳號）；逐一執行、間隔 2 秒；進度走 `BehaviorSubject`（同 `AutoCheckinRepository`）；結果 `Success{newNotice,newPm,newBm,unread×3}`／`NotAuthorized`／`RateLimited`／`Failed(message)`；`lastFetchNotice` 寫「開始那一分鐘」（同自動同步）；抓完發現該帳號已從本機刪除則不寫入（並靠 `CookieProvider` 的「已刪除不回寫」守門）。
+- `NotificationSyncAllCubit`（`app.dart` 頂層，離開頁面不中斷）：`start()` 防重入；先用切換帳號同一套 `pause('sync all accounts')` 握手暫停自動同步（最多等 10×300 ms，仍佔用就照跑並記 warning）；帳號清單＝`getAllUsers()` 過濾 uid>0 且有名字，**含目前帳號**，全部走 per-uid 路徑；跑完只為「當下」的目前帳號從資料庫重算未讀並 `NotificationInfoRepository.updateInfo`（不用 `applyServerHint`、不發其他帳號的數字），再送 `NotificationReloadFromStorageRequested` 讓 `NotificationBloc` 從資料庫重建列表（不再打網路；bloc 正在 loading 則跳過）；`resume` 自動同步；`Finished`。其他帳號的新訊息**不**發本機推播（推播固定開目前帳號的通知頁）。執行途中拋出例外（資料庫錯誤等）也以 `Finished`（到當時為止的結果）收尾並釋放鎖，按鈕不會永久停用；單一帳號的 cookie 載入／寫入失敗記為 `Failed(message)`，批次照跑下一個。`AutoNotificationCubit` 的暫停鎖是「理由集合」：登入（`'login'`，表單的 resume 也改用同一理由）、切換帳號、全帳號同步各自持有，最後一個 `resume` 才重啟計時，`start()`／`stop()` 清空；`NotificationBloc` 的 `NotificationRecordFetchTimeRequested` 只在比已存的 `lastFetchNotice` 晚時才寫，從資料庫重載或標記已讀時重發的舊 `latestTime` 不會把開始分鐘往回推。
+- 進入點：管理帳號頁 app bar 的同步鈕（切換中／刪除中／已在跑／沒有帳號時停用）與通知頁右上選單「同步所有帳號」，兩者都啟動 cubit 並推入進度頁 `ScreenPaths.notificationSyncAll`（`/notice/syncAll`，`NotificationSyncAllPage`，複製 `AutoCheckinPage`：進行中／等待中／完成卡，成功卡文字「新提醒 N，新私訊 M，新公用訊息 K；未讀 a/b/c」）。完成時全域 snackbar「所有帳號的通知同步已完成」＋「查看詳情」（已在進度頁則不帶按鈕）。
+- 沒有做：自動排程、設定鍵（issue 只要求按鈕）。
+- i18n：`manageAccountPage.syncAll.title`、`noticePage.syncAllPage.*`、`globalStatePage.syncAllFinished`。
+- 測試 test_050：Alice（全域 CookieProvider）＋ Bob、Carol（只在資料庫）三帳號、腳本化 adapter 分頁面佇列——嚴格 Alice→Bob→Carol 各 3 個 GET、每帳號的請求帶自己的 `Ystv_2132_auth`、Bob 的通知／私訊／公用訊息以伺服器未讀旗標落在 uid 2000、`lastFetchNotice` 已寫、Carol（登入表單）→ NotAuthorized、全域 cookie 仍是 Alice；對帳一致（預存已讀副本再抓仍已讀，`new` 不計）；429 無 Retry-After → RateLimited 且下一帳號照跑；429 帶 Retry-After 1 秒 → 等 1 秒重試一次成功；cubit 只發佈一筆＝Alice 的資料庫重算（Bob 的 1/1/1 不混入）、無目前帳號不發佈、執行中再 start 忽略；`fetchNotificationV2` 串流仍 Loading→Success／Failure；bloc `NotificationReloadFromStorageRequested` 不打網路；儲存 Bob 時拋例外 → Bob `Failed`、Alice 照抓；`getAllUsers` 拋例外 → Preparing→Finished（空）且自動同步恢復、可再 start；全帳號同步暫停中切換帳號 pause／resume 不重啟計時，sync-all resume 後才 Ticking；同一理由 pause 兩次 resume 一次即恢復；`NotificationRecordFetchTimeRequested` 較早的時間不覆寫、較晚的才寫。真實的 `pmlist_`／`gpmlist_` 列表頁 fixture 仍缺，測試用依選擇器合成的最小 HTML。

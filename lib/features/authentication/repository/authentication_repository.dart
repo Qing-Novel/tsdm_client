@@ -10,6 +10,7 @@ import 'package:tsdm_client/extensions/fp.dart';
 import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/extensions/universal_html.dart';
 import 'package:tsdm_client/features/authentication/repository/models/models.dart';
+import 'package:tsdm_client/features/authentication/utils/logged_user_parser.dart';
 import 'package:tsdm_client/features/authentication/utils/login_parser.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
 import 'package:tsdm_client/instance.dart';
@@ -29,14 +30,25 @@ import 'package:universal_html/parsing.dart';
 /// **Need to call dispose.**
 class AuthenticationRepository with LoggerMixin {
   /// Constructor.
-  AuthenticationRepository({UserLoginInfo? user, NetClientProvider Function(CookieProvider)? clientFactory})
-    : _authedUser = user,
-      _clientFactory = clientFactory ?? _defaultClientFactory;
+  ///
+  /// [clientFactory] builds the isolated clients of login and account switching, [currentUserClientFactory] the
+  /// client acting as the current account (used by [logout]); both are replaceable in tests.
+  AuthenticationRepository({
+    UserLoginInfo? user,
+    NetClientProvider Function(CookieProvider)? clientFactory,
+    NetClientProvider Function(UserLoginInfo)? currentUserClientFactory,
+  }) : _authedUser = user,
+       _clientFactory = clientFactory ?? _defaultClientFactory,
+       _currentUserClientFactory = currentUserClientFactory ?? _defaultCurrentUserClientFactory;
 
   final NetClientProvider Function(CookieProvider) _clientFactory;
+  final NetClientProvider Function(UserLoginInfo) _currentUserClientFactory;
 
   static NetClientProvider _defaultClientFactory(CookieProvider cookie) =>
       NetClientProvider.buildNoCookie(cookie: cookie);
+
+  static NetClientProvider _defaultCurrentUserClientFactory(UserLoginInfo user) =>
+      NetClientProvider.build(userLoginInfo: user);
 
   static const _checkAuthUrl = '$baseUrl/home.php?mod=spacecp';
 
@@ -75,6 +87,25 @@ class AuthenticationRepository with LoggerMixin {
 
   /// The current logged user.
   UserLoginInfo? get currentUser => _authedUser;
+
+  /// Uid of the account this device acts as, also before the stored session was verified.
+  ///
+  /// [currentUser] is only set by a login or a successful check of the stored session; at an offline start or when
+  /// that session expired it stays null although the global [CookieProvider] and the settings still name the account
+  /// whose cookie every request carries. The manage accounts page treats that account as the current one so removing
+  /// it goes through [forgetCurrentUser] instead of only deleting its row. Null when no account is in use.
+  int? get effectiveCurrentUid =>
+      _validUid(_authedUser?.uid) ??
+      _validUid(getIt.get<CookieProvider>().userLoginInfo.uid) ??
+      _validUid(getIt.get<SettingsRepository>().currentSettings.loginUid);
+
+  static int? _validUid(int? uid) => uid != null && uid > 0 ? uid : null;
+
+  /// Whether [document] is the page the forum renders for a guest: the login form without the user node.
+  ///
+  /// Same rule as the check-in and notification fetches.
+  static bool _isGuestPage(uh.Document document) =>
+      document.querySelector('form#lsform') != null && document.querySelector('div#um') == null;
 
   /// Authentication status stream.
   Stream<AuthStatus> get status => _controller.asBroadcastStream();
@@ -209,12 +240,17 @@ class AuthenticationRepository with LoggerMixin {
   ///
   /// Check authentication status first then try to logout.
   /// Do nothing if already unauthenticated.
+  ///
+  /// When the forum answers with the guest page (session expired, or logged out elsewhere) the saved login is removed
+  /// like after a successful logout: keeping the row left the account listed as online with nothing able to remove
+  /// it. Any other page without a logged user (maintenance, an unresolved interstitial) only leaves the authed state
+  /// and keeps the saved login, it says nothing about the session.
   AsyncVoidEither logout() => AsyncVoidEither(() async {
     if (_authedUser == null) {
       return rightVoid();
     }
-    final netClient = NetClientProvider.build(
-      userLoginInfo: UserLoginInfo(username: _authedUser!.username, uid: _authedUser!.uid),
+    final netClient = _currentUserClientFactory(
+      UserLoginInfo(username: _authedUser!.username, uid: _authedUser!.uid),
     );
     final respEither = await netClient.get(_checkAuthUrl).run();
     if (respEither.isLeft()) {
@@ -227,7 +263,13 @@ class AuthenticationRepository with LoggerMixin {
     final document = parseHtmlDocument(resp.data as String);
     final userInfo = _parseUserInfoFromDocument(document);
     if (userInfo == null) {
-      // Not logged in.
+      if (_isGuestPage(document)) {
+        // Not logged in any more: nothing to end on the server, drop the saved login.
+        info('logout: session already gone on the server, remove the saved login');
+        await _forgetCurrentUser();
+        return rightVoid();
+      }
+      warning('logout: no logged user on an unrecognized page, keep the saved login');
       await _markUnauthenticated();
       return rightVoid();
     }
@@ -251,11 +293,32 @@ class AuthenticationRepository with LoggerMixin {
       return left(LogoutFailedException());
     }
 
-    getIt.get<CookieProvider>().clearUserInfoAndCookie();
-    await getIt.get<StorageProvider>().deleteCookieByUid(_authedUser!.uid!);
-    await _markUnauthenticated();
+    await _forgetCurrentUser();
     return rightVoid();
   });
+
+  /// Remove the current account from this device without telling the forum.
+  ///
+  /// Clears the cookie in memory, deletes the saved login and marks the app as unauthenticated; no request is sent,
+  /// so it works offline and the forum session stays valid elsewhere. The account is [effectiveCurrentUid], so it
+  /// also works when the stored session was never verified in this run; does nothing when no account is in use.
+  AsyncVoidEither forgetCurrentUser() => AsyncVoidEither(() async {
+    if (effectiveCurrentUid == null) {
+      return rightVoid();
+    }
+    await _forgetCurrentUser();
+    return rightVoid();
+  });
+
+  Future<void> _forgetCurrentUser() async {
+    // Resolve the account before the provider forgets it.
+    final uid = effectiveCurrentUid;
+    getIt.get<CookieProvider>().clearUserInfoAndCookie();
+    if (uid != null) {
+      await getIt.get<StorageProvider>().deleteCookieByUid(uid);
+    }
+    await _markUnauthenticated();
+  }
 
   /// Switch to another user described in [userInfo].
   ///
@@ -297,31 +360,11 @@ class AuthenticationRepository with LoggerMixin {
 
   /// Parse html [document], find current logged in user uid in it.
   UserLoginInfo? _parseUserInfoFromDocument(uh.Document document) {
-    final userNode =
-        // Style 1: With avatar.
-        document.querySelector('div#hd div.wp div.hdc.cl div#um p strong.vwmy a') ??
-        // Style 2: Without avatar.
-        document.querySelector('div#inner_stat > strong > a');
-    if (userNode == null) {
-      debug('auth failed: user node not found');
-      return null;
+    final userInfo = parseLoggedUserFromDocument(document);
+    if (userInfo == null) {
+      debug('auth failed: logged user not found in document');
     }
-    final username = userNode.firstEndDeepText();
-    if (username == null) {
-      debug('auth failed: user name not found');
-      return null;
-    }
-    final uid = userNode.firstHref()?.split('uid=').lastOrNull?.parseToInt();
-    if (uid == null) {
-      debug('auth failed: user id not found');
-      return null;
-    }
-
-    // String? email;
-    // if (parseEmail) {
-    //   email = document.querySelector('input#emailnew')?.attributes['value'];
-    // }
-    return UserLoginInfo(uid: uid, username: username /*email: email*/);
+    return userInfo;
   }
 
   Future<void> _saveLoggedUserInfo(UserLoginInfo userInfo) async {

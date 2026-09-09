@@ -5,6 +5,7 @@ import 'package:tsdm_client/features/authentication/view/login_page.dart';
 import 'package:tsdm_client/features/chat/view/chat_history_page.dart';
 import 'package:tsdm_client/features/chat/view/chat_page.dart';
 import 'package:tsdm_client/features/checkin/view/auto_checkin_page.dart';
+import 'package:tsdm_client/features/favorite/models/models.dart';
 import 'package:tsdm_client/features/favorite/view/favorite_page.dart';
 import 'package:tsdm_client/features/forum/models/models.dart';
 import 'package:tsdm_client/features/forum/view/forum_group_page.dart';
@@ -21,6 +22,7 @@ import 'package:tsdm_client/features/notification/view/broadcast_message_detail_
 import 'package:tsdm_client/features/notification/view/notification_detail_page.dart';
 import 'package:tsdm_client/features/notification/view/notification_page.dart';
 import 'package:tsdm_client/features/notification/view/notification_search_page.dart';
+import 'package:tsdm_client/features/notification/view/notification_sync_all_page.dart';
 import 'package:tsdm_client/features/open_in_app/view/open_in_app_page.dart';
 import 'package:tsdm_client/features/packet/view/packet_detail_page.dart';
 import 'package:tsdm_client/features/points/views/points_page.dart';
@@ -221,8 +223,16 @@ final List<RouteBase> _appRoutes = [
     },
   ),
   AppRoute(path: ScreenPaths.noticeSearch, builder: (_) => const NotificationSearchPage()),
+  AppRoute(path: ScreenPaths.notificationSyncAll, builder: (_) => const NotificationSyncAllPage()),
   AppRoute(path: ScreenPaths.myThread, builder: (_) => const MyThreadPage()),
-  AppRoute(path: ScreenPaths.favorite, builder: (_) => const FavoritePage()),
+  AppRoute(
+    path: ScreenPaths.favorite,
+    builder: (state) => FavoritePage(
+      initialType: state.uri.queryParameters['type'] == FavoriteType.forum.queryValue
+          ? FavoriteType.forum
+          : FavoriteType.thread,
+    ),
+  ),
   AppRoute(
     path: ScreenPaths.friend,
     builder: (state) =>

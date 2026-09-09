@@ -203,6 +203,20 @@
         "title": "自動同步訊息",
         "detail": "每隔一段時間，自動從伺服器同步訊息和提醒"
       },
+      "notificationPermission": {
+        "title": "通知權限",
+        "detail": "自動同步需要此權限才能把新提醒、訊息和公共訊息顯示為系統通知",
+        "granted": "已允許",
+        "denied": "未允許",
+        "permanentlyDenied": "已永久拒絕",
+        "openSettingsTip": "系統不再彈出權限對話框。請打開應用程式設定頁，在那裡開啟通知後再回來。"
+      },
+      "ignoreBatteryOptimizations": {
+        "title": "忽略電池最佳化",
+        "detail": "請求系統不要為了省電限制本 App。只在 App 留在背景時才有幫助；各品牌手機的自啟動、背景限制是另外的開關，系統仍可能凍結 App，不保證背景推播。",
+        "granted": "已忽略",
+        "denied": "未忽略"
+      },
       "editorBBCodeParser": {
         "title": "啟用BBCode parser",
         "tip": {
@@ -338,7 +352,11 @@
         "historicalLogs": "歷史日誌",
         "export": "匯出"
       },
-      "copyDatabaseDir": "複製資料庫路徑"
+      "copyDatabaseDir": "複製資料庫路徑",
+      "testNotification": {
+        "title": "發送測試通知",
+        "detail": "如果這裡也看不到通知，代表是系統或權限擋下了，不是沒有新訊息"
+      }
     },
     "othersSection": {
       "title": "其他",
@@ -503,7 +521,17 @@
     "tooltip": {
       "fab": "發佈新帖"
     },
-    "copyFid": "複製fid（${fid: String}）"
+    "copyFid": "複製fid（${fid: String}）",
+    "favorite": {
+      "add": "收藏本版",
+      "remove": "取消收藏本版",
+      "removeConfirm": "確定要取消收藏這個版塊嗎？",
+      "added": "收藏成功",
+      "alreadyAdded": "已在收藏中",
+      "removed": "已取消收藏",
+      "failed": "操作失敗：$err",
+      "needLogin": "請先登入再收藏"
+    }
   },
   "threadPage": {
     "title": "貼文",
@@ -582,6 +610,20 @@
         "detail": "確定要刪除這則訊息？操作無法撤銷"
       },
       "copyRawContent": "拷貝原始內容"
+    },
+    "syncAllPage": {
+      "title": "同步所有帳號",
+      "detail": "為本機保存的每個帳號逐一抓取提醒、私人訊息和公用訊息。未讀紅點仍只反映目前帳號。與平時同步一樣，列出後論壇端的「新」標記會被消耗。",
+      "running": "進行中",
+      "empty": "本機沒有保存任何帳號",
+      "user": {
+        "waiting": "等待中",
+        "running": "同步中",
+        "success": "新提醒 ${notice}，新私訊 ${pm}，新公用訊息 ${bm}；未讀 ${unreadNotice}/${unreadPm}/${unreadBm}",
+        "notAuthed": "登入已失效，請重新登入",
+        "rateLimited": "論壇限制了請求頻率（429），請稍後再試",
+        "failed": "失敗：${message}"
+      }
     }
   },
   "noticeSearchPage": {
@@ -630,7 +672,10 @@
   },
   "favoritePage": {
     "title": "收藏",
+    "threadTab": "貼文",
+    "forumTab": "版塊",
     "empty": "還沒有收藏",
+    "emptyForum": "還沒有收藏的版塊",
     "remove": "取消收藏",
     "removeConfirm": "確定要取消收藏「${title}」嗎？",
     "removed": "已取消收藏",
@@ -1035,7 +1080,11 @@
       "viewUserSpaceTip": "檢視使用者資料",
       "refreshRecommendTip": "重新載入好友名單",
       "noFriends": "@ 名單裡還沒有好友，可直接輸入使用者名稱",
-      "noMatch": "好友裡沒有符合的使用者"
+      "noMatch": "好友裡沒有符合的使用者",
+      "filterHint": "篩選或輸入使用者名稱",
+      "others": "其他 @ 名單",
+      "useTyped": "提醒「${name}」",
+      "friendsUnavailable": "無法讀取好友名單：${message}"
     }
   },
   "imageBottomSheet": {
@@ -1106,7 +1155,8 @@
   "globalStatePage": {
     "autoCheckinRunning": "正在自動簽到",
     "autoCheckinFinished": "自動簽到已完成",
-    "viewDetail": "查看詳情"
+    "viewDetail": "查看詳情",
+    "syncAllFinished": "所有帳號通知已同步"
   },
   "autoCheckinPage": {
     "title": "自動簽到",
@@ -1158,9 +1208,10 @@
       "success": "切換成功",
       "dialog": {
         "switchAccount": "切換到這個帳號",
-        "clearLoginStatus": {
-          "title": "清除登入記錄",
-          "detail": "清除在軟體內的登入記錄，不會向伺服器要求登出登入"
+        "deleteAccount": {
+          "title": "刪除帳號",
+          "detail": "從本機刪除此帳號的登入記錄，不會向論壇要求登出",
+          "confirm": "要從本機刪除 ${username} 嗎？只會刪除本機保存的登入記錄，不會向論壇要求登出。"
         },
         "loginAgain": {
           "title": "再次登入",
@@ -1171,9 +1222,30 @@
     "allUsers": "所有使用者",
     "addUser": "新增使用者",
     "logoutDetail": "登出論壇，並清除本機保存的登入狀態",
+    "removeFromDevice": {
+      "title": "從本機移除",
+      "detail": "刪除本機保存的登入記錄但不向論壇登出，本機將退出登入狀態",
+      "confirm": "要從本機移除 ${username} 嗎？不會向論壇要求登出，本機將退出登入狀態。"
+    },
     "loginAnother": "登入其他帳號",
     "logout": "退出登入",
-    "online": "線上"
+    "online": "線上",
+    "checkin": {
+      "today": "今日已簽到",
+      "notYet": "今日未簽到"
+    },
+    "selection": {
+      "enter": "選擇",
+      "count": "已選擇 ${count} 個",
+      "selectAll": "全選",
+      "delete": "刪除帳號",
+      "confirm": "要從本機刪除 ${count} 個帳號嗎？只會刪除本機保存的登入記錄，不會向論壇要求登出。",
+      "currentHint": "包含目前帳號：刪除後本機將退出登入狀態。",
+      "deleted": "已刪除 ${count} 個帳號"
+    },
+    "syncAll": {
+      "title": "同步所有帳號的通知"
+    }
   },
   "switchUserGroupPage": {
     "title": "切換使用者群組",

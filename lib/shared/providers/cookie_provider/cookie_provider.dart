@@ -46,7 +46,8 @@ final class CookieProvider with LoggerMixin implements Storage {
       return CookieProvider(userInfo, {});
     }
 
-    return CookieProvider(userInfo, Map.castFrom(databaseCookie));
+    // Loaded from a row like [loadCookieFromStorage]: must not bring the row back once the account was removed.
+    return CookieProvider(userInfo, Map.castFrom(databaseCookie)).._mirrorsStoredRow = true;
   }
 
   /// Construct a instance with no preload cookie or user info
@@ -58,6 +59,15 @@ final class CookieProvider with LoggerMixin implements Storage {
   /// Info of the user currently login.
   UserLoginInfo _userLoginInfo;
 
+  /// Whether [_cookieMap] mirrors a row of the cookie table, loaded through [loadCookieFromStorage] or
+  /// [CookieProvider.build].
+  ///
+  /// Such a provider must not bring its row back once the user removed the account: the per-account clients of auto
+  /// check-in keep running after a removal on the manage accounts page, the global provider keeps serving the
+  /// current account until its session is verified, and every `Set-Cookie` they receive lands in [_syncCookie]. A
+  /// provider that got its identity from a login ([updateUserInfo]) still creates its row.
+  bool _mirrorsStoredRow = false;
+
   /// Info of the user this cookie belongs to.
   UserLoginInfo get userLoginInfo => _userLoginInfo;
 
@@ -65,6 +75,7 @@ final class CookieProvider with LoggerMixin implements Storage {
   Future<void> updateUserInfo(UserLoginInfo userInfo) async {
     debug('update user info: $userInfo');
     _userLoginInfo = userInfo;
+    _mirrorsStoredRow = false;
     if (_userLoginInfo.isComplete) {
       debug('complete user info updated, sync cookie');
       await _syncCookie();
@@ -109,6 +120,7 @@ final class CookieProvider with LoggerMixin implements Storage {
     debug('cookie switch to user $userInfo');
     _userLoginInfo = userInfo;
     _cookieMap = Map.castFrom(databaseCookie);
+    _mirrorsStoredRow = true;
     return true;
   }
 
@@ -131,6 +143,7 @@ final class CookieProvider with LoggerMixin implements Storage {
     debug('clear user info and cookie');
     _userLoginInfo = const UserLoginInfo(username: null, uid: null);
     _cookieMap = {};
+    _mirrorsStoredRow = false;
   }
 
   /// Save cookie in database.
@@ -155,7 +168,15 @@ final class CookieProvider with LoggerMixin implements Storage {
       return false;
     }
 
-    await getIt.get<StorageProvider>().saveCookie(
+    final storage = getIt.get<StorageProvider>();
+    if (_mirrorsStoredRow && storage.getCookieByUidSync(_userLoginInfo.uid!) == null) {
+      // The account was removed after this provider loaded it: keep the cookie in memory for the request in flight
+      // but do not recreate the row.
+      info('account ${"${_userLoginInfo.uid}".obscured(4)} was removed, only keep cookie in memory');
+      return false;
+    }
+
+    await storage.saveCookie(
       username: _userLoginInfo.username!,
       uid: _userLoginInfo.uid!,
       cookie: _cookieMap,

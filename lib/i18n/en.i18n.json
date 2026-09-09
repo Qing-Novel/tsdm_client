@@ -203,6 +203,20 @@
         "title": "Auto sync notice",
         "detail": "Duration of auto sync notice from server"
       },
+      "notificationPermission": {
+        "title": "Notification permission",
+        "detail": "Required by auto sync to show new notices, messages and broadcasts as system notifications",
+        "granted": "Allowed",
+        "denied": "Not allowed",
+        "permanentlyDenied": "Permanently denied",
+        "openSettingsTip": "The system no longer shows the permission dialog. Open the app settings page and turn on notifications there, then come back."
+      },
+      "ignoreBatteryOptimizations": {
+        "title": "Ignore battery optimizations",
+        "detail": "Ask the system not to throttle this app for battery saving. This only helps while the app stays in the background; auto-start and background limits of your phone brand are separate switches, and the system may still freeze the app. Background push is not guaranteed.",
+        "granted": "Ignored",
+        "denied": "Not ignored"
+      },
       "editorBBCodeParser": {
         "title": "Enable bbcode parser",
         "tip": {
@@ -338,7 +352,11 @@
         "historicalLogs": "Historical logs",
         "export": "Export"
       },
-      "copyDatabaseDir": "Copy database path"
+      "copyDatabaseDir": "Copy database path",
+      "testNotification": {
+        "title": "Send test notification",
+        "detail": "If nothing shows up here either, the system or the permission blocks it, not a lack of new messages"
+      }
     },
     "othersSection": {
       "title": "Others",
@@ -503,7 +521,17 @@
     "tooltip": {
       "fab": "Post new thread"
     },
-    "copyFid": "Copy fid(${fid: String})"
+    "copyFid": "Copy fid(${fid: String})",
+    "favorite": {
+      "add": "Add forum to favorites",
+      "remove": "Remove forum from favorites",
+      "removeConfirm": "Remove this forum from favorites?",
+      "added": "Forum added to favorites",
+      "alreadyAdded": "Already in favorites",
+      "removed": "Forum removed from favorites",
+      "failed": "Failed: $err",
+      "needLogin": "Login to add favorites"
+    }
   },
   "threadPage": {
     "title": "Thread",
@@ -582,6 +610,20 @@
         "detail": "Are you sure to delete this message? this action can not be undone"
       },
       "copyRawContent": "Copy raw content"
+    },
+    "syncAllPage": {
+      "title": "Sync all accounts",
+      "detail": "Fetch notices, personal messages and broadcast messages for every account saved on this device, one account at a time. The unread badge still follows the current account only. Listing consumes the new marker on the forum side, same as a normal sync.",
+      "running": "Running...",
+      "empty": "No account is saved on this device",
+      "user": {
+        "waiting": "Waiting",
+        "running": "Syncing",
+        "success": "New notices ${notice}, new PMs ${pm}, new broadcasts ${bm}; unread ${unreadNotice}/${unreadPm}/${unreadBm}",
+        "notAuthed": "Login expired, sign in again",
+        "rateLimited": "The forum rate-limited the request (429), try again later",
+        "failed": "Failed: ${message}"
+      }
     }
   },
   "noticeSearchPage": {
@@ -630,7 +672,10 @@
   },
   "favoritePage": {
     "title": "Favorites",
+    "threadTab": "Threads",
+    "forumTab": "Forums",
     "empty": "No favorites yet",
+    "emptyForum": "No favorite forums yet",
     "remove": "Remove from favorites",
     "removeConfirm": "Remove \"${title}\" from favorites?",
     "removed": "Removed from favorites",
@@ -1035,7 +1080,11 @@
       "viewUserSpaceTip": "View user space",
       "refreshRecommendTip": "Reload the friend list",
       "noFriends": "No friend on your @ list yet, type the username directly",
-      "noMatch": "No friend matches the keyword"
+      "noMatch": "No friend matches the keyword",
+      "filterHint": "Filter or type a username",
+      "others": "Other @ list",
+      "useTyped": "Mention “${name}”",
+      "friendsUnavailable": "Friends list unavailable: ${message}"
     }
   },
   "imageBottomSheet": {
@@ -1106,7 +1155,8 @@
   "globalStatePage": {
     "autoCheckinRunning": "Running auto checkin...",
     "autoCheckinFinished": "Auto checkin finished",
-    "viewDetail": "View detail"
+    "viewDetail": "View detail",
+    "syncAllFinished": "All accounts synced"
   },
   "autoCheckinPage": {
     "title": "Auto checkin",
@@ -1158,9 +1208,10 @@
       "success": "Switch success",
       "dialog": {
         "switchAccount": "Switch to this account",
-        "clearLoginStatus": {
-          "title": "Clear login status",
-          "detail": "Clear the account info in app, without logout from server"
+        "deleteAccount": {
+          "title": "Delete account",
+          "detail": "Remove the login saved for this account on this device; the forum is not logged out",
+          "confirm": "Delete ${username} from this device? Only the login saved on this device is removed, the forum is not logged out."
         },
         "loginAgain": {
           "title": "Login again",
@@ -1171,9 +1222,30 @@
     "allUsers": "All users",
     "addUser": "Add user",
     "logoutDetail": "Log out of the forum and clear the login saved on this device",
+    "removeFromDevice": {
+      "title": "Remove from this device",
+      "detail": "Remove the saved login without logging out of the forum; this device is signed out",
+      "confirm": "Remove ${username} from this device? The forum is not logged out and this device will be signed out."
+    },
     "loginAnother": "Login another account",
     "logout": "Logout",
-    "online": "Online"
+    "online": "Online",
+    "checkin": {
+      "today": "Checked in today",
+      "notYet": "Not checked in today"
+    },
+    "selection": {
+      "enter": "Select",
+      "count": "${count} selected",
+      "selectAll": "Select all",
+      "delete": "Delete accounts",
+      "confirm": "Delete ${count} account(s) from this device? Only the logins saved on this device are removed, the forum is not logged out.",
+      "currentHint": "The current account is included: this device will be signed out.",
+      "deleted": "Deleted ${count} account(s)"
+    },
+    "syncAll": {
+      "title": "Sync notifications of all accounts"
+    }
   },
   "switchUserGroupPage": {
     "title": "Switch user group",

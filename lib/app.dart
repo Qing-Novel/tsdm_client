@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_styled_toast/flutter_styled_toast.dart';
 import 'package:tsdm_client/constants/layout.dart';
@@ -17,14 +16,16 @@ import 'package:tsdm_client/features/checkin/repository/checkin_repository.dart'
 import 'package:tsdm_client/features/favorite/repository/favorite_repository.dart';
 import 'package:tsdm_client/features/forum/repository/forum_repository.dart';
 import 'package:tsdm_client/features/home/cubit/init_cubit.dart';
-import 'package:tsdm_client/features/local_notice/keys.dart';
+import 'package:tsdm_client/features/local_notice/show.dart';
 import 'package:tsdm_client/features/notification/bloc/auto_notification_cubit.dart';
 import 'package:tsdm_client/features/notification/bloc/notification_bloc.dart';
 import 'package:tsdm_client/features/notification/bloc/notification_state_auto_sync_cubit.dart';
 import 'package:tsdm_client/features/notification/bloc/notification_state_cubit.dart';
+import 'package:tsdm_client/features/notification/bloc/notification_sync_all_cubit.dart';
 import 'package:tsdm_client/features/notification/models/models.dart';
 import 'package:tsdm_client/features/notification/repository/notification_info_repository.dart';
 import 'package:tsdm_client/features/notification/repository/notification_repository.dart';
+import 'package:tsdm_client/features/notification/repository/notification_sync_all_repository.dart';
 import 'package:tsdm_client/features/profile/repository/profile_repository.dart';
 import 'package:tsdm_client/features/root/bloc/points_changes_cubit.dart';
 import 'package:tsdm_client/features/root/bloc/root_location_cubit.dart';
@@ -152,46 +153,6 @@ class _AppState extends State<App> with WindowListener, LoggerMixin {
     });
   }
 
-  Future<void> showLocalNotification(BuildContext context, NotificationAutoSyncInfo info) async {
-    final tr = context.t.localNotification;
-    final and = AndroidNotificationDetails(
-      'newNoticeChannel',
-      tr.channelName,
-      channelDescription: tr.channelDesc,
-      ticker: tr.ticker,
-    );
-    final nd = NotificationDetails(android: and);
-    final noticeData = switch (info) {
-      NotificationAutoSyncInfoNotice(:final msg, :final notice, :final personalMessage, :final broadcastMessage) =>
-        tr.notice.detail.notice(noticeCount: notice, pmCount: personalMessage, bmCount: broadcastMessage, msg: msg),
-      NotificationAutoSyncInfoPm(
-        :final user,
-        :final msg,
-        :final notice,
-        :final personalMessage,
-        :final broadcastMessage,
-      ) =>
-        tr.notice.detail.pm(
-          noticeCount: notice,
-          pmCount: personalMessage,
-          bmCount: broadcastMessage,
-          user: user,
-          msg: msg,
-        ),
-      NotificationAutoSyncInfoBm(:final msg, :final notice, :final personalMessage, :final broadcastMessage) =>
-        tr.notice.detail.bm(noticeCount: notice, pmCount: personalMessage, bmCount: broadcastMessage, msg: msg),
-    };
-    if (isAndroid) {
-      await flnp.show(
-        id: 0,
-        title: tr.notice.title,
-        body: noticeData,
-        notificationDetails: nd,
-        payload: LocalNoticeKeys.openNotification,
-      );
-    }
-  }
-
   @override
   void initState() {
     super.initState();
@@ -225,8 +186,14 @@ class _AppState extends State<App> with WindowListener, LoggerMixin {
           dispose: (repo) async => repo.dispose(),
         ),
         RepositoryProvider<CheckinRepository>(create: (_) => CheckinRepository(storageProvider: getIt())),
-        RepositoryProvider<ForumHomeRepository>(create: (_) => ForumHomeRepository()),
-        RepositoryProvider<FavoriteRepository>(create: (_) => FavoriteRepository()),
+        RepositoryProvider<ForumHomeRepository>(
+          create: (_) => ForumHomeRepository(),
+          dispose: (repo) async => repo.dispose(),
+        ),
+        RepositoryProvider<FavoriteRepository>(
+          create: (_) => FavoriteRepository(),
+          dispose: (repo) async => repo.dispose(),
+        ),
         RepositoryProvider<ProfileRepository>(create: (_) => ProfileRepository()),
         RepositoryProvider<FragmentsRepository>(create: (_) => FragmentsRepository()),
         RepositoryProvider<ForumRepository>(create: (_) => ForumRepository()),
@@ -238,6 +205,11 @@ class _AppState extends State<App> with WindowListener, LoggerMixin {
         RepositoryProvider<ThreadVisitHistoryRepo>(create: (_) => ThreadVisitHistoryRepo(getIt.get<StorageProvider>())),
         RepositoryProvider<AutoCheckinRepository>(
           create: (_) => AutoCheckinRepository(storageProvider: getIt()),
+          dispose: (repo) async => repo.dispose(),
+        ),
+        RepositoryProvider<NotificationSyncAllRepository>(
+          create: (context) =>
+              NotificationSyncAllRepository(storageProvider: getIt(), notificationRepository: context.repo()),
           dispose: (repo) async => repo.dispose(),
         ),
       ],
@@ -269,6 +241,17 @@ class _AppState extends State<App> with WindowListener, LoggerMixin {
               infoRepository: context.repo(),
               authRepo: context.repo(),
               storageProvider: getIt(),
+            ),
+          ),
+          // Top level: leaving the progress page must not cancel the run, like the auto checkin.
+          BlocProvider(
+            create: (context) => NotificationSyncAllCubit(
+              repository: context.repo(),
+              storageProvider: getIt(),
+              authenticationRepository: context.repo(),
+              infoRepository: context.repo(),
+              autoNotificationCubit: context.read<AutoNotificationCubit>(),
+              notificationBloc: context.read<NotificationBloc>(),
             ),
           ),
           BlocProvider(
@@ -348,11 +331,36 @@ class _AppState extends State<App> with WindowListener, LoggerMixin {
                     context: context,
                     message: tr.autoCheckinFinished,
                     clearPrevious: true,
-                    showCloseIcon: true,
+                    // No close icon: with it the bar wrapped onto two rows on small screens (issue #4); swipe,
+                    // the action and the timeout still dismiss it.
+                    actionOverflowThreshold: 0.6,
                     action: SnackBarAction(
                       label: tr.viewDetail,
                       onPressed: () async => router.pushNamed(ScreenPaths.autoCheckinDetail),
                     ),
+                  );
+                }
+              },
+            ),
+            BlocListener<NotificationSyncAllCubit, NotificationSyncAllState>(
+              listenWhen: (prev, curr) =>
+                  prev is! NotificationSyncAllStateFinished && curr is NotificationSyncAllStateFinished,
+              listener: (context, state) {
+                if (state is NotificationSyncAllStateFinished) {
+                  talker.debug('sync all accounts finished: ${state.results.length} account(s)');
+                  // The progress page shows the result already: no action to open it again on top of itself.
+                  final onPage = context.read<RootLocationCubit>().currentPath == ScreenPaths.notificationSyncAll;
+                  showSnackBar(
+                    context: context,
+                    message: tr.syncAllFinished,
+                    clearPrevious: true,
+                    actionOverflowThreshold: 0.6,
+                    action: onPage
+                        ? null
+                        : SnackBarAction(
+                            label: tr.viewDetail,
+                            onPressed: () async => router.pushNamed(ScreenPaths.notificationSyncAll),
+                          ),
                   );
                 }
               },
