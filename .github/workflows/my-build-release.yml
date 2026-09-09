@@ -104,7 +104,7 @@ jobs:
       - name: Prepare system dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y ninja-build libgtk-3-dev make meson nasm android-sdk-platform-tools
+          sudo apt install -y ninja-build libgtk-3-dev make meson nasm android-sdk-platform-tools binutils
 
       - name: Retry clone git submodules
         run: |
@@ -138,6 +138,11 @@ jobs:
           ANDROID_NDK_LATEST_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
 
+      # 新增：剔除so调试符号，瘦身原生库
+      - name: Strip debug symbols from native .so
+        run: |
+          find android/app/src/main -name "*.so" -type f -exec strip --strip-all {} \;
+
       - name: Precompile dart & flutter assets
         run: |
           flutter pub get
@@ -148,16 +153,14 @@ jobs:
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      # 保留你原来flutter打包命令，加环境变量抑制watch警告，||true忽略flutter假报错
+      # 移除 --no-tree-shake-icons，开启图标资源精简
       - name: Build split‑per‑abi release APK
         run: |
-          FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi --no-tree-shake-icons || true
+          FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi || true
 
-      # 列出文件，调试确认apk生成
       - name: List generated apks (debug)
         run: ls -lh build/app/outputs/flutter-apk/
 
-      # 对两个split apk 全部签名（重点新增！一次性签名arm64-v8a + armeabi-v7a）
       - name: Sign both split APKs
         run: |
           export KEYSTORE=android/app/key.jks
@@ -170,7 +173,6 @@ jobs:
           apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
           echo "✅ All split APK signed done"
 
-      # 校验签名是否有效
       - name: Verify APK signatures
         run: |
           apksigner verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
