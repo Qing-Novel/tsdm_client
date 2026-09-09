@@ -104,7 +104,14 @@ jobs:
       - name: Prepare system dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y ninja-build libgtk-3-dev make meson nasm android-sdk-platform-tools binutils
+          sudo apt install -y ninja-build libgtk-3-dev make meson nasm binutils wget unzip
+
+      # 下载Android build-tools，获取apksigner.jar
+      - name: Download Android Build Tools
+        run: |
+          wget https://dl.google.com/android/repository/build-tools_r34.0.0-linux.zip
+          unzip -q build-tools_r34.0.0-linux.zip -d android-build-tools
+          echo "APKSIGNER_JAR=$PWD/android-build-tools/android-34.0.0/lib/apksigner.jar" >> $GITHUB_ENV
 
       - name: Retry clone git submodules
         run: |
@@ -159,6 +166,7 @@ jobs:
       - name: List generated apks (debug)
         run: ls -lh build/app/outputs/flutter-apk/
 
+      # 使用java调用apksigner.jar签名
       - name: Sign both split APKs
         run: |
           export KEYSTORE=android/app/key.jks
@@ -167,14 +175,14 @@ jobs:
           KEY_PASS=$(grep 'keyPassword' ${KEY_PROP} | cut -d'=' -f2)
           STORE_PASS=$(grep 'storePassword' ${KEY_PROP} | cut -d'=' -f2)
 
-          /usr/lib/android-sdk/platform-tools/apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          /usr/lib/android-sdk/platform-tools/apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          java -jar ${{ env.APKSIGNER_JAR }} sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          java -jar ${{ env.APKSIGNER_JAR }} sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
           echo "✅ All split APK signed done"
 
       - name: Verify APK signatures
         run: |
-          /usr/lib/android-sdk/platform-tools/apksigner verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          /usr/lib/android-sdk/platform-tools/apksigner verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          java -jar ${{ env.APKSIGNER_JAR }} verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          java -jar ${{ env.APKSIGNER_JAR }} verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
           echo "✅ Signature verify passed"
 
       - name: upload split apks
