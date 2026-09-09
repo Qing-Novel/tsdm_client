@@ -148,9 +148,9 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      # 合并构建+apk校验在同一个shell脚本，不再使用GITHUB_OUTPUT
       - name: Build split‑per‑abi APK and verify output
         run: |
+          set +e
           FLUTTER_TOOLS_NO_WATCHER=1 flutter build apk --release --split-per-abi
           EXIT_CODE=$?
           echo "flutter build exit code: $EXIT_CODE"
