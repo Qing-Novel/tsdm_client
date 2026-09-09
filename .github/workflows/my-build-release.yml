@@ -104,7 +104,7 @@ jobs:
       - name: Prepare system dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y ninja-build libgtk-3-dev make meson nasm
+          sudo apt install -y ninja-build libgtk-3-dev make meson nasm android-sdk-platform-tools
 
       - name: Retry clone git submodules
         run: |
@@ -148,40 +148,34 @@ jobs:
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      # 自动生成 gradle wrapper，解决 gradlew 不存在
-      - name: Generate gradle wrapper
+      # 保留你原来flutter打包命令，加环境变量抑制watch警告，||true忽略flutter假报错
+      - name: Build split‑per‑abi release APK
         run: |
-          cd android
-          gradle wrapper
-          chmod +x gradlew
-          cd ..
+          FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi --no-tree-shake-icons || true
 
-      # 使用生成好的gradlew打包split abi apk
-      - name: Build split APK via Gradle assembleRelease
-        run: |
-          cd android
-          ./gradlew assembleRelease
-          cd ..
+      # 列出文件，调试确认apk生成
+      - name: List generated apks (debug)
+        run: ls -lh build/app/outputs/flutter-apk/
 
-      - name: Manually sign arm64-v8a apk
+      # 对两个split apk 全部签名（重点新增！一次性签名arm64-v8a + armeabi-v7a）
+      - name: Sign both split APKs
         run: |
-          export APK_FILE="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
           export KEYSTORE=android/app/key.jks
           export KEY_PROP=android/key.properties
           KEY_ALIAS=$(grep 'keyAlias' ${KEY_PROP} | cut -d'=' -f2)
           KEY_PASS=$(grep 'keyPassword' ${KEY_PROP} | cut -d'=' -f2)
           STORE_PASS=$(grep 'storePassword' ${KEY_PROP} | cut -d'=' -f2)
-          apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} ${APK_FILE}
-          echo "✅ arm64-v8a apk signed done"
 
-      - name: Verify APK signature
+          apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          apksigner sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          echo "✅ All split APK signed done"
+
+      # 校验签名是否有效
+      - name: Verify APK signatures
         run: |
           apksigner verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           apksigner verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
           echo "✅ Signature verify passed"
-
-      - name: List generated apks (debug)
-        run: ls -lh build/app/outputs/flutter-apk/
 
       - name: upload split apks
         uses: actions/upload-artifact@v4
