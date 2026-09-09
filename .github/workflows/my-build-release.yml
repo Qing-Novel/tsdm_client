@@ -148,13 +148,11 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      # 关键修改：bash脚本内部捕获flutter退出码，不再使用yaml的continue-on-error
       - name: Build split-per-abi release APK
         run: |
-          FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi
+          FLUTTER_TOOLS_NO_WATCHER=1 flutter build apk --release --split-per-abi
           EXIT_CODE=$?
           echo "flutter exit code: $EXIT_CODE"
-          # 即使flutter返回非0，继续往下，后面校验apk文件是否存在
           true
 
       - name: Find generated APKs
@@ -164,10 +162,11 @@ jobs:
           APK1="build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk"
           APK2="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
           if [ -f "$APK1" ] && [ -f "$APK2" ]; then
-            echo "apk_exist=true" >> $GITHUB_OUTPUT
+            echo "true" > /tmp/apk_ok.txt
           else
-            echo "apk_exist=false" >> $GITHUB_OUTPUT
+            echo "false" > /tmp/apk_ok.txt
           fi
+          echo "apk_exist=$(cat /tmp/apk_ok.txt)" >> $GITHUB_OUTPUT
 
       - name: Check APK exists
         if: steps.find_apk.outputs.apk_exist != 'true'
