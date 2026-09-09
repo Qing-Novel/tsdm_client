@@ -48,10 +48,11 @@
       "favorite": "收藏"
     },
     "showMoreUserOperationsTip": "显示更多用户操作",
-    "latestReplySection": {
-      "title": "最新回复",
-      "more": "查看更多",
-      "retry": "加载失败，点击重试"
+    "guide": {
+      "more": "更多",
+      "sofa": "抢沙发",
+      "failed": "加载失败，点击重试",
+      "empty": "暂时还没有帖子"
     },
     "forumStatus": {
       "today": "今日",
@@ -567,7 +568,18 @@
       "alreadyAdded": "已在收藏中",
       "removed": "已取消收藏",
       "failed": "操作失败：$err"
+    },
+    "repliedMark": "已回复",
+    "shareToFriend": {
+      "title": "分享给好友",
+      "pickTitle": "选择好友",
+      "message": "分享帖子：${title}\n${url}",
+      "sent": "已发送给 ${name}",
+      "failed": "发送失败：${err}"
     }
+  },
+  "topicsPage": {
+    "moderators": "分区版主"
   },
   "noticePage": {
     "title": "通知",
@@ -730,7 +742,8 @@
     }
   },
   "latestThreadPage": {
-    "title": "最新主题"
+    "title": "最新主题",
+    "empty": "暂时还没有帖子"
   },
   "ratePostPage": {
     "title": "评分",
@@ -1085,6 +1098,18 @@
       "others": "其他 @ 名单",
       "useTyped": "提醒「${name}」",
       "friendsUnavailable": "无法读取好友列表：${message}"
+    },
+    "customImage": {
+      "tab": "我的图片",
+      "add": "添加图片",
+      "addTitle": "保存图片",
+      "urlHint": "图片网址或 [img] 图床代码",
+      "nameHint": "名称（可选）",
+      "invalidUrl": "不是 http(s) 图片网址",
+      "delete": "删除图片",
+      "deleteConfirm": "从我的图片里删除这张？",
+      "empty": "把图片网址存在这里，发帖时一键插入",
+      "saved": "已存到我的图片"
     }
   },
   "imageBottomSheet": {
@@ -1095,7 +1120,8 @@
     "openLink": "打开链接",
     "saveImage": "保存图片",
     "imageSaved": "图片已保存至 ${filePath: String}",
-    "failedToSaveImage": "无法保存图片"
+    "failedToSaveImage": "无法保存图片",
+    "saveAsSticker": "存到我的图片"
   },
   "init": {
     "v1DeleteLegacyData": {
@@ -1156,7 +1182,11 @@
     "autoCheckinRunning": "正在自动签到",
     "autoCheckinFinished": "自动签到已完成",
     "viewDetail": "查看详情",
-    "syncAllFinished": "所有账户通知已同步"
+    "syncAllFinished": "所有账户通知已同步",
+    "sessionExpired": {
+      "message": "有 ${count: int} 个账户的登录已过期",
+      "view": "查看"
+    }
   },
   "autoCheckinPage": {
     "title": "自动签到",
@@ -1245,6 +1275,10 @@
     },
     "syncAll": {
       "title": "同步所有账户的通知"
+    },
+    "sessionExpired": {
+      "hint": "登录已过期，请重新登录",
+      "loginAgain": "重新登录"
     }
   },
   "switchUserGroupPage": {
@@ -1368,7 +1402,8 @@
   },
   "workaroundRedirect": "查看对话",
   "threadCard": {
-    "viewInfo": "查看帖子信息"
+    "viewInfo": "查看帖子信息",
+    "replied": "已回复"
   },
   "myTitlesPage": {
     "title": "我的称号",

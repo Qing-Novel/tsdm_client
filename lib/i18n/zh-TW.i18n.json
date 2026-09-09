@@ -48,10 +48,11 @@
       "favorite": "收藏"
     },
     "showMoreUserOperationsTip": "顯示更多使用者操作",
-    "latestReplySection": {
-      "title": "最新回覆",
-      "more": "查看更多",
-      "retry": "載入失敗，點一下重試"
+    "guide": {
+      "more": "更多",
+      "sofa": "搶沙發",
+      "failed": "載入失敗，點一下重試",
+      "empty": "目前還沒有貼文"
     },
     "forumStatus": {
       "today": "今日",
@@ -567,7 +568,18 @@
       "alreadyAdded": "已在收藏中",
       "removed": "已取消收藏",
       "failed": "操作失敗：$err"
+    },
+    "repliedMark": "已回覆",
+    "shareToFriend": {
+      "title": "分享給好友",
+      "pickTitle": "選擇好友",
+      "message": "分享帖子：${title}\n${url}",
+      "sent": "已發送給 ${name}",
+      "failed": "發送失敗：${err}"
     }
+  },
+  "topicsPage": {
+    "moderators": "分區版主"
   },
   "noticePage": {
     "title": "通知",
@@ -730,7 +742,8 @@
     }
   },
   "latestThreadPage": {
-    "title": "最新主題"
+    "title": "最新主題",
+    "empty": "目前還沒有貼文"
   },
   "ratePostPage": {
     "title": "評分",
@@ -1085,6 +1098,18 @@
       "others": "其他 @ 名單",
       "useTyped": "提醒「${name}」",
       "friendsUnavailable": "無法讀取好友名單：${message}"
+    },
+    "customImage": {
+      "tab": "我的圖片",
+      "add": "新增圖片",
+      "addTitle": "儲存圖片",
+      "urlHint": "圖片網址或 [img] 圖床代碼",
+      "nameHint": "名稱（選填）",
+      "invalidUrl": "不是 http(s) 圖片網址",
+      "delete": "刪除圖片",
+      "deleteConfirm": "從我的圖片裡刪除這張？",
+      "empty": "把圖片網址存在這裡，發帖時一鍵插入",
+      "saved": "已存到我的圖片"
     }
   },
   "imageBottomSheet": {
@@ -1095,7 +1120,8 @@
     "openLink": "開啟連結",
     "saveImage": "儲存圖片",
     "imageSaved": "圖片已儲存至 ${filePath: String}",
-    "failedToSaveImage": "無法儲存圖片"
+    "failedToSaveImage": "無法儲存圖片",
+    "saveAsSticker": "存到我的圖片"
   },
   "init": {
     "v1DeleteLegacyData": {
@@ -1156,7 +1182,11 @@
     "autoCheckinRunning": "正在自動簽到",
     "autoCheckinFinished": "自動簽到已完成",
     "viewDetail": "查看詳情",
-    "syncAllFinished": "所有帳號通知已同步"
+    "syncAllFinished": "所有帳號通知已同步",
+    "sessionExpired": {
+      "message": "有 ${count: int} 個帳號的登入已過期",
+      "view": "查看"
+    }
   },
   "autoCheckinPage": {
     "title": "自動簽到",
@@ -1245,6 +1275,10 @@
     },
     "syncAll": {
       "title": "同步所有帳號的通知"
+    },
+    "sessionExpired": {
+      "hint": "登入已過期，請重新登入",
+      "loginAgain": "重新登入"
     }
   },
   "switchUserGroupPage": {
@@ -1368,7 +1402,8 @@
   },
   "workaroundRedirect": "查看對話",
   "threadCard": {
-    "viewInfo": "查看貼文資訊"
+    "viewInfo": "查看貼文資訊",
+    "replied": "已回覆"
   },
   "myTitlesPage": {
     "title": "我的頭銜",

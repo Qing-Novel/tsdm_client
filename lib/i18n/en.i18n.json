@@ -48,10 +48,11 @@
       "favorite": "Favorites"
     },
     "showMoreUserOperationsTip": "Show more user operations",
-    "latestReplySection": {
-      "title": "Latest replies",
+    "guide": {
       "more": "More",
-      "retry": "Failed to load, tap to retry"
+      "sofa": "Sofa",
+      "failed": "Failed to load, tap to retry",
+      "empty": "No threads yet"
     },
     "forumStatus": {
       "today": "Today",
@@ -567,7 +568,18 @@
       "alreadyAdded": "Already in favorites",
       "removed": "Removed from favorites",
       "failed": "Failed: $err"
+    },
+    "repliedMark": "Replied",
+    "shareToFriend": {
+      "title": "Share to a friend",
+      "pickTitle": "Pick a friend",
+      "message": "Sharing a thread: ${title}\n${url}",
+      "sent": "Sent to ${name}",
+      "failed": "Failed to send: ${err}"
     }
+  },
+  "topicsPage": {
+    "moderators": "Moderators"
   },
   "noticePage": {
     "title": "Notifications",
@@ -730,7 +742,8 @@
     }
   },
   "latestThreadPage": {
-    "title": "Latest Thread"
+    "title": "Latest Thread",
+    "empty": "No threads yet"
   },
   "ratePostPage": {
     "title": "Rate",
@@ -1085,6 +1098,18 @@
       "others": "Other @ list",
       "useTyped": "Mention “${name}”",
       "friendsUnavailable": "Friends list unavailable: ${message}"
+    },
+    "customImage": {
+      "tab": "My images",
+      "add": "Add image",
+      "addTitle": "Save an image",
+      "urlHint": "Image url or [img] code",
+      "nameHint": "Name (optional)",
+      "invalidUrl": "Not an http(s) image url",
+      "delete": "Remove image",
+      "deleteConfirm": "Remove this image from my images?",
+      "empty": "Save image urls here and insert them into posts with one tap",
+      "saved": "Saved to my images"
     }
   },
   "imageBottomSheet": {
@@ -1095,7 +1120,8 @@
     "openLink": "Open link",
     "saveImage": "Save image",
     "imageSaved": "Image saved at ${filePath: String}",
-    "failedToSaveImage": "Failed to save image"
+    "failedToSaveImage": "Failed to save image",
+    "saveAsSticker": "Save to my images"
   },
   "init": {
     "v1DeleteLegacyData": {
@@ -1156,7 +1182,11 @@
     "autoCheckinRunning": "Running auto checkin...",
     "autoCheckinFinished": "Auto checkin finished",
     "viewDetail": "View detail",
-    "syncAllFinished": "All accounts synced"
+    "syncAllFinished": "All accounts synced",
+    "sessionExpired": {
+      "message": "${count: int} account(s) have an expired login",
+      "view": "View"
+    }
   },
   "autoCheckinPage": {
     "title": "Auto checkin",
@@ -1245,6 +1275,10 @@
     },
     "syncAll": {
       "title": "Sync notifications of all accounts"
+    },
+    "sessionExpired": {
+      "hint": "Login expired, sign in again",
+      "loginAgain": "Sign in again"
     }
   },
   "switchUserGroupPage": {
@@ -1368,7 +1402,8 @@
   },
   "workaroundRedirect": "View conversation",
   "threadCard": {
-    "viewInfo": "View thread info"
+    "viewInfo": "View thread info",
+    "replied": "Replied"
   },
   "myTitlesPage": {
     "title": "My titles",
