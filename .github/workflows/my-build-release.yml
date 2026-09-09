@@ -148,7 +148,7 @@ jobs:
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
 
-      # 直接调用Gradle，绕过flutter cli --split-per-abi的exit code bug
+      # ==========【修复】多行脚本，共享shell上下文 ==========
       - name: Build split APK via Gradle assembleRelease
         run: |
           cd android
