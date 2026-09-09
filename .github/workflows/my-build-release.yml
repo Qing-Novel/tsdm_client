@@ -104,14 +104,7 @@ jobs:
       - name: Prepare system dependencies
         run: |
           sudo apt update -y
-          sudo apt install -y ninja-build libgtk-3-dev make meson nasm binutils wget unzip
-
-      # 下载Android build-tools，获取apksigner.jar
-      - name: Download Android Build Tools
-        run: |
-          wget https://dl.google.com/android/repository/build-tools_r34.0.0-linux.zip
-          unzip -q build-tools_r34.0.0-linux.zip -d android-build-tools
-          echo "APKSIGNER_JAR=$PWD/android-build-tools/android-34.0.0/lib/apksigner.jar" >> $GITHUB_ENV
+          sudo apt install -y ninja-build libgtk-3-dev make meson nasm binutils
 
       - name: Retry clone git submodules
         run: |
@@ -145,6 +138,7 @@ jobs:
           ANDROID_NDK_LATEST_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
 
+      # 保留so符号剥离瘦身
       - name: Strip debug symbols from native .so
         run: |
           find android/app/src/main -name "*.so" -type f -exec strip --strip-all {} \;
@@ -154,11 +148,6 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      - name: Setup Android sign key
-        run: |
-          echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
-          echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
-
       - name: Build split‑per‑abi release APK
         run: |
           FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi || true
@@ -166,24 +155,28 @@ jobs:
       - name: List generated apks (debug)
         run: ls -lh build/app/outputs/flutter-apk/
 
-      # 使用java调用apksigner.jar签名
-      - name: Sign both split APKs
-        run: |
-          export KEYSTORE=android/app/key.jks
-          export KEY_PROP=android/key.properties
-          KEY_ALIAS=$(grep 'keyAlias' ${KEY_PROP} | cut -d'=' -f2)
-          KEY_PASS=$(grep 'keyPassword' ${KEY_PROP} | cut -d'=' -f2)
-          STORE_PASS=$(grep 'storePassword' ${KEY_PROP} | cut -d'=' -f2)
+      # ========== 使用现成Action签名，自动处理apksigner ==========
+      - name: Sign arm64-v8a APK
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: build/app/outputs/flutter-apk
+          signingKeyBase64: ${{ secrets.KEYSTORE }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.STORE_PASS }}
+          keyPassword: ${{ secrets.KEY_PASS }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
 
-          java -jar ${{ env.APKSIGNER_JAR }} sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          java -jar ${{ env.APKSIGNER_JAR }} sign --ks ${KEYSTORE} --ks-key-alias ${KEY_ALIAS} --ks-pass pass:${STORE_PASS} --key-pass pass:${KEY_PASS} build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-          echo "✅ All split APK signed done"
-
-      - name: Verify APK signatures
-        run: |
-          java -jar ${{ env.APKSIGNER_JAR }} verify build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          java -jar ${{ env.APKSIGNER_JAR }} verify build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-          echo "✅ Signature verify passed"
+      - name: Sign armeabi-v7a APK
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: build/app/outputs/flutter-apk
+          signingKeyBase64: ${{ secrets.KEYSTORE }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.STORE_PASS }}
+          keyPassword: ${{ secrets.KEY_PASS }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
 
       - name: upload split apks
         uses: actions/upload-artifact@v4
