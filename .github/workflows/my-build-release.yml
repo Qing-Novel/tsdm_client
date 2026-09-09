@@ -148,7 +148,7 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
 
-      - name: Build split‑per‑abi release APK
+      - name: Build split-per-abi release APK
         continue-on-error: true
         run: FLUTTER_TOOLS_NO_WATCHER=true flutter build apk --release --split-per-abi
 
