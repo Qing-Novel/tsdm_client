@@ -455,6 +455,7 @@ release 版大小：universal 60MB／arm64 30MB（debug 142MB／106MB）。
 - 通知 channel 換成 `newNoticeChannelV2`（`Importance.high`／`Priority.high`，`buildLocalNotificationDetails` 純函式組出 `NotificationDetails`，小圖示照舊用 `initialize` 給的）：測試者的華為機 `notify()` 成功卻看不到任何東西，而原 channel `newNoticeChannel` 是以預設 importance 建立、Android 不允許程式碼事後調高，只能換 id。舊 id 保留為 `legacyLocalNoticeChannelId`，開機 `flnp.initialize` 之後（Android）呼叫 `deleteNotificationChannel` 刪掉，try/catch 記 log 不擋開機；每次推播前多記 `id=0 channel=newNoticeChannelV2`。
 - 冷啟動（GitHub #14 後半）：App 沒在跑時點通知，`onDidReceiveNotificationResponse` 不會被叫，開機改讀 `getNotificationAppLaunchDetails()`，`didNotificationLaunchApp` 且 payload 為 `openNotification` 時先存進 `stream.dart` 的 pending 槽，`HomePage` 第一幀後（`addPostFrameCallback`）用與 stream 事件相同的處理函式（同樣需已登入）消費一次，落到 `/notice`；取走即清空，頁面重建不會再推第二次。
 - 測試：test_053（channel 常數不同、`NotificationDetails` 用新 id 與 high importance／priority）、test_054（pending payload 只被處理一次、handler 丟例外也清空）。
+- 點通知只到首頁（GitHub #14，1.21.1 日誌）：`RootPage` 從不送 `RootLocationEventLeave`，位置堆疊只增不減，離開過 `/notice` 之後 `isIn(notice)` 永遠為真，回到首頁點通知被記成 `do not push to notice page already in it`（日誌 18:56:33、19:04:20 兩次）。修法兩層：`RootPage.dispose` 補送 Leave（shell 三頁除外，cubit 對非頂端路徑刪最後一筆，1.21.1 已含）；`HomePage` 的判斷改問 router（`tap.dart` 的 `routerTopLocation` 取 `currentConfiguration.lastOrNull?.matchedLocation`，會走進 shell、`pushNamed` 的頁回自己、對話框不算頁），`decideLocalNoticeTap` 純函式決定 needLogin／alreadyOnNoticePage／openNoticePage。診斷：`onLocalNotificationOpened` 記 `local notification tapped: id type payload listened`（沒這行＝點擊沒到 Dart）、`App` 記 `app lifecycle: resumed/paused/…`、resumed 時記 `auto sync notification in shade: true/false`（`getActiveNotifications`）、handler 記 `notification tap: action top location`；原本三句 `push to notice page`／`do not push…`／`refuse to push…` 保留。日誌裡另有幾次「resume 之後 1 秒內手動進 /notice、沒有任何 handler 行」的情況無法分辨是沒點還是系統沒送 intent；新日誌能縮小範圍但不能完全判定：有 `local notification tapped`＝點擊到了 App；沒有這行且 `in shade: true`＝沒點；沒有這行且 `in shade: false`＝使用者清掉了通知或點擊沒送到，兩者日誌分不出，要靠回報者描述操作。測試：test_073（決策函式、callback 進 stream、真 GoRouter：shell 分支／pushNamed／pop 回首頁／對話框之下）。
 - 測試：test_048（manifest 含兩個權限字串；cubit refresh／denied→request／permanentlyDenied→openAppSettings／不跳頁模式／denied+rationale=false→permanentlyDenied+openAppSettings 且 refresh 後維持／首次真拒絕 rationale=true 不跳頁／plugin 自己回 permanentlyDenied 不再多跳／close 後 refresh 不 emit／battery request／disabled no-op；兩列 tile 顯示已允許／未允許／已永久拒絕／已忽略／未忽略、點按觸發 request、永久拒絕先出對話框取消不跳、確定才 openAppSettings）。
 
 ## 15. 編輯器打 `@` 彈出提醒選單、選單列自己的好友（GitHub #8，2026-09-09）
@@ -506,3 +507,15 @@ release 版大小：universal 60MB／arm64 30MB（debug 142MB／106MB）。
 - `LatestThreadPage` 新增可選 `title`（路由 query `title`）與空清單提示（`latestThreadPage.empty`）；`view=hot|digest|sofa` 走同一頁。
 - i18n：`homepage.guide.{more, sofa, failed, empty}`、`latestThreadPage.empty`；移除 `homepage.latestReplySection.*`。
 - 測試 test_064（解析：四模組順序／view／更多 url、30/0/30/30 列、第一列 hot 內容、缺模組容錯、空頁；repository＋cubit 用假 adapter；widget：模組卡、更多、chip、點列到 threadV1、點更多／chip 到 latestThread、失敗重試列）、test_065（`fromTBody` 解析 hot 47 列、digest 0 列 bloc 仍 success、分頁 url、repository 接受五種 view、`LatestThreadPage` 標題與空提示）。
+
+## 18. 瀏覽紀錄依帳號篩選（GitHub #19，2026-09-10）
+
+### 18.1 範圍
+- 使用者定案：加帳號篩選、保留「全部帳號」、重新整理時維持篩選。首版由 Codex 建立（PR #39），本輪接續完善，不另外拆帳號分頁。
+
+### 18.2 App 端行為
+- `ThreadVisitHistoryPage`：篩選在已載入的紀錄上做（`state.history.where(uid)`），不走 `ThreadVisitHistoryFetchByUserRequested`，所以下拉刷新／重試後選擇不變；帳號清單從紀錄本身取（`putIfAbsent(uid, username)`，最近瀏覽的帳號在前），已從 App 移除的帳號仍可選；選中的帳號在刷新後紀錄全沒了也留在清單裡（記住 `_selectedUsername`），並顯示 `emptyForAccount`。
+- 觸發器是 `ActionChip`（漏斗圖示＋目前選擇），點下去用 `GlobalKey<PopupMenuButtonState<int>>.showButtonMenu()` 開同一個 `PopupMenuButton`（漣漪維持 chip 形狀、選單可捲動）；「全部帳號」用哨兵值 `-1`（`PopupMenuItem` 值為 null 時 `onSelected` 不會被叫）。選單用 `CheckedPopupMenuItem`：名字一行＋ `UID n` 小字，選中的打勾；chip 上只在名字與其他帳號重複時才附 UID（`accountWithUid`），名字超過 220 邏輯像素省略。
+- 空狀態：沒有任何紀錄顯示 `empty`，篩選後沒有紀錄顯示 `emptyForAccount`；都放在 `ListView` 裡，下拉刷新仍可用。
+- i18n `threadVisitHistoryPage.{filterAccount, allAccounts, accountUid, accountWithUid, empty, emptyForAccount}`。
+- 測試 test_072：選單列每個帳號一次＋UID、打勾跟著選擇、同名帳號 chip 帶 UID、不同名不帶；刷新保留篩選並顯示新紀錄；選中帳號的紀錄刪光後仍選中、顯示空提示、選單仍列該帳號；完全沒有紀錄時只有「全部帳號」一項。
