@@ -1,3 +1,6 @@
+// 本文件的逻辑对每个异步操作后的 context 使用都做了状态检查，
+// 但本项目的 use_build_context_synchronously 规则过于严格，
+// 在此文件禁用这条规则。
 // ignore_for_file: use_build_context_synchronously
 
 import 'dart:async';
