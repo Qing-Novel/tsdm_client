@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:fpdart/fpdart.dart';
 import 'package:responsive_framework/responsive_framework.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:system_theme/system_theme.dart';
 import 'package:tsdm_client/app.dart';
 import 'package:tsdm_client/cmd.dart';
@@ -16,6 +18,7 @@ import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/providers/providers.dart';
 import 'package:tsdm_client/shared/providers/proxy_provider/proxy_provider.dart';
+import 'package:tsdm_client/shared/providers/storage_provider/storage_provider.dart';
 import 'package:tsdm_client/utils/background_service_helper.dart';
 import 'package:tsdm_client/utils/platform.dart';
 import 'package:tsdm_client/utils/window_configs.dart';
@@ -29,12 +32,9 @@ Future<void> _boot(List<String> args) async {
 
   await initLogger();
 
-  // 把上次运行遗留下来的后台服务日志合并进主日志，这样"导出日志"能看到后台记录。
+  // 把上次运行遗留下来的后台服务日志合并进主日志。
   await importBackgroundLogToTalker();
 
-  // Widget errors never reach the zone handler: the framework catches them itself and, in a release build, shows a
-  // plain grey box in place of the failing subtree with nothing in the exported log. Record them so a report of
-  // "a grey block flashed" carries the widget and the stack (GitHub #55).
   final presentError = FlutterError.onError;
   FlutterError.onError = (details) {
     final where = details.context?.toDescription();
@@ -62,6 +62,17 @@ Future<void> _boot(List<String> args) async {
     await LocaleSettings.setLocale(locale);
   }
 
+  // 把当前 locale 写到 SharedPreferences，供后台服务选通知文案。
+  if (isAndroid) {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final currentLocale = locale?.languageTag ?? LocaleSettings.currentLocale.languageTag;
+      await prefs.setString('background_locale', currentLocale);
+    } on Exception catch (_) {
+      // 写失败不能影响启动。
+    }
+  }
+
   if (isDesktop) {
     await windowManager.ensureInitialized();
     if (!cmdArgs.noWindowConfigs) {
@@ -81,7 +92,6 @@ Future<void> _boot(List<String> args) async {
   final autoCheckin = settings.autoCheckin;
   final autoSyncNoticeSeconds = settings.autoSyncNoticeSeconds;
 
-  // Initialize flutter_local_notification.
   flnp = FlutterLocalNotificationsPlugin();
   if (isAndroid) {
     await flnp.initialize(
@@ -107,8 +117,9 @@ Future<void> _boot(List<String> args) async {
     await getIt.get<ProxyProvider>().updateProxy();
   }
 
-  // 后台消息服务：先初始化配置，如果用户之前开启过开关则恢复启动。
   if (isAndroid) {
+    // 把后台服务写的时间戳同步给前台数据库，避免点击通知后重复拉取同一批消息。
+    await _syncBackgroundLastFetchTime();
     await initializeBackgroundService();
     if (await isBackgroundServiceEnabled()) {
       await startBackgroundService();
@@ -130,6 +141,41 @@ Future<void> _boot(List<String> args) async {
       ),
     ),
   );
+}
+
+/// 把后台服务写进 SharedPreferences 的"上次拉取时间"同步给前台数据库。
+///
+/// 后台在独立 isolate 里跑，写不了数据库，只能写 SharedPreferences。
+/// 前台启动时，如果 SharedPreferences 的时间戳更新，就把它写回数据库，
+/// 这样前台的自动同步就不会重复拉取后台已经拉过的消息。
+Future<void> _syncBackgroundLastFetchTime() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final uid = prefs.getInt('background_login_uid');
+    if (uid == null || uid <= 0) {
+      return;
+    }
+    final bgLastFetch = prefs.getInt('background_last_fetch_time_$uid');
+    if (bgLastFetch == null || bgLastFetch <= 0) {
+      return;
+    }
+
+    final storage = getIt.get<StorageProvider>();
+    final dbTimeEither = await storage.fetchLastFetchNoticeTime(uid).run();
+    final dbTime = dbTimeEither.getOrElse((_) => null);
+    final dbSec = dbTime == null ? 0 : dbTime.millisecondsSinceEpoch ~/ 1000;
+    if (bgLastFetch > dbSec) {
+      await storage
+          .updateLastFetchNoticeTime(uid, DateTime.fromMillisecondsSinceEpoch(bgLastFetch * 1000))
+          .run();
+      talker.debug(
+        'sync background last fetch time to db: uid=${"$uid".obscured(4)} '
+        'db=$dbSec bg=$bgLastFetch',
+      );
+    }
+  } on Exception catch (e, st) {
+    talker.handle(e, st, 'sync background last fetch time failed');
+  }
 }
 
 void _ensureHandled(Object exception, StackTrace? stackTrace) => talker.handle(exception, stackTrace);
