@@ -29,6 +29,8 @@ Future<bool> isBackgroundServiceRunning() async {
 }
 
 /// 初始化后台服务配置。
+///
+/// 只做配置，不启动服务。是否运行由设置页面的开关控制。
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
@@ -49,7 +51,7 @@ Future<void> initializeBackgroundService() async {
   await service.configure(
     androidConfiguration: AndroidConfiguration(
       onStart: onStart,
-      autoStart: false,
+      autoStart: false, // 重要：不要自动启动
       isForegroundMode: true,
       notificationChannelId: notificationChannelId,
       initialNotificationTitle: '天使动漫',
@@ -87,8 +89,8 @@ Future<void> startBackgroundService() async {
   if (!await service.isRunning()) {
     await service.startService();
     // 等待服务真正起来
-    for (int i = 0; i < 15; i++) {
-      await Future.delayed(const Duration(milliseconds: 200));
+    for (var i = 0; i < 15; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
       if (await service.isRunning()) break;
     }
   }
@@ -102,8 +104,8 @@ Future<void> stopBackgroundService() async {
   if (await service.isRunning()) {
     service.invoke('stopService');
     // 等待服务真正停止
-    for (int i = 0; i < 25; i++) {
-      await Future.delayed(const Duration(milliseconds: 200));
+    for (var i = 0; i < 25; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!await service.isRunning()) break;
     }
   }
