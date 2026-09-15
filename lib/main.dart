@@ -29,12 +29,14 @@ Future<void> _boot(List<String> args) async {
 
   await initLogger();
 
+  // 把上次运行遗留下来的后台服务日志合并进主日志，这样"导出日志"能看到后台记录。
+  await importBackgroundLogToTalker();
+
   // Widget errors never reach the zone handler: the framework catches them itself and, in a release build, shows a
   // plain grey box in place of the failing subtree with nothing in the exported log. Record them so a report of
   // "a grey block flashed" carries the widget and the stack (GitHub #55).
   final presentError = FlutterError.onError;
   FlutterError.onError = (details) {
-    // `context` is the "building <widget>" part, the one thing that says where the grey box was.
     final where = details.context?.toDescription();
     talker.handle(
       details.exception,
@@ -68,11 +70,6 @@ Future<void> _boot(List<String> args) async {
     }
   }
 
-  // System color.
-  // Use this color when following system color settings turned on.
-  //
-  // A not empty value represents currently is using system color and the color
-  // value is inside it.
   final useSystemTheme = settings.accentColorFollowSystem;
 
   final color = switch (useSystemTheme) {
@@ -88,20 +85,14 @@ Future<void> _boot(List<String> args) async {
   flnp = FlutterLocalNotificationsPlugin();
   if (isAndroid) {
     await flnp.initialize(
-      // Drawable ic_launcher_foreground_no_transform is shrunk when building in CI.
-      // The default one is compat but ok.
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('@drawable/ic_launcher_foreground'),
       ),
       onDidReceiveNotificationResponse: onLocalNotificationOpened,
     );
-    // The first channel had default importance and Android never lets the app raise it: drop it so the
-    // high-importance replacement is the only one left in the system notification settings (#13).
     await deleteLegacyLocalNoticeChannel();
-    // A tap on the notification while the app was not running: park the payload for the home page (#14).
     await rememberNotificationLaunch();
     if (autoSyncNoticeSeconds > 0) {
-      // Android 13+ runtime permission; `null` means the platform plugin was not resolved.
       final granted = await flnp
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
           ?.requestNotificationsPermission();
@@ -109,21 +100,14 @@ Future<void> _boot(List<String> args) async {
     }
   }
 
-  // Load font family.
   final fontFamily = settings.fontFamily;
-
-  // Check update when app startup.
   final checkUpdate = settings.enableUpdateCheckOnStartup;
 
-  // Only record system proxy settings if required to do so.
   if (settings.useDetectedProxyWhenStartup) {
     await getIt.get<ProxyProvider>().updateProxy();
   }
 
   // 后台消息服务：先初始化配置，如果用户之前开启过开关则恢复启动。
-  //
-  // 是否启动只由用户开关决定。服务入口 `onStart` 里也会再检查一次开关状态，
-  // 所以即使系统或插件自动拉起服务，也不会真的启动。
   if (isAndroid) {
     await initializeBackgroundService();
     if (await isBackgroundServiceEnabled()) {
