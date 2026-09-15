@@ -23,9 +23,12 @@ Future<bool> isBackgroundServiceEnabled() async {
   return prefs.getBool(backgroundServiceEnabledKey) ?? false;
 }
 
+/// 查询后台服务是否真的在运行。
+Future<bool> isBackgroundServiceRunning() async {
+  return FlutterBackgroundService().isRunning();
+}
+
 /// 初始化后台服务配置。
-///
-/// 只做配置，不启动服务。是否运行由设置页面的开关控制。
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
@@ -52,7 +55,7 @@ Future<void> initializeBackgroundService() async {
       initialNotificationTitle: '天使动漫',
       initialNotificationContent: '正在后台保持连接...',
       foregroundServiceNotificationId: notificationId,
-      foregroundServiceTypes: [AndroidForegroundType.dataSync],
+      foregroundServiceTypes: [AndroidForegroundType.connectedDevice],
     ),
     iosConfiguration: IosConfiguration(
       autoStart: false,
@@ -71,7 +74,6 @@ Future<void> onStart(ServiceInstance service) async {
 
   Timer.periodic(const Duration(seconds: 30), (timer) {
     // TODO: 在这里调用项目中已有的消息拉取逻辑。
-    // 例如：await fetchNewMessages();
   });
 
   service.on('stopService').listen((event) {
@@ -79,21 +81,31 @@ Future<void> onStart(ServiceInstance service) async {
   });
 }
 
-/// 启动后台服务，并记下开关状态。
+/// 启动后台服务，并等待服务真正起来。
 Future<void> startBackgroundService() async {
   final service = FlutterBackgroundService();
   if (!await service.isRunning()) {
     await service.startService();
+    // 等待服务真正起来
+    for (int i = 0; i < 15; i++) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (await service.isRunning()) break;
+    }
   }
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool(backgroundServiceEnabledKey, true);
 }
 
-/// 停止后台服务，并记下开关状态。
+/// 停止后台服务，并等待服务真正停止。
 Future<void> stopBackgroundService() async {
   final service = FlutterBackgroundService();
   if (await service.isRunning()) {
     service.invoke('stopService');
+    // 等待服务真正停止
+    for (int i = 0; i < 25; i++) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!await service.isRunning()) break;
+    }
   }
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool(backgroundServiceEnabledKey, false);
