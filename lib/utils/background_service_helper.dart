@@ -110,7 +110,7 @@ Future<void> onStart(ServiceInstance service) async {
     backgroundTimer = Timer.periodic(Duration(seconds: intervalSeconds), (timer) async {
       try {
         await _checkNewMessages(flnp);
-      } catch (_) {
+      } on Exception catch (_) {
         // 静默失败，不打扰用户
       }
     });
@@ -118,7 +118,7 @@ Future<void> onStart(ServiceInstance service) async {
     // 启动后立刻拉一次
     try {
       await _checkNewMessages(flnp);
-    } catch (_) {}
+    } on Exception catch (_) {}
   }
 
   // 初始化时启动一次
@@ -163,8 +163,7 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   final since = lastFetchTime ?? (now - 3 * 24 * 3600);
 
   // 抓取三个页面
-  final client = HttpClient();
-  client.connectionTimeout = const Duration(seconds: 15);
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
   try {
     final noticeHtml = await _fetchHtml(client, noticeUrl, cookieMap);
     final pmHtml = await _fetchHtml(client, personalMessageUrl, cookieMap);
@@ -182,9 +181,7 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
         info.broadcastMessageList.length;
 
     if (total > 0) {
-      final body = '提醒 ${info.noticeList.length} 条，'
-          '私信 ${info.personalMessageList.length} 条，'
-          '广播 ${info.broadcastMessageList.length} 条';
+      final body = '提醒 ${info.noticeList.length} 条，私信 ${info.personalMessageList.length} 条，广播 ${info.broadcastMessageList.length} 条';
       await flnp.show(
         id: 0,
         title: '天使动漫',
@@ -245,7 +242,7 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
           }
         }
       }
-    } catch (_) {
+    } on FormatException catch (_) {
       // 不是 JSON 就跳过
     }
   }
