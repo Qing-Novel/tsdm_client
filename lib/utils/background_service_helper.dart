@@ -322,7 +322,7 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
             }
           } else if (v is String) {
             // 旧格式，name 就是 key
-            final name = entry.key;
+            final name = entry.key.toString();
             if (name.isNotEmpty) {
               if (v.contains('=')) {
                 final firstPair = v.split(';').first.trim();
