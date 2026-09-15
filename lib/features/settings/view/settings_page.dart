@@ -11,10 +11,12 @@ import 'package:collection/collection.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:system_theme/system_theme.dart';
 import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/extensions/color.dart';
@@ -371,6 +373,14 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             builder: (_) => RootPage(DialogPaths.selectAutoSyncDuration, AutoSyncNoticeDialog(autoSyncNoticeSeconds)),
           );
           if (seconds == null || !context.mounted) return;
+
+          // 把新的同步间隔同步给后台服务
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setInt('autoSyncNoticeSeconds', seconds);
+          if (isAndroid) {
+            FlutterBackgroundService().invoke('updateTimer');
+          }
+
           if (seconds > 0) {
             context.read<AutoNotificationCubit>().start(Duration(seconds: seconds));
             unawaited(_permissionCubit.requestNotification(openSettingsWhenPermanentlyDenied: false));
