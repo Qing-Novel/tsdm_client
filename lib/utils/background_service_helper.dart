@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/features/notification/models/models.dart';
+import 'package:tsdm_client/instance.dart';
 import 'package:universal_html/parsing.dart';
 
 /// 前台服务常驻通知使用的通知渠道 ID。
@@ -23,17 +24,48 @@ const int notificationId = 888;
 /// SharedPreferences 中保存开关状态的 key。
 const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
 
+/// 后台服务日志文件的路径。
+Future<File> _bgLogFile() async {
+  final dir = await getApplicationSupportDirectory();
+  return File('${dir.path}/bg_service.log');
+}
+
 /// 后台服务专用日志：写到独立文件，避免和主 isolate 的 talker 混在一起。
-///
-/// 文件路径：{应用私有目录}/bg_service.log
 Future<void> _bgLog(String msg) async {
   try {
-    final dir = await getApplicationSupportDirectory();
-    final file = File('${dir.path}/bg_service.log');
+    final file = await _bgLogFile();
     final line = '[${DateTime.now().toIso8601String()}] $msg\n';
     await file.writeAsString(line, mode: FileMode.append, flush: true);
   } on Exception catch (_) {
     // 日志失败不能影响主流程
+  }
+}
+
+/// 把后台服务的日志文件内容读取出来，注入到主 isolate 的 talker，
+/// 然后清空文件。
+///
+/// 前台"导出日志"和"查看历史日志"就都能看到后台服务的记录了。
+/// 每次应用启动时调用一次即可。
+Future<void> importBackgroundLogToTalker() async {
+  try {
+    final file = await _bgLogFile();
+    if (!file.existsSync()) {
+      return;
+    }
+    final content = await file.readAsString();
+    if (content.isEmpty) {
+      return;
+    }
+    for (final line in content.split('\n')) {
+      if (line.trim().isEmpty) {
+        continue;
+      }
+      talker.info('[BG] $line');
+    }
+    // 清空文件，避免下次启动重复导入
+    await file.writeAsString('');
+  } on Exception catch (e) {
+    talker.handle(e, null, 'import background log failed');
   }
 }
 
@@ -114,15 +146,12 @@ Future<void> onStart(ServiceInstance service) async {
   Timer? backgroundTimer;
 
   /// 启动或重启定时器。
-  ///
-  /// 每次重新读取用户设置的同步间隔（秒），跟前台设置页共用一个 SharedPreferences key。
   Future<void> startOrRestartTimer() async {
     backgroundTimer?.cancel();
     final prefs = await SharedPreferences.getInstance();
     final intervalSeconds = prefs.getInt('autoSyncNoticeSeconds') ?? 180;
     await _bgLog('startOrRestartTimer: interval=$intervalSeconds');
 
-    // 用户设置为"从不"（0）时，后台不拉取
     if (intervalSeconds <= 0) {
       await _bgLog('interval <= 0, skip timer');
       return;
@@ -137,7 +166,6 @@ Future<void> onStart(ServiceInstance service) async {
       }
     });
 
-    // 启动后立刻拉一次
     try {
       await _checkNewMessages(flnp);
     } on Exception catch (e) {
@@ -145,17 +173,14 @@ Future<void> onStart(ServiceInstance service) async {
     }
   }
 
-  // 初始化时启动一次
   await startOrRestartTimer();
 
-  // 前台发出停止指令
   service.on('stopService').listen((event) {
     unawaited(_bgLog('received stopService'));
     backgroundTimer?.cancel();
     unawaited(service.stopSelf());
   });
 
-  // 前台设置页改动了同步间隔
   service.on('updateTimer').listen((event) async {
     await _bgLog('received updateTimer');
     await startOrRestartTimer();
@@ -163,14 +188,10 @@ Future<void> onStart(ServiceInstance service) async {
 }
 
 /// 后台拉取消息的核心逻辑。
-///
-/// 不走 getIt / Dio / MethodChannel，直接用 dart:io 的 HttpClient，
-/// 这样在后台 isolate 里也能正常工作。
 Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   await _bgLog('_checkNewMessages start');
   final prefs = await SharedPreferences.getInstance();
 
-  // 读当前登录 uid
   final uid = prefs.getInt('background_login_uid');
   await _bgLog('uid=$uid');
   if (uid == null || uid <= 0) {
@@ -178,7 +199,6 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
     return;
   }
 
-  // 读 Cookie
   final cookieJson = prefs.getString('background_cookie_$uid');
   await _bgLog('cookie=${cookieJson == null ? "null" : "len=${cookieJson.length}"}');
   if (cookieJson == null || cookieJson.isEmpty) {
@@ -186,14 +206,11 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   }
   final cookieMap = Map<String, String>.from(jsonDecode(cookieJson) as Map);
 
-  // 读上次拉取时间
   final lastFetchTime = prefs.getInt('background_last_fetch_time_$uid');
   final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-  // 默认拉最近 3 天
   final since = lastFetchTime ?? (now - 3 * 24 * 3600);
   await _bgLog('since=$since lastFetchTime=$lastFetchTime');
 
-  // 抓取三个页面
   await _bgLog('fetching pages...');
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
   try {
@@ -240,7 +257,6 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
       await _bgLog('no new messages');
     }
 
-    // 更新拉取时间
     await prefs.setInt('background_last_fetch_time_$uid', now);
   } on Exception catch (e) {
     await _bgLog('fetch error: $e');
@@ -269,9 +285,6 @@ Future<String> _fetchHtml(
 }
 
 /// 把持久化的 Cookie JSON 拼成请求头。
-///
-/// cookie_jar 存的格式是：
-///   { ".domain": { "/path": { "name": "value", ... } } }
 String _buildCookieHeader(Map<String, String> cookieMap) {
   final pairs = <String>[];
   for (final value in cookieMap.values) {
