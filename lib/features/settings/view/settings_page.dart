@@ -642,19 +642,19 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             showSnackBar(context: context, message: tr.importData.invalidData);
             return;
           }
-          await _importBackup(File(file.path!));
+          await _importBackup(context, File(file.path!));
         },
       ),
     ];
   }
 
-  Future<void> _importBackup(File source) async {
+  Future<void> _importBackup(BuildContext context, File source) async {
     final tr = context.t.settingsPage.advancedSection.importData;
     const repository = BackupRepository();
     final schemaVersion = getIt.get<AppDatabase>().schemaVersion;
 
     final check = await repository.validate(source, currentSchemaVersion: schemaVersion);
-    if (!mounted) return;
+    if (!context.mounted) return;
     if (!check.ok) {
       await showMessageSingleButtonDialog(
         context: context,
@@ -666,13 +666,13 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
 
     BackupSecretsPayload? secrets;
     if (await repository.containsSecrets(source)) {
-      if (!mounted) return;
+      if (!context.mounted) return;
       secrets = await _unlockSecrets(context, repository, source);
     }
-    if (!mounted) return;
+    if (!context.mounted) return;
 
     final ok = await showQuestionDialog(context: context, title: tr.title, message: tr.tip);
-    if (ok != true || !mounted) return;
+    if (ok != true || !context.mounted) return;
 
     BackupValidation? invalid;
     BackupReplaceException? replaceFailure;
@@ -689,7 +689,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     } on BackupReplaceException catch (e) {
       replaceFailure = e;
     }
-    if (!mounted) return;
+    if (!context.mounted) return;
     final String message;
     if (invalid != null) {
       message = tr.invalidDetail(reason: _backupProblemText(context, invalid));
@@ -707,14 +707,14 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     final tr = context.t.settingsPage.advancedSection.importData.unlock;
     var wrongPassword = false;
     while (true) {
-      if (!mounted) return null;
+      if (!context.mounted) return null;
       final password = await showUnlockBackupDialog(context, wrongPassword: wrongPassword);
       if (password == null) return null;
       try {
         return await repository.unlockSecrets(source, password: password);
       } on BackupSecretsPasswordException catch (e) {
         if (e.unsupported) {
-          if (mounted) {
+          if (context.mounted) {
             showSnackBar(context: context, message: tr.unsupported);
           }
           return null;
@@ -779,7 +779,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             title: Text(tr.copyDatabaseDir),
             onTap: () async {
               final path = (await databaseFile).parent.path;
-              if (!mounted) return;
+              if (!context.mounted) return;
               await copyToClipboard(context, path);
             },
           ),
