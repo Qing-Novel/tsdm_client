@@ -150,7 +150,7 @@ Future<void> onStart(ServiceInstance service) async {
 
   // 前台发出停止指令
   service.on('stopService').listen((event) {
-    _bgLog('received stopService');
+    unawaited(_bgLog('received stopService'));
     backgroundTimer?.cancel();
     unawaited(service.stopSelf());
   });
