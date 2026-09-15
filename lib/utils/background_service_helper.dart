@@ -99,7 +99,15 @@ Future<void> startBackgroundService() async {
 }
 
 /// 停止后台服务，并等待服务真正停止。
+///
+/// 重要：先把开关状态写为 false，再发停止指令。这样即使 App 在服务停止
+/// 过程中被系统杀掉，重启后也不会再自动启动服务。
 Future<void> stopBackgroundService() async {
+  // 1. 先写 prefs，确保开关状态落盘。
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool(backgroundServiceEnabledKey, false);
+
+  // 2. 再停服务。
   final service = FlutterBackgroundService();
   if (await service.isRunning()) {
     service.invoke('stopService');
@@ -109,6 +117,4 @@ Future<void> stopBackgroundService() async {
       if (!await service.isRunning()) break;
     }
   }
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setBool(backgroundServiceEnabledKey, false);
 }
