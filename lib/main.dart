@@ -10,7 +10,6 @@ import 'package:tsdm_client/app.dart';
 import 'package:tsdm_client/cmd.dart';
 import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/extensions/color.dart';
-import 'package:tsdm_client/extensions/fp.dart';
 import 'package:tsdm_client/features/local_notice/callback.dart';
 import 'package:tsdm_client/features/local_notice/show.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
@@ -162,8 +161,9 @@ Future<void> _syncBackgroundLastFetchTime() async {
 
     final storage = getIt.get<StorageProvider>();
     final dbTimeEither = await storage.fetchLastFetchNoticeTime(uid).run();
-    final dbTime = dbTimeEither.getOrElse((_) => null);
-    final dbSec = dbTime == null ? 0 : dbTime.millisecondsSinceEpoch ~/ 1000;
+    DateTime? dbTime;
+    dbTimeEither.match((_) => null, (t) => dbTime = t);
+    final dbSec = dbTime == null ? 0 : dbTime!.millisecondsSinceEpoch ~/ 1000;
     if (bgLastFetch > dbSec) {
       await storage
           .updateLastFetchNoticeTime(uid, DateTime.fromMillisecondsSinceEpoch(bgLastFetch * 1000))
