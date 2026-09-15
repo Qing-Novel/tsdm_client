@@ -253,7 +253,7 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
       final noticeCount = info.noticeList.length;
       final pmCount = info.personalMessageList.length;
       final bmCount = info.broadcastMessageList.length;
-      final countLine = '收到了${noticeCount}条提醒，${pmCount}条私信，${bmCount}条公共消息';
+      final countLine = '收到了$noticeCount条提醒，$pmCount条私信，$bmCount条公共消息';
 
       String? detailLine;
       if (info.personalMessageList.isNotEmpty) {
