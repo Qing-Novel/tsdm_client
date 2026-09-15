@@ -390,13 +390,12 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             }
             // 以真实运行状态为准，而不是盲目用用户点击的 v
             final running = await isBackgroundServiceRunning();
-            if (mounted) {
-              setState(() {
-                _bgServiceEnabled = running;
-              });
-              if (v && !running) {
-                showSnackBar(context: context, message: '后台服务启动失败，请检查系统权限或电池优化设置');
-              }
+            if (!context.mounted) return;
+            setState(() {
+              _bgServiceEnabled = running;
+            });
+            if (v && !running) {
+              showSnackBar(context: context, message: '后台服务启动失败，请检查系统权限或电池优化设置');
             }
           },
         ),
