@@ -27,6 +27,67 @@ const String _localNoticeChannelId = 'newNoticeChannelV2';
 /// SharedPreferences 中保存开关状态的 key。
 const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
 
+/// 每种语言的本地通知文案。
+///
+/// 跟 `lib/i18n/*.i18n.json` 里 `localNotification` 段落的值保持一致。
+/// 后台 isolate 无法运行 slang，所以这里用模板字符串维护一份。
+/// 使用 `{}` 占位，由 [_fillTemplate] 填充。
+const Map<String, Map<String, String>> _notificationStrings = {
+  // 简体中文（默认）
+  'zh-CN': {
+    'title': '新消息',
+    'notice': '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
+    'pm': '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[私信]{user}：{msg}',
+    'bm': '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[公共消息]{msg}',
+  },
+  // 繁體中文
+  'zh-TW': {
+    'title': '新訊息',
+    'notice': '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[提醒]{msg}',
+    'pm': '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[私訊]{user}：{msg}',
+    'bm': '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[公用訊息]{msg}',
+  },
+  // English
+  'en': {
+    'title': 'New notice',
+    'notice': 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[Notice]{msg}',
+    'pm': 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[PM]{user}: {msg}',
+    'bm': 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[BM]{msg}',
+  },
+};
+
+/// 根据 locale 选择通知文案，未知 locale 回退到简体中文。
+Map<String, String> _stringsForLocale(String? localeTag) {
+  if (localeTag == null || localeTag.isEmpty) {
+    return _notificationStrings['zh-CN']!;
+  }
+  // 精确匹配。
+  if (_notificationStrings.containsKey(localeTag)) {
+    return _notificationStrings[localeTag]!;
+  }
+  // 前缀匹配：zh-CN / zh-Hans / zh_CN 都归到 zh-CN，zh-TW / zh-Hant / zh-HK 归到 zh-TW。
+  final lower = localeTag.toLowerCase().replaceAll('_', '-');
+  if (lower.startsWith('zh')) {
+    if (lower.contains('tw') || lower.contains('hk') || lower.contains('hant')) {
+      return _notificationStrings['zh-TW']!;
+    }
+    return _notificationStrings['zh-CN']!;
+  }
+  if (lower.startsWith('en')) {
+    return _notificationStrings['en']!;
+  }
+  return _notificationStrings['zh-CN']!;
+}
+
+/// 把 `{key}` 占位替换成 [values] 里对应的值。
+String _fillTemplate(String template, Map<String, String> values) {
+  var result = template;
+  for (final entry in values.entries) {
+    result = result.replaceAll('{${entry.key}}', entry.value);
+  }
+  return result;
+}
+
 /// 后台服务日志文件的路径。
 Future<File> _bgLogFile() async {
   final dir = await getApplicationSupportDirectory();
@@ -205,11 +266,7 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
 
   final cookieHeader = _buildCookieHeader(cookieMap);
 
-  // ---- 时间戳对齐到分钟 ----
-  //
-  // 服务器渲染消息时间是「分钟精度」（如 23:00:00 代表 23:00 这一分钟），
-  // 前台也用 `startedTime.truncateToMinute()`。后台必须一样，
-  // 否则秒级时间戳会把同分钟的消息挤掉。
+  // 时间戳对齐到分钟，跟前台一致。
   final lastFetchTime = prefs.getInt('background_last_fetch_time_$uid');
   final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final nowMinute = nowSec - (nowSec % 60);
@@ -247,32 +304,46 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
         info.broadcastMessageList.length;
 
     if (total > 0) {
-      // 通知内容跟 `lib/features/notification/bloc/notification_bloc.dart`
-      // 的 `_onNoticeInfoFetched` 保持一致。
-      // 优先级：pm > bm > notice（跟前台一致）。
-      final noticeCount = info.noticeList.length;
-      final pmCount = info.personalMessageList.length;
-      final bmCount = info.broadcastMessageList.length;
-      final countLine = '收到了$noticeCount条提醒，$pmCount条私信，$bmCount条公共消息';
+      final locale = prefs.getString('background_locale');
+      final strings = _stringsForLocale(locale);
+      final countValues = <String, String>{
+        'noticeCount': '${info.noticeList.length}',
+        'pmCount': '${info.personalMessageList.length}',
+        'bmCount': '${info.broadcastMessageList.length}',
+      };
 
-      String? detailLine;
+      // 优先级：私信 > 公共消息 > 提醒（跟前台 `NotificationBloc` 一致）。
+      String body;
       if (info.personalMessageList.isNotEmpty) {
         final pm = info.personalMessageList.last;
-        detailLine = '[私信]${pm.peerUsername}：${_truncate(pm.data, 40)}';
+        body = _fillTemplate(strings['pm']!, {
+          ...countValues,
+          'user': pm.peerUsername,
+          'msg': _truncate(pm.data, 40),
+        });
       } else if (info.broadcastMessageList.isNotEmpty) {
         final bm = info.broadcastMessageList.last;
-        detailLine = '[公共消息]${_truncate(bm.data, 40)}';
+        body = _fillTemplate(strings['bm']!, {
+          ...countValues,
+          'msg': _truncate(bm.data, 40),
+        });
       } else if (info.noticeList.isNotEmpty) {
         final n = info.noticeList.last;
         final text = parseHtmlDocument(n.data).body?.innerText ?? '<null>';
-        detailLine = '[提醒]${_truncate(text, 40)}';
+        body = _fillTemplate(strings['notice']!, {
+          ...countValues,
+          'msg': _truncate(text, 40),
+        });
+      } else {
+        body = _fillTemplate(strings['bm']!, {
+          ...countValues,
+          'msg': '',
+        });
       }
-
-      final body = detailLine == null ? countLine : '$countLine\n$detailLine';
 
       await flnp.show(
         id: 0,
-        title: '新消息',
+        title: strings['title']!,
         body: body,
         notificationDetails: const NotificationDetails(
           android: AndroidNotificationDetails(
@@ -284,7 +355,7 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
           ),
         ),
       );
-      await _bgLog('notification pushed: title=新消息 body=$body');
+      await _bgLog('notification pushed: title=${strings['title']} body=$body');
     } else {
       await _bgLog('no new messages');
     }
