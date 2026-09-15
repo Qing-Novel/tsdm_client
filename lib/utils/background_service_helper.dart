@@ -27,56 +27,86 @@ const String _localNoticeChannelId = 'newNoticeChannelV2';
 /// SharedPreferences 中保存开关状态的 key。
 const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
 
+/// 一种语言下的通知文案。
+class _NotificationStrings {
+  const _NotificationStrings({
+    required this.title,
+    required this.notice,
+    required this.pm,
+    required this.bm,
+  });
+
+  /// 通知标题。
+  final String title;
+
+  /// 提醒详情模板。占位：{noticeCount} {pmCount} {bmCount} {msg}
+  final String notice;
+
+  /// 私信详情模板。占位：{noticeCount} {pmCount} {bmCount} {user} {msg}
+  final String pm;
+
+  /// 公共消息详情模板。占位：{noticeCount} {pmCount} {bmCount} {msg}
+  final String bm;
+}
+
 /// 每种语言的本地通知文案。
 ///
 /// 跟 `lib/i18n/*.i18n.json` 里 `localNotification` 段落的值保持一致。
-/// 后台 isolate 无法运行 slang，所以这里用模板字符串维护一份。
-/// 使用 `{}` 占位，由 [_fillTemplate] 填充。
-const Map<String, Map<String, String>> _notificationStrings = {
+/// 后台 isolate 无法运行 slang，所以这里维护一份模板，用 `{}` 占位。
+const Map<String, _NotificationStrings> _notificationStrings = {
   // 简体中文（默认）
-  'zh-CN': {
-    'title': '新消息',
-    'notice': '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
-    'pm': '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[私信]{user}：{msg}',
-    'bm': '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[公共消息]{msg}',
-  },
+  'zh-CN': _NotificationStrings(
+    title: '新消息',
+    notice: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
+    pm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[私信]{user}：{msg}',
+    bm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[公共消息]{msg}',
+  ),
   // 繁體中文
-  'zh-TW': {
-    'title': '新訊息',
-    'notice': '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[提醒]{msg}',
-    'pm': '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[私訊]{user}：{msg}',
-    'bm': '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[公用訊息]{msg}',
-  },
+  'zh-TW': _NotificationStrings(
+    title: '新訊息',
+    notice: '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[提醒]{msg}',
+    pm: '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[私訊]{user}：{msg}',
+    bm: '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[公用訊息]{msg}',
+  ),
   // English
-  'en': {
-    'title': 'New notice',
-    'notice': 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[Notice]{msg}',
-    'pm': 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[PM]{user}: {msg}',
-    'bm': 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[BM]{msg}',
-  },
+  'en': _NotificationStrings(
+    title: 'New notice',
+    notice: 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[Notice]{msg}',
+    pm: 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[PM]{user}: {msg}',
+    bm: 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[BM]{msg}',
+  ),
 };
 
+/// 默认文案（简体中文），任何时候都有值。
+const _NotificationStrings _defaultStrings = _NotificationStrings(
+  title: '新消息',
+  notice: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
+  pm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[私信]{user}：{msg}',
+  bm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[公共消息]{msg}',
+);
+
 /// 根据 locale 选择通知文案，未知 locale 回退到简体中文。
-Map<String, String> _stringsForLocale(String? localeTag) {
+_NotificationStrings _stringsForLocale(String? localeTag) {
   if (localeTag == null || localeTag.isEmpty) {
-    return _notificationStrings['zh-CN']!;
+    return _defaultStrings;
   }
-  // 精确匹配。
-  if (_notificationStrings.containsKey(localeTag)) {
-    return _notificationStrings[localeTag]!;
+  final exact = _notificationStrings[localeTag];
+  if (exact != null) {
+    return exact;
   }
-  // 前缀匹配：zh-CN / zh-Hans / zh_CN 都归到 zh-CN，zh-TW / zh-Hant / zh-HK 归到 zh-TW。
+  // 前缀匹配：zh-CN / zh-Hans / zh_CN 都归到 zh-CN，
+  // zh-TW / zh-Hant / zh-HK 归到 zh-TW，en-* 归到 en。
   final lower = localeTag.toLowerCase().replaceAll('_', '-');
   if (lower.startsWith('zh')) {
     if (lower.contains('tw') || lower.contains('hk') || lower.contains('hant')) {
-      return _notificationStrings['zh-TW']!;
+      return _notificationStrings['zh-TW'] ?? _defaultStrings;
     }
-    return _notificationStrings['zh-CN']!;
+    return _defaultStrings;
   }
   if (lower.startsWith('en')) {
-    return _notificationStrings['en']!;
+    return _notificationStrings['en'] ?? _defaultStrings;
   }
-  return _notificationStrings['zh-CN']!;
+  return _defaultStrings;
 }
 
 /// 把 `{key}` 占位替换成 [values] 里对应的值。
@@ -304,8 +334,7 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
         info.broadcastMessageList.length;
 
     if (total > 0) {
-      final locale = prefs.getString('background_locale');
-      final strings = _stringsForLocale(locale);
+      final strings = _stringsForLocale(prefs.getString('background_locale'));
       final countValues = <String, String>{
         'noticeCount': '${info.noticeList.length}',
         'pmCount': '${info.personalMessageList.length}',
@@ -316,34 +345,29 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
       String body;
       if (info.personalMessageList.isNotEmpty) {
         final pm = info.personalMessageList.last;
-        body = _fillTemplate(strings['pm']!, {
+        body = _fillTemplate(strings.pm, {
           ...countValues,
           'user': pm.peerUsername,
           'msg': _truncate(pm.data, 40),
         });
       } else if (info.broadcastMessageList.isNotEmpty) {
         final bm = info.broadcastMessageList.last;
-        body = _fillTemplate(strings['bm']!, {
+        body = _fillTemplate(strings.bm, {
           ...countValues,
           'msg': _truncate(bm.data, 40),
         });
-      } else if (info.noticeList.isNotEmpty) {
+      } else {
         final n = info.noticeList.last;
         final text = parseHtmlDocument(n.data).body?.innerText ?? '<null>';
-        body = _fillTemplate(strings['notice']!, {
+        body = _fillTemplate(strings.notice, {
           ...countValues,
           'msg': _truncate(text, 40),
-        });
-      } else {
-        body = _fillTemplate(strings['bm']!, {
-          ...countValues,
-          'msg': '',
         });
       }
 
       await flnp.show(
         id: 0,
-        title: strings['title']!,
+        title: strings.title,
         body: body,
         notificationDetails: const NotificationDetails(
           android: AndroidNotificationDetails(
@@ -355,7 +379,7 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
           ),
         ),
       );
-      await _bgLog('notification pushed: title=${strings['title']} body=$body');
+      await _bgLog('notification pushed: title=${strings.title} body=$body');
     } else {
       await _bgLog('no new messages');
     }
