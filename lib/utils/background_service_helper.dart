@@ -8,6 +8,7 @@ import 'dart:ui';
 
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/features/notification/models/models.dart';
@@ -21,6 +22,20 @@ const int notificationId = 888;
 
 /// SharedPreferences 中保存开关状态的 key。
 const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
+
+/// 后台服务专用日志：写到独立文件，避免和主 isolate 的 talker 混在一起。
+///
+/// 文件路径：{应用私有目录}/bg_service.log
+Future<void> _bgLog(String msg) async {
+  try {
+    final dir = await getApplicationSupportDirectory();
+    final file = File('${dir.path}/bg_service.log');
+    final line = '[${DateTime.now().toIso8601String()}] $msg\n';
+    await file.writeAsString(line, mode: FileMode.append, flush: true);
+  } on Exception catch (_) {
+    // 日志失败不能影响主流程
+  }
+}
 
 /// 读取用户是否开启了后台消息服务。
 Future<bool> isBackgroundServiceEnabled() async {
@@ -72,10 +87,13 @@ Future<void> initializeBackgroundService() async {
 /// 后台服务的入口，运行在独立的 Isolate 中。
 @pragma('vm:entry-point')
 Future<void> onStart(ServiceInstance service) async {
+  await _bgLog('=== onStart called ===');
   DartPluginRegistrant.ensureInitialized();
 
   final enabled = await isBackgroundServiceEnabled();
+  await _bgLog('enabled=$enabled');
   if (!enabled) {
+    await _bgLog('service disabled, stopping self');
     await service.stopSelf();
     return;
   }
@@ -91,6 +109,7 @@ Future<void> onStart(ServiceInstance service) async {
       android: AndroidInitializationSettings('@drawable/ic_launcher_foreground'),
     ),
   );
+  await _bgLog('flnp initialized');
 
   Timer? backgroundTimer;
 
@@ -101,24 +120,29 @@ Future<void> onStart(ServiceInstance service) async {
     backgroundTimer?.cancel();
     final prefs = await SharedPreferences.getInstance();
     final intervalSeconds = prefs.getInt('autoSyncNoticeSeconds') ?? 180;
+    await _bgLog('startOrRestartTimer: interval=$intervalSeconds');
 
     // 用户设置为"从不"（0）时，后台不拉取
     if (intervalSeconds <= 0) {
+      await _bgLog('interval <= 0, skip timer');
       return;
     }
 
     backgroundTimer = Timer.periodic(Duration(seconds: intervalSeconds), (timer) async {
+      await _bgLog('timer fired, checking messages');
       try {
         await _checkNewMessages(flnp);
-      } on Exception catch (_) {
-        // 静默失败，不打扰用户
+      } on Exception catch (e) {
+        await _bgLog('checkNewMessages exception: $e');
       }
     });
 
     // 启动后立刻拉一次
     try {
       await _checkNewMessages(flnp);
-    } on Exception catch (_) {}
+    } on Exception catch (e) {
+      await _bgLog('initial checkNewMessages exception: $e');
+    }
   }
 
   // 初始化时启动一次
@@ -126,12 +150,14 @@ Future<void> onStart(ServiceInstance service) async {
 
   // 前台发出停止指令
   service.on('stopService').listen((event) {
+    _bgLog('received stopService');
     backgroundTimer?.cancel();
     unawaited(service.stopSelf());
   });
 
   // 前台设置页改动了同步间隔
   service.on('updateTimer').listen((event) async {
+    await _bgLog('received updateTimer');
     await startOrRestartTimer();
   });
 }
@@ -141,16 +167,20 @@ Future<void> onStart(ServiceInstance service) async {
 /// 不走 getIt / Dio / MethodChannel，直接用 dart:io 的 HttpClient，
 /// 这样在后台 isolate 里也能正常工作。
 Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
+  await _bgLog('_checkNewMessages start');
   final prefs = await SharedPreferences.getInstance();
 
   // 读当前登录 uid
   final uid = prefs.getInt('background_login_uid');
+  await _bgLog('uid=$uid');
   if (uid == null || uid <= 0) {
+    await _bgLog('uid null or <= 0, abort');
     return;
   }
 
   // 读 Cookie
   final cookieJson = prefs.getString('background_cookie_$uid');
+  await _bgLog('cookie=${cookieJson == null ? "null" : "len=${cookieJson.length}"}');
   if (cookieJson == null || cookieJson.isEmpty) {
     return;
   }
@@ -161,19 +191,28 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
   // 默认拉最近 3 天
   final since = lastFetchTime ?? (now - 3 * 24 * 3600);
+  await _bgLog('since=$since lastFetchTime=$lastFetchTime');
 
   // 抓取三个页面
+  await _bgLog('fetching pages...');
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
   try {
     final noticeHtml = await _fetchHtml(client, noticeUrl, cookieMap);
+    await _bgLog('notice html len=${noticeHtml.length}');
     final pmHtml = await _fetchHtml(client, personalMessageUrl, cookieMap);
+    await _bgLog('pm html len=${pmHtml.length}');
     final bmHtml = await _fetchHtml(client, broadcastMessageUrl, cookieMap);
+    await _bgLog('bm html len=${bmHtml.length}');
 
     final info = NotificationV2.fromDocuments(
       noticeDoc: parseHtmlDocument(noticeHtml),
       personalMessageDoc: parseHtmlDocument(pmHtml),
       broadcastMessageDoc: parseHtmlDocument(bmHtml),
       since: since,
+    );
+    await _bgLog(
+      'parsed: notice=${info.noticeList.length} pm=${info.personalMessageList.length} '
+      'bm=${info.broadcastMessageList.length}',
     );
 
     final total = info.noticeList.length +
@@ -196,10 +235,15 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
           ),
         ),
       );
+      await _bgLog('notification pushed');
+    } else {
+      await _bgLog('no new messages');
     }
 
     // 更新拉取时间
     await prefs.setInt('background_last_fetch_time_$uid', now);
+  } on Exception catch (e) {
+    await _bgLog('fetch error: $e');
   } finally {
     client.close(force: true);
   }
