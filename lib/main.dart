@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:fpdart/fpdart.dart';
 import 'package:responsive_framework/responsive_framework.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:system_theme/system_theme.dart';
@@ -11,6 +10,7 @@ import 'package:tsdm_client/app.dart';
 import 'package:tsdm_client/cmd.dart';
 import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/extensions/color.dart';
+import 'package:tsdm_client/extensions/fp.dart';
 import 'package:tsdm_client/features/local_notice/callback.dart';
 import 'package:tsdm_client/features/local_notice/show.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
@@ -168,10 +168,7 @@ Future<void> _syncBackgroundLastFetchTime() async {
       await storage
           .updateLastFetchNoticeTime(uid, DateTime.fromMillisecondsSinceEpoch(bgLastFetch * 1000))
           .run();
-      talker.debug(
-        'sync background last fetch time to db: uid=${"$uid".obscured(4)} '
-        'db=$dbSec bg=$bgLastFetch',
-      );
+      talker.debug('sync background last fetch time to db: uid=$uid db=$dbSec bg=$bgLastFetch');
     }
   } on Exception catch (e, st) {
     talker.handle(e, st, 'sync background last fetch time failed');
