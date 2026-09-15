@@ -41,11 +41,7 @@ Future<void> _bgLog(String msg) async {
   }
 }
 
-/// 把后台服务的日志文件内容读取出来，注入到主 isolate 的 talker，
-/// 然后清空文件。
-///
-/// 前台"导出日志"和"查看历史日志"就都能看到后台服务的记录了。
-/// 每次应用启动时调用一次即可。
+/// 把后台服务的日志文件内容读取出来，注入到主 isolate 的 talker，然后清空文件。
 Future<void> importBackgroundLogToTalker() async {
   try {
     final file = await _bgLogFile();
@@ -62,7 +58,6 @@ Future<void> importBackgroundLogToTalker() async {
       }
       talker.info('[BG] $line');
     }
-    // 清空文件，避免下次启动重复导入
     await file.writeAsString('');
   } on Exception catch (e) {
     talker.handle(e, null, 'import background log failed');
@@ -81,8 +76,6 @@ Future<bool> isBackgroundServiceRunning() async {
 }
 
 /// 初始化后台服务配置。
-///
-/// 只做配置，不启动服务。是否运行由设置页面的开关控制。
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
@@ -134,7 +127,6 @@ Future<void> onStart(ServiceInstance service) async {
     await service.setAsForegroundService();
   }
 
-  // 后台 isolate 里重新初始化一次本地通知插件
   final flnp = FlutterLocalNotificationsPlugin();
   await flnp.initialize(
     settings: const InitializationSettings(
@@ -145,7 +137,6 @@ Future<void> onStart(ServiceInstance service) async {
 
   Timer? backgroundTimer;
 
-  /// 启动或重启定时器。
   Future<void> startOrRestartTimer() async {
     backgroundTimer?.cancel();
     final prefs = await SharedPreferences.getInstance();
@@ -206,6 +197,10 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   }
   final cookieMap = Map<String, String>.from(jsonDecode(cookieJson) as Map);
 
+  // 打印一下我们拼出来的 Cookie 头，方便判断格式对不对
+  final cookieHeader = _buildCookieHeader(cookieMap);
+  await _bgLog('cookieHeader=${cookieHeader.length > 200 ? "${cookieHeader.substring(0, 200)}..." : cookieHeader}');
+
   final lastFetchTime = prefs.getInt('background_last_fetch_time_$uid');
   final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final since = lastFetchTime ?? (now - 3 * 24 * 3600);
@@ -214,11 +209,11 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   await _bgLog('fetching pages...');
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
   try {
-    final noticeHtml = await _fetchHtml(client, noticeUrl, cookieMap);
-    await _bgLog('notice html len=${noticeHtml.length}');
-    final pmHtml = await _fetchHtml(client, personalMessageUrl, cookieMap);
+    final noticeHtml = await _fetchHtml(client, noticeUrl, cookieHeader);
+    await _bgLog('notice html len=${noticeHtml.length} head=${noticeHtml.substring(0, noticeHtml.length > 200 ? 200 : noticeHtml.length).replaceAll("\n", " ")}');
+    final pmHtml = await _fetchHtml(client, personalMessageUrl, cookieHeader);
     await _bgLog('pm html len=${pmHtml.length}');
-    final bmHtml = await _fetchHtml(client, broadcastMessageUrl, cookieMap);
+    final bmHtml = await _fetchHtml(client, broadcastMessageUrl, cookieHeader);
     await _bgLog('bm html len=${bmHtml.length}');
 
     final info = NotificationV2.fromDocuments(
@@ -265,14 +260,13 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   }
 }
 
-/// 用 dart:io 的 HttpClient 抓取一个页面，带上 Cookie。
+/// 用 dart:io 的 HttpClient 抓取一个页面。
 Future<String> _fetchHtml(
   HttpClient client,
   String url,
-  Map<String, String> cookieMap,
+  String cookieHeader,
 ) async {
   final request = await client.getUrl(Uri.parse(url));
-  final cookieHeader = _buildCookieHeader(cookieMap);
   if (cookieHeader.isNotEmpty) {
     request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
   }
@@ -285,16 +279,48 @@ Future<String> _fetchHtml(
 }
 
 /// 把持久化的 Cookie JSON 拼成请求头。
+///
+/// cookie_jar 4.x 存的格式是：
+///   {
+///     ".example.com": {          // 域名 key
+///       "/path": {                // 路径 key
+///         "cookiename": {         // cookie 名 -> SerializableCookie 对象
+///           "name": "cookiename",
+///           "value": "cookievalue",
+///           "expires": ...,
+///           ...
+///         }
+///       }
+///     }
+///   }
+///
+/// 也兼容旧格式（name -> value 直接是字符串）。
 String _buildCookieHeader(Map<String, String> cookieMap) {
   final pairs = <String>[];
   for (final value in cookieMap.values) {
     try {
       final domainMap = jsonDecode(value);
-      if (domainMap is Map) {
-        for (final pathValue in domainMap.values) {
-          if (pathValue is Map) {
-            for (final entry in pathValue.entries) {
-              pairs.add('${entry.key}=${entry.value}');
+      if (domainMap is! Map) {
+        continue;
+      }
+      for (final pathValue in domainMap.values) {
+        if (pathValue is! Map) {
+          continue;
+        }
+        for (final entry in pathValue.entries) {
+          final v = entry.value;
+          if (v is Map) {
+            // cookie_jar 4.x 的 SerializableCookie 格式
+            final name = v['name'];
+            final val = v['value'];
+            if (name is String && val is String && name.isNotEmpty) {
+              pairs.add('$name=$val');
+            }
+          } else if (v is String) {
+            // 旧格式，直接是 name -> value
+            final name = entry.key;
+            if (name is String && name.isNotEmpty) {
+              pairs.add('$name=$v');
             }
           }
         }
