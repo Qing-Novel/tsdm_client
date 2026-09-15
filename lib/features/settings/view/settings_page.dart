@@ -642,13 +642,13 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             showSnackBar(context: context, message: tr.importData.invalidData);
             return;
           }
-          await _importBackup(context, File(file.path!));
+          await _importBackup(File(file.path!));
         },
       ),
     ];
   }
 
-  Future<void> _importBackup(BuildContext context, File source) async {
+  Future<void> _importBackup(File source) async {
     final tr = context.t.settingsPage.advancedSection.importData;
     const repository = BackupRepository();
     final schemaVersion = getIt.get<AppDatabase>().schemaVersion;
