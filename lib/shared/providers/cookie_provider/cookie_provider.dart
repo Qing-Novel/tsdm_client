@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:cookie_jar/cookie_jar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tsdm_client/constants/constants.dart';
 import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
@@ -237,6 +238,14 @@ final class CookieProvider with LoggerMixin implements Storage {
       cookie: _cookieMap,
     );
 
+    // 把 Cookie 和 uid 同步到 SharedPreferences，供后台服务读取
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'background_cookie_${_userLoginInfo.uid}',
+      jsonEncode(_cookieMap),
+    );
+    await prefs.setInt('background_login_uid', _userLoginInfo.uid!);
+
     return true;
   }
 
@@ -318,36 +327,6 @@ final class CookieProvider with LoggerMixin implements Storage {
       _cookieMap = stripServerFlagCookies(_cookieMap);
     }
     await _syncCookie();
-
-    // Check points changes events.
-    if (key == '.domains') {
-      // The following code are not used because we do it in `NetClientProvider` interceptors.
-      //
-      // Here is the storage layer of the cookie where it's hard to know the response state and also not possible to
-      // tell the difference between all these requests, make it impossible to combine the action result message we used
-      // before and the points changes together.
-      //
-      // // The value of ".domains" is expected to be:
-      // //
-      // // "$DOMAIN": {
-      // //     "$PATH": {
-      // //         "$COOKIE_NAME": "$COOKIE_VALUE",
-      // //     }
-      // // }
-      // Option.fromPredicate(jsonDecode(value), (v) => v is Map<String, dynamic>)
-      //     .map((x) => x as Map<String, dynamic>)
-      //     // Assume only one domain.
-      //     .flatMap((x) => x.values.firstOption)
-      //     .filterMap((x) => x is Map<String, dynamic> ? Option.fromNullable(x.values.firstOrNull) : const None())
-      //     // Assume only one path.
-      //     .filterMap((x) => x is Map<String, dynamic> ? Option.of(x) : const None())
-      //     // Here we get all cookie pairs.
-      //     .filterMap((x) => x.containsKey(_creditNotice) ? Option.of(x[_creditNotice]) : const None())
-      //     .filterMap((x) => x is String ? Option.of(_creditNoticeRe.firstMatch(x)) : const None())
-      //     .filterMap((x) => x != null ? Option.of(x.namedGroup('value')) : const None())
-      //     // Add to cookie stream.
-      //     .map((v) => pointsChangesStream.add(v!));
-    }
   }
 
   @override
