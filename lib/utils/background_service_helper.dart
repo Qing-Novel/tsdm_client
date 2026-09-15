@@ -21,6 +21,9 @@ const String notificationChannelId = 'tsdm_foreground';
 /// 前台服务常驻通知使用的通知 ID。
 const int notificationId = 888;
 
+/// 本地通知的渠道 ID，跟前台 `lib/features/local_notice/show.dart` 里的保持一致。
+const String _localNoticeChannelId = 'newNoticeChannelV2';
+
 /// SharedPreferences 中保存开关状态的 key。
 const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
 
@@ -63,6 +66,9 @@ Future<void> importBackgroundLogToTalker() async {
     talker.handle(e, null, 'import background log failed');
   }
 }
+
+/// 把 [s] 截断到 [max] 个字符，超出加省略号。
+String _truncate(String s, int max) => s.length <= max ? s : '${s.substring(0, max)}…';
 
 /// 读取用户是否开启了后台消息服务。
 Future<bool> isBackgroundServiceEnabled() async {
@@ -197,14 +203,18 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   }
   final cookieMap = Map<String, String>.from(jsonDecode(cookieJson) as Map);
 
-  // 拼出 Cookie header
   final cookieHeader = _buildCookieHeader(cookieMap);
-  await _bgLog('cookieHeader=${cookieHeader.length > 500 ? "${cookieHeader.substring(0, 500)}..." : cookieHeader}');
 
+  // ---- 时间戳对齐到分钟 ----
+  //
+  // 服务器渲染消息时间是「分钟精度」（如 23:00:00 代表 23:00 这一分钟），
+  // 前台也用 `startedTime.truncateToMinute()`。后台必须一样，
+  // 否则秒级时间戳会把同分钟的消息挤掉。
   final lastFetchTime = prefs.getInt('background_last_fetch_time_$uid');
-  final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-  final since = lastFetchTime ?? (now - 3 * 24 * 3600);
-  await _bgLog('since=$since lastFetchTime=$lastFetchTime');
+  final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  final nowMinute = nowSec - (nowSec % 60);
+  final since = lastFetchTime ?? (nowMinute - 3 * 24 * 3600);
+  await _bgLog('since=$since lastFetchTime=$lastFetchTime nowMinute=$nowMinute');
 
   await _bgLog('fetching pages...');
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
@@ -214,12 +224,10 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
     await _bgLog('notice html len=${noticeHtml.length} isLogin=$isLoginPage');
 
     final pmHtml = await _fetchHtml(client, personalMessageUrl, cookieHeader);
-    await _bgLog('pm html len=${pmHtml.length}');
     final bmHtml = await _fetchHtml(client, broadcastMessageUrl, cookieHeader);
-    await _bgLog('bm html len=${bmHtml.length}');
 
     if (isLoginPage) {
-      await _bgLog('server returned login page, cookie is not accepted, abort');
+      await _bgLog('server returned login page, abort');
       return;
     }
 
@@ -239,27 +247,49 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
         info.broadcastMessageList.length;
 
     if (total > 0) {
-      final body = '提醒 ${info.noticeList.length} 条，私信 ${info.personalMessageList.length} 条，广播 ${info.broadcastMessageList.length} 条';
+      // 通知内容跟 `lib/features/notification/bloc/notification_bloc.dart`
+      // 的 `_onNoticeInfoFetched` 保持一致。
+      // 优先级：pm > bm > notice（跟前台一致）。
+      final noticeCount = info.noticeList.length;
+      final pmCount = info.personalMessageList.length;
+      final bmCount = info.broadcastMessageList.length;
+      final countLine = '收到了${noticeCount}条提醒，${pmCount}条私信，${bmCount}条公共消息';
+
+      String? detailLine;
+      if (info.personalMessageList.isNotEmpty) {
+        final pm = info.personalMessageList.last;
+        detailLine = '[私信]${pm.peerUsername}：${_truncate(pm.data, 40)}';
+      } else if (info.broadcastMessageList.isNotEmpty) {
+        final bm = info.broadcastMessageList.last;
+        detailLine = '[公共消息]${_truncate(bm.data, 40)}';
+      } else if (info.noticeList.isNotEmpty) {
+        final n = info.noticeList.last;
+        final text = parseHtmlDocument(n.data).body?.innerText ?? '<null>';
+        detailLine = '[提醒]${_truncate(text, 40)}';
+      }
+
+      final body = detailLine == null ? countLine : '$countLine\n$detailLine';
+
       await flnp.show(
         id: 0,
-        title: '天使动漫',
+        title: '新消息',
         body: body,
         notificationDetails: const NotificationDetails(
           android: AndroidNotificationDetails(
-            'newNoticeChannelV2',
-            '消息通知',
-            channelDescription: '收到新消息时提醒',
+            _localNoticeChannelId,
+            '新提醒',
+            channelDescription: '自动同步消息时收到新提醒',
             importance: Importance.high,
             priority: Priority.high,
           ),
         ),
       );
-      await _bgLog('notification pushed');
+      await _bgLog('notification pushed: title=新消息 body=$body');
     } else {
       await _bgLog('no new messages');
     }
 
-    await prefs.setInt('background_last_fetch_time_$uid', now);
+    await prefs.setInt('background_last_fetch_time_$uid', nowMinute);
   } on Exception catch (e) {
     await _bgLog('fetch error: $e');
   } finally {
@@ -286,11 +316,6 @@ Future<String> _fetchHtml(
 }
 
 /// 把持久化的 Cookie JSON 拼成请求头。
-///
-/// cookie_jar 4.x 存储时，value 字段可能存的是整个 cookie 序列化字符串
-/// （含 `name=value; Expires=...; Path=/`），也可能只存值。
-/// 这里统一处理：如果 value 里已经有 `name=`，只取第一段 `name=value`，
-/// 后面的属性全部丢弃。
 String _buildCookieHeader(Map<String, String> cookieMap) {
   final pairs = <String>[];
   for (final value in cookieMap.values) {
@@ -306,12 +331,10 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
         for (final entry in pathValue.entries) {
           final v = entry.value;
           if (v is Map) {
-            // SerializableCookie 对象
             final name = v['name'];
             final val = v['value'];
             if (name is String && val is String && name.isNotEmpty) {
               if (val.contains('=')) {
-                // value 里已经带了 name=，取第一段
                 final firstPair = val.split(';').first.trim();
                 if (firstPair.isNotEmpty) {
                   pairs.add(firstPair);
@@ -321,7 +344,6 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
               }
             }
           } else if (v is String) {
-            // 旧格式，name 就是 key
             final name = entry.key.toString();
             if (name.isNotEmpty) {
               if (v.contains('=')) {
