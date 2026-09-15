@@ -332,7 +332,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     ];
   }
 
-  List<Widget> _buildBehaviorSection(SettingsState state) {
+  List<Widget> _buildBehaviorSection(BuildContext context, SettingsState state) {
     final tr = context.t.settingsPage.behaviorSection;
     final threadReverseOrder = state.settingsMap.threadReverseOrder;
     final autoSyncNoticeSeconds = state.settingsMap.autoSyncNoticeSeconds;
@@ -390,7 +390,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             }
             // 以真实运行状态为准，而不是盲目用用户点击的 v
             final running = await isBackgroundServiceRunning();
-            if (!mounted) return;
+            if (!context.mounted) return;
             setState(() {
               _bgServiceEnabled = running;
             });
@@ -736,7 +736,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     };
   }
 
-  List<Widget> _buildDebugSection(SettingsState state) {
+  List<Widget> _buildDebugSection(BuildContext context, SettingsState state) {
     final enableDebugOperations = state.settingsMap.enableDebugOperations;
     final tr = context.t.settingsPage.debugSection;
     return [
@@ -778,7 +778,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             title: Text(tr.copyDatabaseDir),
             onTap: () async {
               final path = (await databaseFile).parent.path;
-              if (!mounted) return;
+              if (!context.mounted) return;
               await copyToClipboard(context, path);
             },
           ),
@@ -883,11 +883,11 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                   ..._buildAccountSection(context, state),
                   ..._buildAppearanceSection(context, state),
                   if (isDesktop) ..._buildWindowSection(context, state),
-                  ..._buildBehaviorSection(state),
+                  ..._buildBehaviorSection(context, state),
                   ..._buildCheckinSection(context, state),
                   ..._buildStorageSection(context, state),
                   ..._buildAdvanceSection(context, state),
-                  ..._buildDebugSection(state),
+                  ..._buildDebugSection(context, state),
                   ..._buildOtherSection(context, state),
                 ],
               ),
