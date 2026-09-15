@@ -515,7 +515,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       SectionListTile(
         leading: const Icon(Icons.cleaning_services_outlined),
         title: Text(tr.clearCache),
-        onTap: () async => showClearCacheBottomSheet(context: context), // 这里去掉了多余的 await
+        onTap: () async => showClearCacheBottomSheet(context: context),
       ),
       SectionSwitchListTile(
         secondary: const Icon(Icons.image_not_supported_outlined),
@@ -689,7 +689,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     } on BackupReplaceException catch (e) {
       replaceFailure = e;
     }
-    if (!context.mounted) return; // 这里是修复点，改为规范写法
+    if (!context.mounted) return;
     final String message;
     if (invalid != null) {
       message = tr.invalidDetail(reason: _backupProblemText(context, invalid));
@@ -812,7 +812,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       SectionListTile(
         leading: const Icon(Icons.info_outline),
         title: Text(tr.about),
-        onTap: () async => context.pushNamed(ScreenPaths.about), // 修复：去掉多余 await
+        onTap: () async => context.pushNamed(ScreenPaths.about),
       ),
       SectionSwitchListTile(
         secondary: const Icon(Icons.cloud_done_outlined),
