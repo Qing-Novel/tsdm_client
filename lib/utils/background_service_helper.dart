@@ -66,9 +66,20 @@ Future<void> initializeBackgroundService() async {
 }
 
 /// 后台服务的入口，运行在独立的 Isolate 中。
+///
+/// 关键：无论这个服务是被谁启动的（系统恢复、插件自动启动、用户手动开启），
+/// 入口第一件事就是检查用户开关。如果是关的，立即停止自己，不弹通知。
 @pragma('vm:entry-point')
 Future<void> onStart(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
+
+  // 先检查用户开关状态。
+  final enabled = await isBackgroundServiceEnabled();
+  if (!enabled) {
+    // 用户没有开启后台服务，无论谁启动的，都立刻停止自己。
+    await service.stopSelf();
+    return;
+  }
 
   if (service is AndroidServiceInstance) {
     await service.setAsForegroundService();
@@ -85,23 +96,24 @@ Future<void> onStart(ServiceInstance service) async {
 
 /// 启动后台服务，并等待服务真正起来。
 Future<void> startBackgroundService() async {
+  // 先写开关状态，再启动服务。
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool(backgroundServiceEnabledKey, true);
+
   final service = FlutterBackgroundService();
   if (!await service.isRunning()) {
     await service.startService();
-    // 等待服务真正起来
     for (var i = 0; i < 15; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (await service.isRunning()) break;
     }
   }
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setBool(backgroundServiceEnabledKey, true);
 }
 
 /// 停止后台服务，并等待服务真正停止。
 ///
-/// 重要：先把开关状态写为 false，再发停止指令。这样即使 App 在服务停止
-/// 过程中被系统杀掉，重启后也不会再自动启动服务。
+/// 先把开关状态写为 false，再发停止指令。这样即使 App 在服务停止过程中
+/// 被系统杀掉，服务再次被拉起时 `onStart` 里的检查也会立即停止自己。
 Future<void> stopBackgroundService() async {
   // 1. 先写 prefs，确保开关状态落盘。
   final prefs = await SharedPreferences.getInstance();
@@ -111,7 +123,6 @@ Future<void> stopBackgroundService() async {
   final service = FlutterBackgroundService();
   if (await service.isRunning()) {
     service.invoke('stopService');
-    // 等待服务真正停止
     for (var i = 0; i < 25; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (!await service.isRunning()) break;
