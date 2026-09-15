@@ -120,11 +120,17 @@ Future<void> _boot(List<String> args) async {
     await getIt.get<ProxyProvider>().updateProxy();
   }
 
-  // 后台消息服务：先初始化配置，如果用户之前开启过开关则恢复启动。
+  // 后台消息服务：先初始化配置。
+  //
+  // - 如果用户之前开启了开关，则恢复启动。
+  // - 如果用户已经关闭了开关，但服务仍在运行（可能是系统自动恢复的），强制停掉它。
   if (isAndroid) {
     await initializeBackgroundService();
     if (await isBackgroundServiceEnabled()) {
       await startBackgroundService();
+    } else if (await isBackgroundServiceRunning()) {
+      // 开关是关的，但服务还在跑，说明是残留的，强制停止。
+      await stopBackgroundService();
     }
   }
 
