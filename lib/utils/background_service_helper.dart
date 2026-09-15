@@ -197,9 +197,9 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   }
   final cookieMap = Map<String, String>.from(jsonDecode(cookieJson) as Map);
 
-  // 打印一下我们拼出来的 Cookie 头，方便判断格式对不对
+  // 拼出 Cookie header
   final cookieHeader = _buildCookieHeader(cookieMap);
-  await _bgLog('cookieHeader=${cookieHeader.length > 200 ? "${cookieHeader.substring(0, 200)}..." : cookieHeader}');
+  await _bgLog('cookieHeader=${cookieHeader.length > 500 ? "${cookieHeader.substring(0, 500)}..." : cookieHeader}');
 
   final lastFetchTime = prefs.getInt('background_last_fetch_time_$uid');
   final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -210,11 +210,18 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
   try {
     final noticeHtml = await _fetchHtml(client, noticeUrl, cookieHeader);
-    await _bgLog('notice html len=${noticeHtml.length} head=${noticeHtml.substring(0, noticeHtml.length > 200 ? 200 : noticeHtml.length).replaceAll("\n", " ")}');
+    final isLoginPage = noticeHtml.contains('<title>登录');
+    await _bgLog('notice html len=${noticeHtml.length} isLogin=$isLoginPage');
+
     final pmHtml = await _fetchHtml(client, personalMessageUrl, cookieHeader);
     await _bgLog('pm html len=${pmHtml.length}');
     final bmHtml = await _fetchHtml(client, broadcastMessageUrl, cookieHeader);
     await _bgLog('bm html len=${bmHtml.length}');
+
+    if (isLoginPage) {
+      await _bgLog('server returned login page, cookie is not accepted, abort');
+      return;
+    }
 
     final info = NotificationV2.fromDocuments(
       noticeDoc: parseHtmlDocument(noticeHtml),
@@ -280,21 +287,10 @@ Future<String> _fetchHtml(
 
 /// 把持久化的 Cookie JSON 拼成请求头。
 ///
-/// cookie_jar 4.x 存的格式是：
-///   {
-///     ".example.com": {          // 域名 key
-///       "/path": {                // 路径 key
-///         "cookiename": {         // cookie 名 -> SerializableCookie 对象
-///           "name": "cookiename",
-///           "value": "cookievalue",
-///           "expires": ...,
-///           ...
-///         }
-///       }
-///     }
-///   }
-///
-/// 也兼容旧格式（name -> value 直接是字符串）。
+/// cookie_jar 4.x 存储时，value 字段可能存的是整个 cookie 序列化字符串
+/// （含 `name=value; Expires=...; Path=/`），也可能只存值。
+/// 这里统一处理：如果 value 里已经有 `name=`，只取第一段 `name=value`，
+/// 后面的属性全部丢弃。
 String _buildCookieHeader(Map<String, String> cookieMap) {
   final pairs = <String>[];
   for (final value in cookieMap.values) {
@@ -310,17 +306,32 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
         for (final entry in pathValue.entries) {
           final v = entry.value;
           if (v is Map) {
-            // cookie_jar 4.x 的 SerializableCookie 格式
+            // SerializableCookie 对象
             final name = v['name'];
             final val = v['value'];
             if (name is String && val is String && name.isNotEmpty) {
-              pairs.add('$name=$val');
+              if (val.contains('=')) {
+                // value 里已经带了 name=，取第一段
+                final firstPair = val.split(';').first.trim();
+                if (firstPair.isNotEmpty) {
+                  pairs.add(firstPair);
+                }
+              } else {
+                pairs.add('$name=$val');
+              }
             }
           } else if (v is String) {
-            // 旧格式，直接是 name -> value
+            // 旧格式，name 就是 key
             final name = entry.key;
-            if (name is String && name.isNotEmpty) {
-              pairs.add('$name=$v');
+            if (name.isNotEmpty) {
+              if (v.contains('=')) {
+                final firstPair = v.split(';').first.trim();
+                if (firstPair.isNotEmpty) {
+                  pairs.add(firstPair);
+                }
+              } else {
+                pairs.add('$name=$v');
+              }
             }
           }
         }
