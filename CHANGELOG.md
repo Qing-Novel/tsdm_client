@@ -6,9 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Android：universal apk 的内部版本号改为「版本号×10＋9」，永远高于同一版的 arm64／armv7 分包（×10＋ABI 码）；从分包换装 universal 不再被系统当成降版而拒绝安装。Release 页的 universal apk 改由 CI 产生。1.24.0 的 universal apk 已以 749 重新发布。(#70)
+
+## [1.24.0] - 2026-09-15
+
 ### Added
 
 - 桌面（Windows）：自动同步到新提醒或私信时弹出系统通知并播放提示音；点击通知会还原并聚焦窗口，再打开消息中心。原始实现来自 [@Qing-Novel](https://github.com/Qing-Novel)。(#70)
+
+### Fixed
+
+- 通知：自动抓取与一键同步记录的时间界线改用论坛回应的 Date 标头（论坛时钟）并保留一分钟余量；设备时钟快于论坛时，不再漏掉这段时间内的提醒与私信。没有 Date 标头时沿用原本的设备时间。(#71)
+
+### Known Issues
+
+- 部分设备旋转过场仍可能短暂露黑；旋转完成后排版正常。该过场问题暂不继续处理。(#28)
+- 列表无法直接取得外链头像；App 尚未缓存这类头像时仍显示文字圆圈。
 
 ## [1.23.0] - 2026-09-15
 
