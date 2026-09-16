@@ -145,6 +145,18 @@ Future<void> _bgLog(String msg) async {
   }
 }
 
+/// 读取 SharedPreferences 并强制从磁盘 reload。
+///
+/// `SharedPreferences.getInstance()` 返回的是带内存缓存的单例。
+/// 后台 isolate 是独立进程/isolate，第一次读之后内存里一直留着旧值，
+/// 前台改了 `background_locale` 它看不到。这里每次都 `reload()` 一次，
+/// 保证读到的是磁盘上的最新值。
+Future<SharedPreferences> _freshPrefs() async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.reload();
+  return prefs;
+}
+
 /// 把后台服务的日志文件内容读取出来，注入到主 isolate 的 talker，然后清空文件。
 Future<void> importBackgroundLogToTalker() async {
   try {
@@ -172,7 +184,7 @@ String _truncate(String s, int max) => s.length <= max ? s : '${s.substring(0, m
 
 /// 读取用户是否开启了后台消息服务。
 Future<bool> isBackgroundServiceEnabled() async {
-  final prefs = await SharedPreferences.getInstance();
+  final prefs = await _freshPrefs();
   return prefs.getBool(backgroundServiceEnabledKey) ?? false;
 }
 
@@ -187,7 +199,7 @@ Future<bool> isBackgroundServiceRunning() async {
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
-  final prefs = await SharedPreferences.getInstance();
+  final prefs = await _freshPrefs();
   final strings = _stringsForLocale(prefs.getString('background_locale'));
 
   final channel = AndroidNotificationChannel(
@@ -248,26 +260,29 @@ Future<void> onStart(ServiceInstance service) async {
 
   /// 按当前 locale 更新常驻通知的标题和内容。
   ///
-  /// 渠道名无法更新（Android 不允许修改已存在的渠道），但标题和内容是通知的一部分，
-  /// 可以通过 setForegroundNotificationInfo 刷新。
+  /// 渠道名无法更新（Android 不允许修改已存在的渠道），但标题和内容可以。
   Future<void> updateForegroundNotification() async {
     if (service is! AndroidServiceInstance) {
       return;
     }
-    final prefs = await SharedPreferences.getInstance();
-    final strings = _stringsForLocale(prefs.getString('background_locale'));
-    await service.setForegroundNotificationInfo(
-      title: strings.foregroundTitle,
-      content: strings.foregroundContent,
-    );
-    await _bgLog('foreground notification updated: title=${strings.foregroundTitle}');
+    try {
+      final prefs = await _freshPrefs();
+      final strings = _stringsForLocale(prefs.getString('background_locale'));
+      await service.setForegroundNotificationInfo(
+        title: strings.foregroundTitle,
+        content: strings.foregroundContent,
+      );
+      await _bgLog('foreground notification updated: title=${strings.foregroundTitle}');
+    } on Exception catch (e) {
+      await _bgLog('updateForegroundNotification exception: $e');
+    }
   }
 
   Timer? backgroundTimer;
 
   Future<void> startOrRestartTimer() async {
     backgroundTimer?.cancel();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _freshPrefs();
     final intervalSeconds = prefs.getInt('autoSyncNoticeSeconds') ?? 180;
     await _bgLog('startOrRestartTimer: interval=$intervalSeconds');
 
@@ -313,7 +328,7 @@ Future<void> onStart(ServiceInstance service) async {
 
 Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   await _bgLog('_checkNewMessages start');
-  final prefs = await SharedPreferences.getInstance();
+  final prefs = await _freshPrefs();
 
   final uid = prefs.getInt('background_login_uid');
   await _bgLog('uid=$uid');
@@ -498,7 +513,7 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
 
 /// 启动后台服务，并等待服务真正起来。
 Future<void> startBackgroundService() async {
-  final prefs = await SharedPreferences.getInstance();
+  final prefs = await _freshPrefs();
   await prefs.setBool(backgroundServiceEnabledKey, true);
 
   final service = FlutterBackgroundService();
@@ -513,7 +528,7 @@ Future<void> startBackgroundService() async {
 
 /// 停止后台服务。
 Future<void> stopBackgroundService() async {
-  final prefs = await SharedPreferences.getInstance();
+  final prefs = await _freshPrefs();
   await prefs.setBool(backgroundServiceEnabledKey, false);
 
   final service = FlutterBackgroundService();
