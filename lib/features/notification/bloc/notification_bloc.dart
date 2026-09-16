@@ -25,6 +25,12 @@ part 'notification_state.dart';
 const String _skipNextNotificationKey = 'background_notified_skip_next';
 
 /// Read state of freshly [fetched] notices reconciled with the copies already [stored] for the same user.
+///
+/// * A notice seen for the first time keeps the flag the server rendered. Discuz! X5 shows the unread marker only
+///   until the notice page is listed once, and our own fetch is that listing, so this is the only chance to read it.
+/// * A notice already stored keeps the local flag (the user may have read it in the app meanwhile), unless the
+///   server copy is newer: Discuz merges repeated replies in one thread into the same notice and bumps its time, so
+///   a newer copy is a new event and becomes unread again.
 List<NoticeV2> reconcileNoticeReadState({required List<NoticeV2> fetched, required List<NoticeEntity> stored}) {
   final byNid = {for (final e in stored) e.nid: e};
   return fetched.map((n) {
@@ -39,6 +45,16 @@ List<NoticeV2> reconcileNoticeReadState({required List<NoticeV2> fetched, requir
   }).toList();
 }
 
+/// Read state of freshly [fetched] personal message conversations reconciled with the copies already [stored] for
+/// the same user.
+///
+/// A conversation is one entry per peer holding its last message. The server flag is trustworthy: Discuz keeps the
+/// "new" marker until the conversation is viewed on the server. But the user may have read it in the app only (the
+/// notice card menu), so:
+///
+/// * A conversation seen for the first time keeps the server flag.
+/// * A newer copy, or the same time with another last message, carries a new message and keeps the server flag.
+/// * Otherwise the conversation is read when either side says so.
 List<PersonalMessageV2> reconcilePersonalMessageReadState({
   required List<PersonalMessageV2> fetched,
   required List<PersonalMessageEntity> stored,
@@ -53,6 +69,11 @@ List<PersonalMessageV2> reconcilePersonalMessageReadState({
   }).toList();
 }
 
+/// Read state of freshly [fetched] broadcast messages reconciled with the copies already [stored] for the same user.
+///
+/// A broadcast message never changes once sent: a message seen for the first time is unread, a stored one keeps the
+/// local flag. Saving every fetched copy as unread, as done before, resurrected read messages whenever the last three
+/// days were listed again.
 List<BroadcastMessageV2> reconcileBroadcastMessageReadState({
   required List<BroadcastMessageV2> fetched,
   required List<BroadcastMessageEntity> stored,
@@ -67,6 +88,11 @@ List<BroadcastMessageV2> reconcileBroadcastMessageReadState({
   }).toList();
 }
 
+/// The part of [fetched] that is news to the user: not [stored] yet, or stored as an older copy (a notice merged with
+/// a later reply, a conversation with another last message from the peer).
+///
+/// Only these feed the push notification of the background sync. Copies fetched again (the newest minute is fetched
+/// once more on purpose, see [NotificationBloc]) and the user's own replies must not notify.
 NotificationV2 freshNotifications({required NotificationV2 fetched, required NotificationGroup stored}) {
   final notices = {for (final e in stored.noticeList) e.nid: e};
   final conversations = {for (final e in stored.personalMessageList) e.peerUid: e};
@@ -87,8 +113,20 @@ NotificationV2 freshNotifications({required NotificationV2 fetched, required Not
   );
 }
 
+/// Result of [persistFetchedNotification]: what was news in the fetched copies, the copies as stored (read state
+/// reconciled) and the unread counts of the user recounted from storage after saving.
 typedef PersistedNotification = ({NotificationV2 fresh, NotificationV2 reconciled, NotificationStateInfo unread});
 
+/// Store the notifications [fetched] for user [uid] into [storage], reconciling their read state with the copies
+/// already stored, and recount the user's unread notifications from storage afterwards.
+///
+/// This is the one place that turns a fetch result into stored rows: the current-user sync ([NotificationBloc]) and
+/// the sync of all accounts (`NotificationSyncAllRepository`) both go through it so the two store identically.
+///
+/// * `fresh` is [freshNotifications] decided before the reconciled copies overwrite the stored ones: the items that
+///   are news to the user.
+/// * `reconciled` is [fetched] with the read state as saved.
+/// * `unread` is the recount from storage, the same numbers the unread badge shows when [uid] is the current user.
 Future<PersistedNotification> persistFetchedNotification({
   required StorageProvider storage,
   required int uid,
@@ -157,6 +195,10 @@ Future<PersistedNotification> persistFetchedNotification({
   return (fresh: fresh, reconciled: info, unread: await countUnreadNotification(storage: storage, uid: uid));
 }
 
+/// Recount the unread notifications of [uid] from [storage].
+///
+/// Storage is the source of truth of the unread badge; this is what `NotificationBloc` publishes for the current
+/// user after every mark and every sync.
 Future<NotificationStateInfo> countUnreadNotification({required StorageProvider storage, required int uid}) async {
   final group = await storage.fetchNotificationSince(uid: uid, timestamp: 0).run();
   return NotificationStateInfo(
@@ -166,9 +208,12 @@ Future<NotificationStateInfo> countUnreadNotification({required StorageProvider 
   );
 }
 
+/// Emitter
 typedef _Emit = Emitter<NotificationState>;
 
+/// Bloc of notification.
 class NotificationBloc extends Bloc<NotificationEvent, NotificationState> with LoggerMixin {
+  /// Constructor.
   NotificationBloc({
     required NotificationRepository notificationRepository,
     required NotificationInfoRepository infoRepository,
@@ -540,6 +585,7 @@ class NotificationBloc extends Bloc<NotificationEvent, NotificationState> with L
     await _storageProvider.deleteBroadcastMessage(uid: uid, pmid: pmid).run();
   }
 
+  /// Do NOT dispose [_infoRepository] here because the state cubit owns it.
   @override
   Future<void> close() async {
     await _notificationRepository.dispose();
