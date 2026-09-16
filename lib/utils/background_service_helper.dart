@@ -33,6 +33,18 @@ const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
 /// SharedPreferences 标志：后台已经推送过通知，前台首次拉取时跳过重复推送。
 const String _skipNextNotificationKey = 'background_notified_skip_next';
 
+/// SharedPreferences 中记录最近一次推送通知的时间（秒）。
+///
+/// 前台 isolate 和后台 isolate 共享这个值：任何一侧推通知前先读它，
+/// 如果距现在不到 30 秒，说明另一侧刚推过同一条消息，跳过这次推送。
+/// 这条规则同时解决了两个问题：
+/// * 启动时前后台同时拉取 → 只有先跑完的那一侧会推。
+/// * 服务器对私信用 inclusive 边界，同一分钟内的私信会被两侧重复拉到 → 只有第一次推。
+const String _lastPushTimeKey = 'notification_last_push_time';
+
+/// 跨 isolate 去重窗口（秒）。
+const int _pushDedupeWindowSeconds = 30;
+
 /// 一种语言下的所有通知文案。
 class _NotificationStrings {
   const _NotificationStrings({
@@ -307,6 +319,13 @@ Future<void> onStart(ServiceInstance service) async {
     }
   }
 
+  // 让前台先把首拉跑完。
+  //
+  // 应用启动时前台和后台几乎同时启动，如果两边都立刻拉取，
+  // 就会把同一批消息推两次。等几秒让前台先推完并写好 `_lastPushTime`，
+  // 后台首拉时读到时间戳在 30 秒窗口内就会跳过推送。
+  await Future<void>.delayed(const Duration(seconds: 3));
+
   await startOrRestartTimer();
 
   service.on('stopService').listen((event) {
@@ -413,26 +432,42 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
         });
       }
 
-      await flnp.show(
-        id: 0,
-        title: strings.title,
-        body: body,
-        notificationDetails: const NotificationDetails(
-          android: AndroidNotificationDetails(
-            _localNoticeChannelId,
-            '新提醒',
-            channelDescription: '自动同步消息时收到新提醒',
-            importance: Importance.high,
-            priority: Priority.high,
+      // ---- 跨 isolate 去重 ----
+      //
+      // 前台和后台共享 `_lastPushTimeKey`。任何一侧推通知时都写入当前时间；
+      // 另一侧推送前读它，如果距现在不到 30 秒就跳过。
+      //
+      // 这个机制同时覆盖：
+      // * 启动时前后台同时跑：后台延迟 3 秒启动，前台先写，后台读到窗口内就跳过。
+      // * 私信用 inclusive 边界被两侧重复拉到：只有第一次的推送生效。
+      final lastPush = prefs.getInt(_lastPushTimeKey) ?? 0;
+      final sinceLastPush = nowSec - lastPush;
+      if (sinceLastPush >= 0 && sinceLastPush < _pushDedupeWindowSeconds) {
+        await _bgLog('skip push: another isolate pushed ${sinceLastPush}s ago');
+      } else {
+        await flnp.show(
+          id: 0,
+          title: strings.title,
+          body: body,
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              _localNoticeChannelId,
+              '新提醒',
+              channelDescription: '自动同步消息时收到新提醒',
+              importance: Importance.high,
+              priority: Priority.high,
+            ),
           ),
-        ),
-        payload: _openNotificationPayload,
-      );
+          payload: _openNotificationPayload,
+        );
 
-      // 标记：后台已经推送过通知，前台首次拉取到同一条消息时不要再推一次。
-      await prefs.setBool(_skipNextNotificationKey, true);
+        // 记录推送时间，供前台推通知前检查。
+        await prefs.setInt(_lastPushTimeKey, nowSec);
+        // 兼容旧标记：前台也读 `_skipNextNotificationKey`。
+        await prefs.setBool(_skipNextNotificationKey, true);
 
-      await _bgLog('notification pushed: title=${strings.title} body=$body');
+        await _bgLog('notification pushed: title=${strings.title} body=$body');
+      }
     } else {
       await _bgLog('no new messages');
     }
