@@ -246,6 +246,23 @@ Future<void> onStart(ServiceInstance service) async {
   );
   await _bgLog('flnp initialized');
 
+  /// 按当前 locale 更新常驻通知的标题和内容。
+  ///
+  /// 渠道名无法更新（Android 不允许修改已存在的渠道），但标题和内容是通知的一部分，
+  /// 可以通过 setForegroundNotificationInfo 刷新。
+  Future<void> updateForegroundNotification() async {
+    if (service is! AndroidServiceInstance) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final strings = _stringsForLocale(prefs.getString('background_locale'));
+    await service.setForegroundNotificationInfo(
+      title: strings.foregroundTitle,
+      content: strings.foregroundContent,
+    );
+    await _bgLog('foreground notification updated: title=${strings.foregroundTitle}');
+  }
+
   Timer? backgroundTimer;
 
   Future<void> startOrRestartTimer() async {
@@ -286,6 +303,11 @@ Future<void> onStart(ServiceInstance service) async {
   service.on('updateTimer').listen((event) async {
     await _bgLog('received updateTimer');
     await startOrRestartTimer();
+  });
+
+  service.on('updateLocale').listen((event) async {
+    await _bgLog('received updateLocale');
+    await updateForegroundNotification();
   });
 }
 
