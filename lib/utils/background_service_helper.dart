@@ -24,8 +24,14 @@ const int notificationId = 888;
 /// 本地通知的渠道 ID，跟前台 `lib/features/local_notice/show.dart` 里的保持一致。
 const String _localNoticeChannelId = 'newNoticeChannelV2';
 
+/// 通知 payload，跟前台 `lib/features/local_notice/keys.dart` 里的 `LocalNoticeKeys.openNotification` 一致。
+const String _openNotificationPayload = 'openNotification';
+
 /// SharedPreferences 中保存开关状态的 key。
 const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
+
+/// SharedPreferences 标志：后台已经推送过通知，前台首次拉取时跳过重复推送。
+const String _skipNextNotificationKey = 'background_notified_skip_next';
 
 /// 一种语言下的所有通知文案。
 class _NotificationStrings {
@@ -40,37 +46,18 @@ class _NotificationStrings {
     required this.foregroundContent,
   });
 
-  /// 本地通知标题（收到消息时）。
   final String title;
-
-  /// 提醒详情模板。占位：{noticeCount} {pmCount} {bmCount} {msg}
   final String notice;
-
-  /// 私信详情模板。占位：{noticeCount} {pmCount} {bmCount} {user} {msg}
   final String pm;
-
-  /// 公共消息详情模板。占位：{noticeCount} {pmCount} {bmCount} {msg}
   final String bm;
-
-  /// 常驻通知渠道名。
   final String foregroundChannelName;
-
-  /// 常驻通知渠道描述。
   final String foregroundChannelDesc;
-
-  /// 常驻通知标题。
   final String foregroundTitle;
-
-  /// 常驻通知内容。
   final String foregroundContent;
 }
 
 /// 每种语言的本地通知文案。
-///
-/// 跟 `lib/i18n/*.i18n.json` 里 `localNotification` 段落的值保持一致。
-/// 后台 isolate 无法运行 slang，所以这里维护一份模板，用 `{}` 占位。
 const Map<String, _NotificationStrings> _notificationStrings = {
-  // 简体中文（默认）
   'zh-CN': _NotificationStrings(
     title: '新消息',
     notice: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
@@ -81,7 +68,6 @@ const Map<String, _NotificationStrings> _notificationStrings = {
     foregroundTitle: '天使动漫',
     foregroundContent: '正在后台保持连接...',
   ),
-  // 繁體中文
   'zh-TW': _NotificationStrings(
     title: '新訊息',
     notice: '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[提醒]{msg}',
@@ -92,7 +78,6 @@ const Map<String, _NotificationStrings> _notificationStrings = {
     foregroundTitle: '天使動漫',
     foregroundContent: '正在後台保持連線...',
   ),
-  // English
   'en': _NotificationStrings(
     title: 'New notice',
     notice: 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[Notice]{msg}',
@@ -105,7 +90,6 @@ const Map<String, _NotificationStrings> _notificationStrings = {
   ),
 };
 
-/// 默认文案（简体中文），任何时候都有值。
 const _NotificationStrings _defaultStrings = _NotificationStrings(
   title: '新消息',
   notice: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
@@ -117,7 +101,6 @@ const _NotificationStrings _defaultStrings = _NotificationStrings(
   foregroundContent: '正在后台保持连接...',
 );
 
-/// 根据 locale 选择通知文案，未知 locale 回退到简体中文。
 _NotificationStrings _stringsForLocale(String? localeTag) {
   if (localeTag == null || localeTag.isEmpty) {
     return _defaultStrings;
@@ -126,8 +109,6 @@ _NotificationStrings _stringsForLocale(String? localeTag) {
   if (exact != null) {
     return exact;
   }
-  // 前缀匹配：zh-CN / zh-Hans / zh_CN 都归到 zh-CN，
-  // zh-TW / zh-Hant / zh-HK 归到 zh-TW，en-* 归到 en。
   final lower = localeTag.toLowerCase().replaceAll('_', '-');
   if (lower.startsWith('zh')) {
     if (lower.contains('tw') || lower.contains('hk') || lower.contains('hant')) {
@@ -141,7 +122,6 @@ _NotificationStrings _stringsForLocale(String? localeTag) {
   return _defaultStrings;
 }
 
-/// 把 `{key}` 占位替换成 [values] 里对应的值。
 String _fillTemplate(String template, Map<String, String> values) {
   var result = template;
   for (final entry in values.entries) {
@@ -150,13 +130,11 @@ String _fillTemplate(String template, Map<String, String> values) {
   return result;
 }
 
-/// 后台服务日志文件的路径。
 Future<File> _bgLogFile() async {
   final dir = await getApplicationSupportDirectory();
   return File('${dir.path}/bg_service.log');
 }
 
-/// 后台服务专用日志：写到独立文件，避免和主 isolate 的 talker 混在一起。
 Future<void> _bgLog(String msg) async {
   try {
     final file = await _bgLogFile();
@@ -167,7 +145,6 @@ Future<void> _bgLog(String msg) async {
   }
 }
 
-/// 把后台服务的日志文件内容读取出来，注入到主 isolate 的 talker，然后清空文件。
 Future<void> importBackgroundLogToTalker() async {
   try {
     final file = await _bgLogFile();
@@ -190,25 +167,17 @@ Future<void> importBackgroundLogToTalker() async {
   }
 }
 
-/// 把 [s] 截断到 [max] 个字符，超出加省略号。
 String _truncate(String s, int max) => s.length <= max ? s : '${s.substring(0, max)}…';
 
-/// 读取用户是否开启了后台消息服务。
 Future<bool> isBackgroundServiceEnabled() async {
   final prefs = await SharedPreferences.getInstance();
   return prefs.getBool(backgroundServiceEnabledKey) ?? false;
 }
 
-/// 查询后台服务是否真的在运行。
 Future<bool> isBackgroundServiceRunning() async {
   return FlutterBackgroundService().isRunning();
 }
 
-/// 初始化后台服务配置。
-///
-/// 常驻通知的文案按 SharedPreferences 里的 `background_locale` 选择。
-/// 注意：Android 只在第一次创建通知渠道时使用渠道名和描述，
-/// 之后修改语言需要重启应用才会生效（渠道名已经在系统中注册）。
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
@@ -245,7 +214,6 @@ Future<void> initializeBackgroundService() async {
   );
 }
 
-/// 后台服务的入口，运行在独立的 Isolate 中。
 @pragma('vm:entry-point')
 Future<void> onStart(ServiceInstance service) async {
   await _bgLog('=== onStart called ===');
@@ -314,7 +282,6 @@ Future<void> onStart(ServiceInstance service) async {
   });
 }
 
-/// 后台拉取消息的核心逻辑。
 Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   await _bgLog('_checkNewMessages start');
   final prefs = await SharedPreferences.getInstance();
@@ -335,7 +302,6 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
 
   final cookieHeader = _buildCookieHeader(cookieMap);
 
-  // 时间戳对齐到分钟，跟前台一致。
   final lastFetchTime = prefs.getInt('background_last_fetch_time_$uid');
   final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final nowMinute = nowSec - (nowSec % 60);
@@ -380,7 +346,6 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
         'bmCount': '${info.broadcastMessageList.length}',
       };
 
-      // 优先级：私信 > 公共消息 > 提醒（跟前台 `NotificationBloc` 一致）。
       String body;
       if (info.personalMessageList.isNotEmpty) {
         final pm = info.personalMessageList.last;
@@ -417,7 +382,12 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
             priority: Priority.high,
           ),
         ),
+        payload: _openNotificationPayload,
       );
+
+      // 标记：后台已经推送过通知，前台首次拉取到同一条消息时不要再推一次。
+      await prefs.setBool(_skipNextNotificationKey, true);
+
       await _bgLog('notification pushed: title=${strings.title} body=$body');
     } else {
       await _bgLog('no new messages');
@@ -431,7 +401,6 @@ Future<void> _checkNewMessages(FlutterLocalNotificationsPlugin flnp) async {
   }
 }
 
-/// 用 dart:io 的 HttpClient 抓取一个页面。
 Future<String> _fetchHtml(
   HttpClient client,
   String url,
@@ -449,7 +418,6 @@ Future<String> _fetchHtml(
   return response.transform(utf8.decoder).join();
 }
 
-/// 把持久化的 Cookie JSON 拼成请求头。
 String _buildCookieHeader(Map<String, String> cookieMap) {
   final pairs = <String>[];
   for (final value in cookieMap.values) {
@@ -499,7 +467,6 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
   return pairs.join('; ');
 }
 
-/// 启动后台服务，并等待服务真正起来。
 Future<void> startBackgroundService() async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool(backgroundServiceEnabledKey, true);
@@ -514,7 +481,6 @@ Future<void> startBackgroundService() async {
   }
 }
 
-/// 停止后台服务。
 Future<void> stopBackgroundService() async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool(backgroundServiceEnabledKey, false);
