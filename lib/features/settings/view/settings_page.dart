@@ -117,7 +117,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     );
   }
 
-  /// 把当前 locale 写到 SharedPreferences，供后台服务选通知文案。
+  /// 把当前 locale 写到 SharedPreferences，并通知后台服务刷新常驻通知的文案。
   Future<void> _persistBackgroundLocale(String languageTag) async {
     if (!isAndroid) {
       return;
@@ -125,6 +125,9 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('background_locale', languageTag);
+      // 通知后台服务按新 locale 刷新常驻通知的标题和内容。
+      // 渠道名无法更新（Android 不允许改已存在的渠道），但标题和内容可以。
+      FlutterBackgroundService().invoke('updateLocale');
     } on Exception catch (_) {
       // 写失败不能影响主流程。
     }
