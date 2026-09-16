@@ -117,6 +117,19 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     );
   }
 
+  /// 把当前 locale 写到 SharedPreferences，供后台服务选通知文案。
+  Future<void> _persistBackgroundLocale(String languageTag) async {
+    if (!isAndroid) {
+      return;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('background_locale', languageTag);
+    } on Exception catch (_) {
+      // 写失败不能影响主流程。
+    }
+  }
+
   List<Widget> _buildAccountSection(BuildContext context, SettingsState state) {
     final tr = context.t.settingsPage.accountSection;
     return [
@@ -190,12 +203,14 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             await desktopUpdateWindowTitle();
             if (!context.mounted) return;
             context.read<SettingsBloc>().add(const SettingsValueChanged(SettingsKeys.locale, ''));
+            await _persistBackgroundLocale(LocaleSettings.currentLocale.languageTag);
             return;
           }
           await LocaleSettings.setLocale(localeGroup.$1!);
           await desktopUpdateWindowTitle();
           if (!context.mounted) return;
           context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.locale, localeGroup.$1!.languageTag));
+          await _persistBackgroundLocale(localeGroup.$1!.languageTag);
         },
       ),
       SectionSwitchListTile(
