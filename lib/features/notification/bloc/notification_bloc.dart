@@ -24,21 +24,46 @@ part 'notification_state.dart';
 /// SharedPreferences 标志：后台已经推送过通知，前台首次拉取时跳过重复推送。
 const String _skipNextNotificationKey = 'background_notified_skip_next';
 
-/// 检查并清掉"跳过下一次前台推送"标志。
+/// SharedPreferences 中记录最近一次推送通知的时间（秒）。
 ///
-/// 读 SharedPreferences 可能失败（比如单元测试环境没有初始化 binding），
-/// 此时返回 false，让前台照常推送。
+/// 跟后台 isolate 共享：前台推通知前读它，如果距现在不到 30 秒就跳过。
+const String _lastPushTimeKey = 'notification_last_push_time';
+
+/// 跨 isolate 去重窗口（秒）。
+const int _pushDedupeWindowSeconds = 30;
+
+/// 检查前台是否应该跳过这次推送。
+///
+/// 两种情况会跳过：
+/// * `_skipNextNotificationKey` 为 true：后台刚推过同一条消息，前台启动时读到了这个标志。
+/// * `_lastPushTimeKey` 距现在不到 30 秒：后台（或前台自己上一次）刚推过。
+///
+/// 如果都不会跳过，就把当前时间写到 `_lastPushTimeKey`，供后台和下次前台推通知前检查。
 ///
 /// 用 `on Object catch` 而不是 `on Exception catch`：测试环境下 binding 未初始化
 /// 抛的是 `FlutterError`（继承自 `Error`），只会被 `on Object` 捕获。
-Future<bool> _consumeSkipNextNotificationFlag() async {
+Future<bool> _shouldSkipNotification() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    final skip = prefs.getBool(_skipNextNotificationKey) ?? false;
-    if (skip) {
+    await prefs.reload();
+
+    // 兼容旧标记：后台推送后会写这个 key。
+    final skipNext = prefs.getBool(_skipNextNotificationKey) ?? false;
+    if (skipNext) {
       await prefs.setBool(_skipNextNotificationKey, false);
+      return true;
     }
-    return skip;
+
+    // 跨 isolate 时间窗去重。
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final lastPush = prefs.getInt(_lastPushTimeKey) ?? 0;
+    final sinceLastPush = now - lastPush;
+    if (sinceLastPush >= 0 && sinceLastPush < _pushDedupeWindowSeconds) {
+      return true;
+    }
+
+    await prefs.setInt(_lastPushTimeKey, now);
+    return false;
   } on Object catch (_) {
     return false;
   }
@@ -389,10 +414,11 @@ class NotificationBloc extends Bloc<NotificationEvent, NotificationState> with L
       unreadBroadcastMessageCount: allBroadcastMessage.where((e) => !e.alreadyRead).length,
     );
 
-    // 如果后台服务已经推送过这条通知，跳过这次的前台推送。
-    final skipNext = await _consumeSkipNextNotificationFlag();
-    if (skipNext) {
-      debug('skip local notification: background already pushed it');
+    // 跨 isolate 去重：后台（或前台自己上一次）刚推过就跳过这次的前台推送。
+    // 时间窗内不会重复弹通知，但消息仍然写进数据库，消息中心能看到。
+    final skip = await _shouldSkipNotification();
+    if (skip) {
+      debug('skip local notification: another isolate pushed recently');
     } else if (fresh.personalMessageList.isNotEmpty) {
       _infoRepository.updateAutoSyncInfo(
         NotificationAutoSyncInfoPm(
