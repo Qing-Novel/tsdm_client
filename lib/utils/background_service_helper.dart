@@ -145,6 +145,7 @@ Future<void> _bgLog(String msg) async {
   }
 }
 
+/// 把后台服务的日志文件内容读取出来，注入到主 isolate 的 talker，然后清空文件。
 Future<void> importBackgroundLogToTalker() async {
   try {
     final file = await _bgLogFile();
@@ -169,15 +170,20 @@ Future<void> importBackgroundLogToTalker() async {
 
 String _truncate(String s, int max) => s.length <= max ? s : '${s.substring(0, max)}…';
 
+/// 读取用户是否开启了后台消息服务。
 Future<bool> isBackgroundServiceEnabled() async {
   final prefs = await SharedPreferences.getInstance();
   return prefs.getBool(backgroundServiceEnabledKey) ?? false;
 }
 
+/// 查询后台服务是否真的在运行。
 Future<bool> isBackgroundServiceRunning() async {
   return FlutterBackgroundService().isRunning();
 }
 
+/// 初始化后台服务配置。
+///
+/// 常驻通知的文案按 SharedPreferences 里的 `background_locale` 选择。
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
@@ -214,6 +220,7 @@ Future<void> initializeBackgroundService() async {
   );
 }
 
+/// 后台服务的入口，运行在独立的 Isolate 中。
 @pragma('vm:entry-point')
 Future<void> onStart(ServiceInstance service) async {
   await _bgLog('=== onStart called ===');
@@ -467,6 +474,7 @@ String _buildCookieHeader(Map<String, String> cookieMap) {
   return pairs.join('; ');
 }
 
+/// 启动后台服务，并等待服务真正起来。
 Future<void> startBackgroundService() async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool(backgroundServiceEnabledKey, true);
@@ -481,6 +489,7 @@ Future<void> startBackgroundService() async {
   }
 }
 
+/// 停止后台服务。
 Future<void> stopBackgroundService() async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool(backgroundServiceEnabledKey, false);
