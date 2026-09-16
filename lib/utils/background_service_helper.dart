@@ -27,16 +27,20 @@ const String _localNoticeChannelId = 'newNoticeChannelV2';
 /// SharedPreferences 中保存开关状态的 key。
 const String backgroundServiceEnabledKey = 'enableBackgroundMessageService';
 
-/// 一种语言下的通知文案。
+/// 一种语言下的所有通知文案。
 class _NotificationStrings {
   const _NotificationStrings({
     required this.title,
     required this.notice,
     required this.pm,
     required this.bm,
+    required this.foregroundChannelName,
+    required this.foregroundChannelDesc,
+    required this.foregroundTitle,
+    required this.foregroundContent,
   });
 
-  /// 通知标题。
+  /// 本地通知标题（收到消息时）。
   final String title;
 
   /// 提醒详情模板。占位：{noticeCount} {pmCount} {bmCount} {msg}
@@ -47,6 +51,18 @@ class _NotificationStrings {
 
   /// 公共消息详情模板。占位：{noticeCount} {pmCount} {bmCount} {msg}
   final String bm;
+
+  /// 常驻通知渠道名。
+  final String foregroundChannelName;
+
+  /// 常驻通知渠道描述。
+  final String foregroundChannelDesc;
+
+  /// 常驻通知标题。
+  final String foregroundTitle;
+
+  /// 常驻通知内容。
+  final String foregroundContent;
 }
 
 /// 每种语言的本地通知文案。
@@ -60,6 +76,10 @@ const Map<String, _NotificationStrings> _notificationStrings = {
     notice: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
     pm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[私信]{user}：{msg}',
     bm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[公共消息]{msg}',
+    foregroundChannelName: '后台消息服务',
+    foregroundChannelDesc: '保持连接以接收论坛消息',
+    foregroundTitle: '天使动漫',
+    foregroundContent: '正在后台保持连接...',
   ),
   // 繁體中文
   'zh-TW': _NotificationStrings(
@@ -67,6 +87,10 @@ const Map<String, _NotificationStrings> _notificationStrings = {
     notice: '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[提醒]{msg}',
     pm: '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[私訊]{user}：{msg}',
     bm: '收到了{noticeCount}條提醒，{pmCount}條私信，{bmCount}條公用訊息\n[公用訊息]{msg}',
+    foregroundChannelName: '後台訊息服務',
+    foregroundChannelDesc: '保持連線以接收論壇訊息',
+    foregroundTitle: '天使動漫',
+    foregroundContent: '正在後台保持連線...',
   ),
   // English
   'en': _NotificationStrings(
@@ -74,6 +98,10 @@ const Map<String, _NotificationStrings> _notificationStrings = {
     notice: 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[Notice]{msg}',
     pm: 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[PM]{user}: {msg}',
     bm: 'You received {noticeCount} notice, {pmCount} PMs, {bmCount} BMs\n[BM]{msg}',
+    foregroundChannelName: 'Background message service',
+    foregroundChannelDesc: 'Keep connected to receive forum messages',
+    foregroundTitle: 'TSDM',
+    foregroundContent: 'Keeping background connection...',
   ),
 };
 
@@ -83,6 +111,10 @@ const _NotificationStrings _defaultStrings = _NotificationStrings(
   notice: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[提醒]{msg}',
   pm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[私信]{user}：{msg}',
   bm: '收到了{noticeCount}条提醒，{pmCount}条私信，{bmCount}条公共消息\n[公共消息]{msg}',
+  foregroundChannelName: '后台消息服务',
+  foregroundChannelDesc: '保持连接以接收论坛消息',
+  foregroundTitle: '天使动漫',
+  foregroundContent: '正在后台保持连接...',
 );
 
 /// 根据 locale 选择通知文案，未知 locale 回退到简体中文。
@@ -173,13 +205,20 @@ Future<bool> isBackgroundServiceRunning() async {
 }
 
 /// 初始化后台服务配置。
+///
+/// 常驻通知的文案按 SharedPreferences 里的 `background_locale` 选择。
+/// 注意：Android 只在第一次创建通知渠道时使用渠道名和描述，
+/// 之后修改语言需要重启应用才会生效（渠道名已经在系统中注册）。
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
-  const channel = AndroidNotificationChannel(
+  final prefs = await SharedPreferences.getInstance();
+  final strings = _stringsForLocale(prefs.getString('background_locale'));
+
+  final channel = AndroidNotificationChannel(
     notificationChannelId,
-    '后台消息服务',
-    description: '保持连接以接收论坛消息',
+    strings.foregroundChannelName,
+    description: strings.foregroundChannelDesc,
     importance: Importance.low,
   );
 
@@ -195,8 +234,8 @@ Future<void> initializeBackgroundService() async {
       autoStart: false,
       isForegroundMode: true,
       notificationChannelId: notificationChannelId,
-      initialNotificationTitle: '天使动漫',
-      initialNotificationContent: '正在后台保持连接...',
+      initialNotificationTitle: strings.foregroundTitle,
+      initialNotificationContent: strings.foregroundContent,
       foregroundServiceNotificationId: notificationId,
       foregroundServiceTypes: [AndroidForegroundType.dataSync],
     ),
