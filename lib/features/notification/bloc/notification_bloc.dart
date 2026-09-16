@@ -29,8 +29,8 @@ const String _skipNextNotificationKey = 'background_notified_skip_next';
 /// 读 SharedPreferences 可能失败（比如单元测试环境没有初始化 binding），
 /// 此时返回 false，让前台照常推送。
 ///
-/// 注意这里用裸 `catch (_)` 而不是 `on Exception`：测试环境下 binding 未初始化
-/// 抛的是 `FlutterError`（继承自 `Error`，不是 `Exception`），只会被裸 catch 捕获。
+/// 用 `on Object catch` 而不是 `on Exception catch`：测试环境下 binding 未初始化
+/// 抛的是 `FlutterError`（继承自 `Error`），只会被 `on Object` 捕获。
 Future<bool> _consumeSkipNextNotificationFlag() async {
   try {
     final prefs = await SharedPreferences.getInstance();
@@ -39,7 +39,7 @@ Future<bool> _consumeSkipNextNotificationFlag() async {
       await prefs.setBool(_skipNextNotificationKey, false);
     }
     return skip;
-  } catch (_) {
+  } on Object catch (_) {
     return false;
   }
 }
