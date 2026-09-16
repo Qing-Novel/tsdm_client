@@ -145,8 +145,11 @@ Future<void> _boot(List<String> args) async {
 /// 把后台服务写进 SharedPreferences 的"上次拉取时间"同步给前台数据库。
 ///
 /// 后台在独立 isolate 里跑，写不了数据库，只能写 SharedPreferences。
-/// 前台启动时，如果 SharedPreferences 的时间戳更新，就把它写回数据库，
-/// 这样前台的自动同步就不会重复拉取后台已经拉过的消息。
+/// 前台启动时，如果 SharedPreferences 的时间戳更新，就把它写回数据库。
+///
+/// **注意 +60 秒**：后台拉取用的是 inclusive 边界（`since=bg`），前台也是
+/// inclusive，如果直接用 `bg` 做 since，前台会重复拉取 `bg` 那一分钟的消息，
+/// 再次弹出通知。加 60 秒跳到下一分钟起点，跳过后台已经通知过的这一分钟。
 Future<void> _syncBackgroundLastFetchTime() async {
   try {
     final prefs = await SharedPreferences.getInstance();
@@ -164,11 +167,15 @@ Future<void> _syncBackgroundLastFetchTime() async {
     DateTime? dbTime;
     dbTimeEither.match((_) => null, (t) => dbTime = t);
     final dbSec = dbTime == null ? 0 : dbTime!.millisecondsSinceEpoch ~/ 1000;
-    if (bgLastFetch > dbSec) {
+
+    final bgNextMinute = bgLastFetch + 60;
+    if (bgNextMinute > dbSec) {
       await storage
-          .updateLastFetchNoticeTime(uid, DateTime.fromMillisecondsSinceEpoch(bgLastFetch * 1000))
+          .updateLastFetchNoticeTime(uid, DateTime.fromMillisecondsSinceEpoch(bgNextMinute * 1000))
           .run();
-      talker.debug('sync background last fetch time to db: uid=$uid db=$dbSec bg=$bgLastFetch');
+      talker.debug(
+        'sync background last fetch time to db: uid=$uid db=$dbSec bg=$bgLastFetch next=$bgNextMinute',
+      );
     }
   } on Exception catch (e, st) {
     talker.handle(e, st, 'sync background last fetch time failed');
