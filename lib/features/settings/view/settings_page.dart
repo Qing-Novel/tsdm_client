@@ -411,7 +411,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       if (isAndroid) const AndroidPermissionTiles(),
       if (isAndroid)
         SectionSwitchListTile(
-          secondary: const Icon(MdiIcons.bellSleepOutline),
+          secondary: const Icon(MdiIcons.bellCheckOutline),
           title: Text(tr.backgroundMessageService.title),
           subtitle: Text(tr.backgroundMessageService.detail),
           value: _bgServiceEnabled,
