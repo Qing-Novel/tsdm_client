@@ -24,6 +24,23 @@ part 'notification_state.dart';
 /// SharedPreferences 标志：后台已经推送过通知，前台首次拉取时跳过重复推送。
 const String _skipNextNotificationKey = 'background_notified_skip_next';
 
+/// 检查并清掉"跳过下一次前台推送"标志。
+///
+/// 读 SharedPreferences 可能失败（比如单元测试环境没有初始化 binding），
+/// 此时返回 false，让前台照常推送。
+Future<bool> _consumeSkipNextNotificationFlag() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final skip = prefs.getBool(_skipNextNotificationKey) ?? false;
+    if (skip) {
+      await prefs.setBool(_skipNextNotificationKey, false);
+    }
+    return skip;
+  } on Exception catch (_) {
+    return false;
+  }
+}
+
 /// Read state of freshly [fetched] notices reconciled with the copies already [stored] for the same user.
 ///
 /// * A notice seen for the first time keeps the flag the server rendered. Discuz! X5 shows the unread marker only
@@ -370,10 +387,8 @@ class NotificationBloc extends Bloc<NotificationEvent, NotificationState> with L
     );
 
     // 如果后台服务已经推送过这条通知，跳过这次的前台推送。
-    final prefs = await SharedPreferences.getInstance();
-    final skipNext = prefs.getBool(_skipNextNotificationKey) ?? false;
+    final skipNext = await _consumeSkipNextNotificationFlag();
     if (skipNext) {
-      await prefs.setBool(_skipNextNotificationKey, false);
       debug('skip local notification: background already pushed it');
     } else if (fresh.personalMessageList.isNotEmpty) {
       _infoRepository.updateAutoSyncInfo(
