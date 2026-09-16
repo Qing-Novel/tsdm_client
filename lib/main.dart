@@ -117,7 +117,8 @@ Future<void> _boot(List<String> args) async {
   }
 
   if (isAndroid) {
-    // 把后台服务写的时间戳同步给前台数据库，避免前台重复拉取后台已经拉过的消息。
+    // 把后台服务写的时间戳同步给前台数据库，同时回看几分钟，
+    // 把后台拉过但没写进数据库的消息补上（消息中心才能看到它们）。
     await _syncBackgroundLastFetchTime();
     await initializeBackgroundService();
     if (await isBackgroundServiceEnabled()) {
@@ -144,10 +145,12 @@ Future<void> _boot(List<String> args) async {
 
 /// 把后台服务写进 SharedPreferences 的"上次拉取时间"同步给前台数据库。
 ///
-/// 后台在独立 isolate 里跑，写不了数据库，只能写 SharedPreferences。
-/// 前台启动时，如果 SharedPreferences 的时间戳更新，就把它写回数据库，
-/// 这样前台的自动同步能从后台已经拉到的那条消息开始拉，把消息存进数据库
-/// （消息中心能看到它），同时不会重复弹通知（后台已经推过了）。
+/// 后台在独立 isolate 里跑，写不了数据库，只能写 SharedPreferences，
+/// 因此后台拉取到的新消息只推通知、不落库，消息中心看不到它们。
+///
+/// 这里在同步时间戳时**回看 5 分钟**：让前台从 `bg - 5min` 开始重新拉一遍，
+/// 把后台刚拉过的消息写进数据库。前台推送时已有 `skip_next` 标志，
+/// 后台已经推过的通知不会再推一次。
 Future<void> _syncBackgroundLastFetchTime() async {
   try {
     final prefs = await SharedPreferences.getInstance();
@@ -166,11 +169,11 @@ Future<void> _syncBackgroundLastFetchTime() async {
     dbTimeEither.match((_) => null, (t) => dbTime = t);
     final dbSec = dbTime == null ? 0 : dbTime!.millisecondsSinceEpoch ~/ 1000;
 
-    if (bgLastFetch > dbSec) {
-      await storage
-          .updateLastFetchNoticeTime(uid, DateTime.fromMillisecondsSinceEpoch(bgLastFetch * 1000))
-          .run();
-      talker.debug('sync background last fetch time to db: uid=$uid db=$dbSec bg=$bgLastFetch');
+    const lookbackSeconds = 5 * 60;
+    final since = bgLastFetch - lookbackSeconds;
+    if (since > dbSec) {
+      await storage.updateLastFetchNoticeTime(uid, DateTime.fromMillisecondsSinceEpoch(since * 1000)).run();
+      talker.debug('sync background last fetch time to db: uid=$uid db=$dbSec bg=$bgLastFetch since=$since');
     }
   } on Exception catch (e, st) {
     talker.handle(e, st, 'sync background last fetch time failed');
