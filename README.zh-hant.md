@@ -78,6 +78,7 @@ Linux 版需要系統已安裝 `libayatana-appindicator3-1`（Debian／Ubuntu �
 - Windows：自動同步到新提醒或私訊時彈出系統通知並播放提示音；點通知會還原視窗並開到訊息中心
 - 自動抓取的時間界線以論壇時鐘為準，裝置時鐘不準也不會漏掉提醒與私訊
 - 提醒的未讀狀態按裝置記錄：同一帳號在另一台裝置上抓取過的提醒，在本機第一次出現時仍標為未讀，直到在本機查看或一鍵標為已讀
+- Android：可選的「後台訊息接收」：以前台服務常駐，App 退到後台或被清掉時仍按自動同步的間隔檢查新訊息並發出通知，與 App 內同步共用資料庫不重複推播
 - 淺色／深色主題，字級縮放，日誌頁跟隨主題
 
 ### 平台
@@ -111,3 +112,11 @@ Linux 建置需要 `libgtk-3-dev`、`libsqlite3-dev` 與 `libayatana-appindicato
 ## 授權
 
 MIT。原作品 Copyright (c) 2023 realth000；修改部分 (C) 2026 Carinoasd。詳見 [LICENSE](./LICENSE)。
+
+## 支持開發
+
+本專案免費開源，歡迎自願贊助，支持客戶端的開發與維護。贊助由維護者 Carinoasd 個人收取，非論壇官方募款；是否贊助不影響功能使用。
+
+使用支付寶掃描下方 QR Code 即可贊助，點擊圖片可查看原圖。
+
+<a href="./doc/pic/alipay-donation.jpg"><img src="./doc/pic/alipay-donation.jpg" width="300" alt="支付寶自願贊助 QR Code，收款人為維護者 Carinoasd"></a>

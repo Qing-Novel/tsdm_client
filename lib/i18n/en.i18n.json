@@ -219,6 +219,10 @@
         "title": "Auto sync notice",
         "detail": "Duration of auto sync notice from server"
       },
+      "backgroundMessageService": {
+        "title": "Background Message Service",
+        "detail": "Keeps checking for new notices and private messages at the auto sync interval and notifies you while the app is in the background or was cleared; uses some more battery (Android only)"
+      },
       "notificationPermission": {
         "title": "Notification permission",
         "detail": "Required by auto sync to show new notices, messages and broadcasts as system notifications",
@@ -383,6 +387,14 @@
     }
   },
   "aboutPage": {
+    "supportDevelopment": "Support development",
+    "supportDevelopmentSubtitle": "Voluntary donations to maintainer Carinoasd",
+    "donationDescription": "This project is free and open source. Donations support the development and maintenance of the client and are received personally by Carinoasd. This is not an official forum fundraiser. All features remain available whether or not you donate.",
+    "donationInstructions": "Scan with Alipay, or take a screenshot and select it from the Alipay scanner. You can also save the original image.",
+    "donationCodeLabel": "Alipay QR code for voluntary donations to Carinoasd",
+    "saveDonationCode": "Save QR code",
+    "donationCodeSaved": "QR code saved.",
+    "donationCodeSaveFailed": "Could not save the QR code. Please try again or take a screenshot.",
     "title": "About",
     "whatIsThis": "What's This",
     "description": "Official cross-platform client for TSDM forum",
@@ -1245,6 +1257,13 @@
         "bm": "You received ${noticeCount: int} notice, ${pmCount: int} PMs, ${bmCount: int} BMs\n[BM]${msg: String}"
       }
     }
+  },
+  "backgroundService": {
+    "channelName": "Background message service",
+    "channelDesc": "Persistent notification: the app checks for new messages at the auto sync interval while in the background",
+    "title": "TSDM",
+    "content": "Receiving forum messages in the background",
+    "startFailed": "The background message service could not start; check the notification permission and battery optimisation settings"
   },
   "debugLogPage": {
     "title": "Log",

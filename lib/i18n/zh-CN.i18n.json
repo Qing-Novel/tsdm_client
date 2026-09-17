@@ -219,6 +219,10 @@
         "title": "自动同步消息",
         "detail": "每隔一段时间，自动从服务器同步消息和提醒"
       },
+      "backgroundMessageService": {
+        "title": "后台消息接收",
+        "detail": "开启后 App 退到后台或被清掉时，仍按「自动同步消息」的间隔检查新提醒与私信并发出通知；会多耗一些电（仅安卓）"
+      },
       "notificationPermission": {
         "title": "通知权限",
         "detail": "自动同步需要此权限才能把新提醒、消息和公共消息显示为系统通知",
@@ -383,6 +387,14 @@
     }
   },
   "aboutPage": {
+    "supportDevelopment": "支持开发",
+    "supportDevelopmentSubtitle": "自愿赞助维护者 Carinoasd",
+    "donationDescription": "本项目免费开源，欢迎自愿赞助，支持客户端的开发与维护。赞助由维护者 Carinoasd 个人收取，非论坛官方募款；是否赞助不影响功能使用。",
+    "donationInstructions": "使用支付宝扫码，或截图后在支付宝扫一扫中选择图片。也可以保存原图。",
+    "donationCodeLabel": "支付宝自愿赞助二维码，收款人为 Carinoasd",
+    "saveDonationCode": "保存赞助码",
+    "donationCodeSaved": "赞助码已保存。",
+    "donationCodeSaveFailed": "无法保存赞助码，请重试或使用截图。",
     "title": "关于",
     "whatIsThis": "这是？",
     "description": "天使动漫论坛官方跨平台客户端",
@@ -1245,6 +1257,13 @@
         "bm": "收到了${noticeCount: int}条提醒，${pmCount: int}条私信，${bmCount: int}条公共消息\n[公共消息]${msg: String}"
       }
     }
+  },
+  "backgroundService": {
+    "channelName": "后台消息服务",
+    "channelDesc": "常驻通知：App 在后台按自动同步的间隔检查新消息",
+    "title": "天使动漫",
+    "content": "正在后台接收论坛消息",
+    "startFailed": "后台消息服务启动失败，请检查通知权限与电池优化设置"
   },
   "debugLogPage": {
     "title": "日志",
