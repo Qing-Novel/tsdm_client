@@ -70,7 +70,8 @@ jobs:
 
   build-linux:
     name: Build Linux
-    if: ${{ github.event_name == 'pull_request' || inputs.build_linux }}
+    # 加上 always() 防止 create-release 被跳过时导致此 job 被跳过
+    if: ${{ always() && (github.event_name == 'pull_request' || inputs.build_linux) }}
     runs-on: ubuntu-latest
     needs: [create-release]
     permissions:
@@ -87,25 +88,23 @@ jobs:
         with:
           flutter-version: ${{env.CI_FLUTTER_VERSION}}
           cache: true
+      # ✅ 修复点：补全 libayatana-appindicator3-dev
       - run: |
           sudo apt update -y
-          sudo apt install -y ninja-build libgtk-3-dev sqlite3 libsqlite3-dev
+          sudo apt install -y ninja-build libgtk-3-dev sqlite3 libsqlite3-dev libayatana-appindicator3-dev
       - name: Precompile
         run: |
           git submodule update --init --recursive --force
           flutter pub get
           dart ./Makefile.dart
       - name: Build Linux
-        if: ${{ github.event_name == 'pull_request' || inputs.build_linux }}
         run: flutter build linux --release
       - name: Pre Packing
-        if: ${{ github.event_name == 'pull_request' || inputs.build_linux }}
         run: |
           pushd build/linux/x64/release/
           mv bundle tsdm_client
           popd
       - name: Pack Linux tarball
-        if: ${{ github.event_name == 'pull_request' || inputs.build_linux }}
         uses: thedoctor0/zip-release@master
         with:
           type: "tar"
@@ -131,7 +130,7 @@ jobs:
 
   build-android:
     name: Build Android
-    if: ${{ github.event_name == 'pull_request' || inputs.build_android }}
+    if: ${{ always() && (github.event_name == 'pull_request' || inputs.build_android) }}
     runs-on: ubuntu-latest
     needs: [create-release]
     permissions:
@@ -148,10 +147,11 @@ jobs:
         with:
           flutter-version: ${{env.CI_FLUTTER_VERSION}}
           cache: true
+      # ✅ 修复点：补全 libayatana-appindicator3-dev
       - run: |
           sudo ./scripts/github_free_disk_space.sh
           sudo apt update -y
-          sudo apt install -y ninja-build libgtk-3-dev
+          sudo apt install -y ninja-build libgtk-3-dev libayatana-appindicator3-dev
           git submodule update --init --recursive --force
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -179,16 +179,13 @@ jobs:
           flutter pub get
           dart ./Makefile.dart
       - name: Setup Android sign key
-        if: ${{ github.event_name == 'pull_request' || inputs.build_android }}
         run: |
           echo '${{ secrets.KEYSTORE }}' | base64 --decode > android/app/key.jks
           echo '${{ secrets.KEY_PROPERTIES }}' > android/key.properties
       - name: Build Android
-        if: ${{ github.event_name == 'pull_request' || inputs.build_android }}
         run: |
           flutter build apk --release
       - name: Pack Android apk
-        if: ${{ github.event_name == 'pull_request' || inputs.build_android }}
         run: |
           pushd build/app/outputs/flutter-apk/
           mv app-arm64-v8a-release.apk tsdm_client-arm64_v8a.apk
@@ -217,7 +214,7 @@ jobs:
 
   build-windows:
     name: Build Windows
-    if: ${{ github.event_name == 'pull_request' || inputs.build_windows }}
+    if: ${{ always() && (github.event_name == 'pull_request' || inputs.build_windows) }}
     runs-on: windows-latest
     needs: [create-release]
     permissions:
@@ -269,7 +266,7 @@ jobs:
 
   build-macos-and-ios:
     name: Build MacOS and iOS
-    if: ${{ github.event_name == 'pull_request' || inputs.build_macos || inputs.build_ios }}
+    if: ${{ always() && (github.event_name == 'pull_request' || inputs.build_macos || inputs.build_ios) }}
     runs-on: macos-latest
     needs: [create-release]
     permissions:
