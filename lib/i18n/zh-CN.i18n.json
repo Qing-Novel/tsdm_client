@@ -262,6 +262,10 @@
       "autoCheckin": {
         "title": "自动签到",
         "detail": "应用启动时自动为所有用户签到"
+      },
+      "autoDailyRedPacket": {
+        "title": "自动领取每日红包",
+        "detail": "打开应用或刷新首页时，为当前账号领取每日红包，与自动签到分开设置"
       }
     },
     "storageSection": {
@@ -624,7 +628,9 @@
     "title": "通知",
     "appBar": {
       "unread": "未读",
-      "unreadDetail": "只显示未读"
+      "unreadDetail": "只显示未读",
+      "backToHome": "回到首页",
+      "backToHomeStopped": "已停在可能有未保存内容的页面"
     },
     "noticeTab": {
       "title": "提醒",
@@ -747,6 +753,25 @@
       "group": "分组",
       "send": "发送请求",
       "failed": "好友请求发送失败"
+    },
+    "approveFriend": {
+      "title": "批准好友请求",
+      "loading": "正在加载好友请求…",
+      "content": "批准 ${name} 的好友请求，并分组：",
+      "group": "分组",
+      "approve": "批准",
+      "submitting": "正在批准…",
+      "approved": "已批准好友请求",
+      "busy": "这个好友请求正在处理中",
+      "refused": "论坛拒绝了这次批准",
+      "failure": {
+        "network": "无法加载好友请求，请检查网络后重试",
+        "notLoggedIn": "请先登录再批准好友请求",
+        "accountMismatch": "当前账号已切换，原账号的操作已停止，请到原账号的提醒中确认结果",
+        "challenge": "网站要求浏览器验证，请在浏览器中打开这条提醒",
+        "unknownForm": "论坛返回的不是可识别的批准表单，未发送任何内容",
+        "unknownAfterSubmit": "已发送批准，但无法识别论坛的回应，请到好友列表确认"
+      }
     }
   },
   "redPacket": {
@@ -1222,7 +1247,11 @@
       "detail": "查看指定帖子楼层。可在楼层的分享链接中找到pid",
       "invalidPid": "无效的pid"
     },
-    "open": "打开"
+    "open": "打开",
+    "openInBrowser": "在浏览器中打开",
+    "browserHint": "应用内无法打开的链接，仍可在浏览器中打开",
+    "invalidBrowserLink": "请输入以 http:// 或 https:// 开头的网页链接",
+    "browserLaunchFailed": "无法在浏览器中打开此链接"
   },
   "globalStatePage": {
     "autoCheckinRunning": "正在自动签到",

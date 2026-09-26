@@ -262,6 +262,10 @@
       "autoCheckin": {
         "title": "自動簽到",
         "detail": "應用程式啟動時會自動為所有使用者簽到"
+      },
+      "autoDailyRedPacket": {
+        "title": "自動領取每日紅包",
+        "detail": "開啟應用程式或重新整理首頁時，為目前帳號領取每日紅包，與自動簽到分開設定"
       }
     },
     "storageSection": {
@@ -624,7 +628,9 @@
     "title": "通知",
     "appBar": {
       "unread": "未讀",
-      "unreadDetail": "只顯示未讀"
+      "unreadDetail": "只顯示未讀",
+      "backToHome": "回到首頁",
+      "backToHomeStopped": "已停在可能有未儲存內容的頁面"
     },
     "noticeTab": {
       "title": "提醒",
@@ -747,6 +753,25 @@
       "group": "分組",
       "send": "送出請求",
       "failed": "好友請求送出失敗"
+    },
+    "approveFriend": {
+      "title": "批准好友請求",
+      "loading": "正在載入好友請求…",
+      "content": "批准 ${name} 的好友請求，並分組：",
+      "group": "分組",
+      "approve": "批准",
+      "submitting": "正在批准…",
+      "approved": "已批准好友請求",
+      "busy": "這個好友請求正在處理中",
+      "refused": "論壇拒絕了這次批准",
+      "failure": {
+        "network": "無法載入好友請求，請檢查網路後重試",
+        "notLoggedIn": "請先登入再批准好友請求",
+        "accountMismatch": "目前帳號已切換，原帳號的操作已停止，請到原帳號的提醒中確認結果",
+        "challenge": "網站要求瀏覽器驗證，請在瀏覽器中開啟這則提醒",
+        "unknownForm": "論壇回傳的不是可識別的批准表單，未送出任何內容",
+        "unknownAfterSubmit": "已送出批准，但無法識別論壇的回應，請到好友列表確認"
+      }
     }
   },
   "redPacket": {
@@ -1222,7 +1247,11 @@
       "detail": "查看指定貼文樓層。可在樓層的分享連結中找到pid",
       "invalidPid": "無效的pid"
     },
-    "open": "開啟"
+    "open": "開啟",
+    "openInBrowser": "在瀏覽器中開啟",
+    "browserHint": "應用程式內無法開啟的連結，仍可在瀏覽器中開啟",
+    "invalidBrowserLink": "請輸入以 http:// 或 https:// 開頭的網頁連結",
+    "browserLaunchFailed": "無法在瀏覽器中開啟此連結"
   },
   "globalStatePage": {
     "autoCheckinRunning": "正在自動簽到",

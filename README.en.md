@@ -16,6 +16,14 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/Carinoasd/tsdm_client" alt="license"/></a>
 </p>
 
+## Latest update: 1.28.3 (2026-09-26)
+
+- Reuses notification pages after repeated system notification taps and adds a Back to home button, preserving unsent replies and editing pages.
+- Adds an independent daily red-packet claim option (off by default) and restores the request used for daily login rewards. Reward eligibility and amounts are determined by the forum.
+- Android build number 94 supports upgrading directly from the previous release.
+
+[Download 1.28.3](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.28.3) · [Full changelog](./CHANGELOG.md)
+
 ## What it is
 
 A cross-platform client for the [天使动漫 forum](https://www.tsdm39.com/). When the forum moved to Discuz! X5 in 2026 the original client could no longer parse its pages; this project took over maintenance at the forum's request, adapted the app to the X5 page structure and keeps adding features. It is the client version recognised by the forum as official.
@@ -71,7 +79,7 @@ The package name is `com.tsdm.tsdm_client`, signed with the forum's official key
 - Delete several accounts at once, or remove the current account from this device without a network connection
 - Backup export/import, optionally encrypting the login data with a password so other devices need no re-login
 - Friend list and friend requests; red packets, including the daily one
-- "My achievements" and "Medal centre" on your profile page: read achievements, browse medal categories and pages with their conditions; buying, applying and claiming rewards stay on the website
+- "My achievements" and "Medal centre" on your profile page: read achievements, browse medal categories and conditions, and use the medal purchase, application and claim actions offered by the forum; open unsupported features in the browser
 
 ### Notifications and settings
 - Foreground/background polling for new messages with system notifications; a cold start from a notification goes straight to the message centre

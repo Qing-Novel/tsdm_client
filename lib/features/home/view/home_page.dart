@@ -1,13 +1,11 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:go_router/go_router.dart';
 import 'package:responsive_framework/responsive_framework.dart';
 import 'package:tsdm_client/constants/layout.dart';
-import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
 import 'package:tsdm_client/features/home/cubit/home_cubit.dart';
 import 'package:tsdm_client/features/home/cubit/init_cubit.dart';
@@ -17,15 +15,10 @@ import 'package:tsdm_client/features/local_notice/keys.dart';
 import 'package:tsdm_client/features/local_notice/stream.dart';
 import 'package:tsdm_client/features/local_notice/tap.dart';
 import 'package:tsdm_client/features/root/bloc/root_location_cubit.dart';
-import 'package:tsdm_client/features/root/view/root_page.dart';
-import 'package:tsdm_client/features/update/cubit/update_cubit.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/routes/app_routes.dart';
-import 'package:tsdm_client/routes/screen_paths.dart';
-import 'package:tsdm_client/utils/git_info.dart';
+import 'package:tsdm_client/routes/page_stack.dart';
 import 'package:tsdm_client/utils/logger.dart';
-import 'package:tsdm_client/utils/show_toast.dart';
-import 'package:tsdm_client/widgets/custom_alert_dialog.dart';
 import 'package:tsdm_client/widgets/indicator.dart';
 
 const _drawerWidth = 250.0;
@@ -53,30 +46,48 @@ class _HomePageState extends State<HomePage> with LoggerMixin {
   /// Location stream subscription.
   late final StreamSubscription<String?> rootLocationSub;
 
-  Future<void> _onLocalNoticeStreamEvent(String? payload) async {
+  /// Selected home tab, owned here so it can follow the router ([_syncTabWithRouter]).
+  final _homeCubit = HomeCubit();
+
+  /// Router whose changes [_syncTabWithRouter] listens to.
+  GoRouter? _router;
+
+  /// Select the tab of the home shell page on top, when one is.
+  ///
+  /// The navigation bar only changed the tab when tapped itself; the home button on the notification pages switches
+  /// the branch through the router and the bar has to follow (GitHub #117).
+  void _syncTabWithRouter() {
+    final router = _router;
+    if (router == null || !mounted) {
+      return;
+    }
+    // The navigation bar rebuilds on the new tab: not while a frame is being built.
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) => _syncTabWithRouter());
+      return;
+    }
+    final tab = homeTabOfLocation(routerTopLocation(router));
+    if (tab != null && tab != _homeCubit.state.tab) {
+      _homeCubit.setTab(tab);
+    }
+  }
+
+  void _onLocalNoticeStreamEvent(String? payload) {
     switch (payload) {
       case LocalNoticeKeys.openNotification:
         // Ask the router which page is really on top instead of the location stack, which drifted and refused taps
         // on the homepage as "already in the notice page" (#14). Both answers stay in the log for the next report.
-        final top = routerTopLocation(GoRouter.of(context));
-        final action = decideLocalNoticeTap(
+        // A notice page already open under the pages on top is shown again instead of pushing another one (#117).
+        final (:top, :action) = openNoticePageForTap(
+          GoRouter.of(context),
           // The stored session counts: when a notification cold-starts the app the home page has its first frame
           // before the homepage fetch verified the login, and `currentUser` is still null at that point (#14).
           loggedIn: context.read<AuthenticationRepository>().effectiveCurrentUid != null,
-          topLocation: top,
+          hasPopup: popupRouteObserver.hasPopupRoute,
         );
         info(
           'notification tap: action=${action.name} top=$top location=${context.read<RootLocationCubit>().currentPath}',
         );
-        switch (action) {
-          case LocalNoticeTapAction.needLogin:
-            debug('refuse to push to unavailable notification page: need login');
-          case LocalNoticeTapAction.alreadyOnNoticePage:
-            debug('do not push to notice page already in it');
-          case LocalNoticeTapAction.openNoticePage:
-            debug('push to notice page');
-            await context.pushNamed(ScreenPaths.notice);
-        }
       default:
         warning('ignore local notification with unknown payload: $payload');
     }
@@ -134,7 +145,19 @@ class _HomePageState extends State<HomePage> with LoggerMixin {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final router = GoRouter.maybeOf(context);
+    if (!identical(router, _router)) {
+      _router?.routerDelegate.removeListener(_syncTabWithRouter);
+      _router = router?..routerDelegate.addListener(_syncTabWithRouter);
+    }
+  }
+
+  @override
   void dispose() {
+    _router?.routerDelegate.removeListener(_syncTabWithRouter);
+    unawaited(_homeCubit.close());
     unawaited(rootLocationSub.cancel());
     super.dispose();
   }
@@ -144,101 +167,31 @@ class _HomePageState extends State<HomePage> with LoggerMixin {
     Translations.of(context);
 
     return MultiBlocProvider(
-      providers: [BlocProvider(create: (_) => HomeCubit())],
-      child: MultiBlocListener(
-        listeners: [
-          BlocListener<UpdateCubit, UpdateCubitState>(
-            listenWhen: (prev, curr) => !curr.loading && prev.loading,
-            listener: (context, state) async {
-              final info = state.latestVersionInfo;
-              final tr = context.t.updatePage;
-              if (info == null) {
-                error('failed to check update state');
-                if (state.notice) {
-                  showSnackBar(context: context, message: tr.failed);
-                }
-                return;
-              }
+      providers: [BlocProvider.value(value: _homeCubit)],
+      child: BlocBuilder<InitCubit, InitState>(
+        builder: (context, state) {
+          if (state.clearingOutdatedImageCache) {
+            return const CenteredCircularIndicator();
+          }
 
-              final inUpdatePage = context.read<RootLocationCubit>().isIn(ScreenPaths.update);
-
-              if (info.versionCode <= appVersion.split('+').last.parseToInt()!) {
-                // Only show the already latest message in update page.
-                if (inUpdatePage) {
-                  showSnackBar(context: context, message: tr.alreadyLatest);
-                }
-              } else {
-                final gotoUpdatePage = await showDialog<bool>(
-                  context: context,
-                  builder: (context) {
-                    final size = MediaQuery.sizeOf(context);
-                    return RootPage(
-                      DialogPaths.updateNotice,
-                      CustomAlertDialog.sync(
-                        title: Text(tr.availableDialog.title),
-                        content: SizedBox(
-                          width: math.min(size.width * 0.8, 800),
-                          height: math.min(size.height * 0.6, 600),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                tr.availableDialog.version(version: info.version),
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.labelMedium?.copyWith(color: Theme.of(context).colorScheme.primary),
-                              ),
-                              sizedBoxW8H8,
-                              Expanded(child: Markdown(data: info.changelog)),
-                            ],
-                          ),
-                        ),
-                        actions: [
-                          TextButton(
-                            child: Text(context.t.general.cancel),
-                            onPressed: () => context.pop(false),
-                          ),
-                          TextButton(
-                            child: Text(context.t.settingsPage.othersSection.update),
-                            onPressed: () => context.pop(true),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-                if (true == gotoUpdatePage && context.mounted && !inUpdatePage) {
-                  await router.pushNamed(ScreenPaths.update);
-                }
-              }
-            },
-          ),
-        ],
-        child: BlocBuilder<InitCubit, InitState>(
-          builder: (context, state) {
-            if (state.clearingOutdatedImageCache) {
-              return const CenteredCircularIndicator();
-            }
-
-            if (ResponsiveBreakpoints.of(context).largerThan(WindowSize.expanded.name)) {
-              return _buildDrawerBody(context);
-            } else if (ResponsiveBreakpoints.of(context).largerThan(WindowSize.compact.name)) {
-              return Scaffold(
-                body: Row(
-                  children: [
-                    if (widget.showNavigationBar) const HomeNavigationRail(),
-                    Expanded(child: widget.child),
-                  ],
-                ),
-              );
-            } else {
-              return Scaffold(
-                body: widget.child,
-                bottomNavigationBar: widget.showNavigationBar ? const HomeNavigationBar() : null,
-              );
-            }
-          },
-        ),
+          if (ResponsiveBreakpoints.of(context).largerThan(WindowSize.expanded.name)) {
+            return _buildDrawerBody(context);
+          } else if (ResponsiveBreakpoints.of(context).largerThan(WindowSize.compact.name)) {
+            return Scaffold(
+              body: Row(
+                children: [
+                  if (widget.showNavigationBar) const HomeNavigationRail(),
+                  Expanded(child: widget.child),
+                ],
+              ),
+            );
+          } else {
+            return Scaffold(
+              body: widget.child,
+              bottomNavigationBar: widget.showNavigationBar ? const HomeNavigationBar() : null,
+            );
+          }
+        },
       ),
     );
   }

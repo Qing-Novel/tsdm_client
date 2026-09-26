@@ -262,6 +262,10 @@
       "autoCheckin": {
         "title": "Automatic checkin",
         "detail": "Automatically checkin for all accounts when app startup"
+      },
+      "autoDailyRedPacket": {
+        "title": "Automatically claim daily red packet",
+        "detail": "Claim for the current account when opening the app or refreshing the homepage, independently of automatic checkin"
       }
     },
     "storageSection": {
@@ -624,7 +628,9 @@
     "title": "Notifications",
     "appBar": {
       "unread": "unread",
-      "unreadDetail": "Only show unread"
+      "unreadDetail": "Only show unread",
+      "backToHome": "Back to home",
+      "backToHomeStopped": "Stopped at a page that may hold unsaved input"
     },
     "noticeTab": {
       "title": "Notice",
@@ -747,6 +753,25 @@
       "group": "Group",
       "send": "Send request",
       "failed": "The friend request could not be sent"
+    },
+    "approveFriend": {
+      "title": "Approve friend request",
+      "loading": "Loading the friend request…",
+      "content": "Approve the friend request of ${name} and file the new friend under:",
+      "group": "Group",
+      "approve": "Approve",
+      "submitting": "Approving…",
+      "approved": "Friend request approved",
+      "busy": "This friend request is already being handled",
+      "refused": "The forum refused the approval",
+      "failure": {
+        "network": "The friend request could not be loaded, check the network and try again",
+        "notLoggedIn": "Log in to approve friend requests",
+        "accountMismatch": "The current account changed, nothing more was done for the previous account. Check its notices for the result",
+        "challenge": "The site asked for a browser check, open the notice in the browser",
+        "unknownForm": "The forum did not answer with a known approval form, nothing was sent",
+        "unknownAfterSubmit": "The approval was sent but the answer was not understood, check your friends list"
+      }
     }
   },
   "redPacket": {
@@ -1222,7 +1247,11 @@
       "detail": "Find specified post. Pid can be found in share link of each floor",
       "invalidPid": "Invalid pid"
     },
-    "open": "Open"
+    "open": "Open",
+    "openInBrowser": "Open in browser",
+    "browserHint": "Links the app can not open here can still be opened in the browser",
+    "invalidBrowserLink": "Enter a web link starting with http:// or https://",
+    "browserLaunchFailed": "Could not open the link in the browser"
   },
   "globalStatePage": {
     "autoCheckinRunning": "Running auto checkin...",
