@@ -7,6 +7,9 @@ import 'package:fpdart/fpdart.dart';
 import 'package:http/http.dart' as http;
 import 'package:tsdm_client/instance.dart';
 
+/// Internal Dio metadata; never transmitted in an HTTP header or form body.
+const singleAttemptHttpRequestKey = 'tsdm_single_attempt';
+
 /// The method channel for [KotlinHttpClient].
 abstract class _AndroidHttpMethodChannel {
   static const _httpChannel = MethodChannel('kzs.th000.tsdm_client/httpChannel');
@@ -14,6 +17,7 @@ abstract class _AndroidHttpMethodChannel {
   static const _methodGet = 'get';
   static const _methodPost = 'postForm';
   static const _methodPostMultipart = 'postMultipart';
+  static const _methodPostJson = 'postJson';
 
   /// Make a GET request.
   static Future<_KotlinHttpResponse?> _get({required String url, required Map<String, String> headers}) async {
@@ -34,12 +38,14 @@ abstract class _AndroidHttpMethodChannel {
     required String url,
     required Map<String, String> headers,
     required Map<String, String> body,
+    bool singleAttempt = false,
   }) async {
     try {
       final resp = await _httpChannel.invokeMethod<Map<Object?, Object?>>(_methodPost, {
         'url': url,
         'headers': headers,
         'body': body,
+        'singleAttempt': singleAttempt,
       });
       if (resp == null) {
         return null;
@@ -69,6 +75,30 @@ abstract class _AndroidHttpMethodChannel {
       return _KotlinHttpResponse._fromRawResp(resp);
     } on PlatformException catch (e, st) {
       talker.handle(e, st, '[KtHttp] POST multipart failed on $url');
+      return null;
+    }
+  }
+
+  /// Post a raw JSON body.
+  static Future<_KotlinHttpResponse?> _postJson({
+    required String url,
+    required Map<String, String> headers,
+    required String body,
+    required bool singleAttempt,
+  }) async {
+    try {
+      final resp = await _httpChannel.invokeMethod<Map<Object?, Object?>>(_methodPostJson, {
+        'url': url,
+        'headers': headers,
+        'body': body,
+        'singleAttempt': singleAttempt,
+      });
+      if (resp == null) {
+        return null;
+      }
+      return _KotlinHttpResponse._fromRawResp(resp);
+    } on PlatformException catch (e, st) {
+      talker.handle(e, st, '[KtHttp] POST json failed on $url');
       return null;
     }
   }
@@ -135,7 +165,12 @@ final class KotlinHttpClient {
     return rawResp;
   }
 
-  Future<_KotlinHttpResponse> _post(Uri url, {Map<String, String>? headers, Object? body}) async {
+  Future<_KotlinHttpResponse> _post(
+    Uri url, {
+    Map<String, String>? headers,
+    Object? body,
+    bool singleAttempt = false,
+  }) async {
     if (!Platform.isAndroid) {
       throw http.ClientException('Only available on Android');
     }
@@ -144,16 +179,30 @@ final class KotlinHttpClient {
       throw http.ClientException('post body is null');
     }
 
-    final rawResp = switch (headers?[HttpHeaders.contentTypeHeader]?.split(';').firstOrNull ?? '') {
+    final contentType = headers?[HttpHeaders.contentTypeHeader]?.split(';').firstOrNull ?? '';
+    if (singleAttempt &&
+        contentType != 'application/x-www-form-urlencoded' &&
+        contentType != 'application/json') {
+      throw UnsupportedError('Single-attempt requests require a URL-encoded form or a JSON body');
+    }
+
+    final rawResp = switch (contentType) {
       'application/x-www-form-urlencoded' => await _AndroidHttpMethodChannel._postForm(
         url: url.toString(),
         headers: headers ?? {},
         body: body as Map<String, String>,
+        singleAttempt: singleAttempt,
       ),
       'multipart/form-data' => await _AndroidHttpMethodChannel._postMultipart(
         url: url.toString(),
         headers: headers ?? {},
         body: body as Map<String, String>,
+      ),
+      'application/json' => await _AndroidHttpMethodChannel._postJson(
+        url: url.toString(),
+        headers: headers ?? {},
+        body: body as String,
+        singleAttempt: singleAttempt,
       ),
       final v => throw UnsupportedError('unsupported content type: $v'),
     };
@@ -194,6 +243,7 @@ class KotlinHttpClientAdapter implements HttpClientAdapter {
         headers: Map.from(options.headers.filter((v) => v is String))
           ..removeWhere((k, v) => k.toLowerCase() == HttpHeaders.acceptEncodingHeader),
         body: options.data,
+        singleAttempt: options.extra[singleAttemptHttpRequestKey] == true,
       ),
       final v => throw UnsupportedError('unsupported http method $v'),
     };

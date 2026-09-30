@@ -371,7 +371,7 @@ release 版大小：universal 60MB／arm64 30MB（debug 142MB／106MB）。
 - **套件名** `com.tsdm.tsdm_client`（iOS `com.tsdm.tsdmClient`）。上游 `kzs.th000.tsdm_client` 由原作者金鑰簽章，拿不到金鑰就無法就地升級，因此改名讓新舊版並存，使用者以 v22 的加密備份搬帳號。Android `namespace`／Kotlin 套件路徑與 MethodChannel 名稱維持 `kzs.th000.tsdm_client`：它們只是程式內部識別，改了沒有好處。
 - **簽章**：論壇官方金鑰（見 doc/release-signing-proposal.md 頂部）。debug 金鑰的測試版（v20–v22.3）與本版套件名不同，測試者需先匯出、裝新版、匯入、再移除測試版。
 - **檢查更新**：上游 `UpdateCubit` 讀的是原作者論壇帖（`ptid=1233425&pid=75311834`）裡的 JSON，官方版無法維護那篇帖子。改為讀取本倉庫 `version.json`（`upgradeVersionInfoUrl`），格式與 `LatestVersionInfo` 相同；`scripts/write_version_json.dart` 從 pubspec 與 CHANGELOG 對應版本段產生，`test_042` 保證檔案與 pubspec 一致。解析函式 `parseLatestVersionInfo` 接受字串／已解碼 Map／位元組，其他一律 `FormatException`，被 Cloudflare 擋下回傳 HTML 時只會顯示「檢查失敗」而不會崩潰。
-- **更新頁**：F-Droid 提示改為說明正式版來源；「公告帖」連結維持上游 tid=628244，待官方公告帖建立後再改。
+- **更新頁**：F-Droid 提示改為說明正式版來源；「公告帖」連結原本沿用上游 tid=628244，2026-09-26 改為論壇官方公告帖 tid=1265238。
 
 
 ## 12. 收藏版塊（GitHub #1、#2，2026-09-09）
@@ -1220,3 +1220,104 @@ B. 論壇提醒屏蔽規則
   舊版形狀仍由 `test_084` 覆蓋。
 - 尚未實機驗證：實際購買／申請成功的線上寫入（測試帳號條件不足，僅實測了拒絕路徑）；簽到領取（6）
   目前線上沒有此類勳章，僅按協定支援。
+
+## 38. 銀行（2026-09-26）
+
+- 個人資料頁新增「銀行」，只顯示於自己的資料頁。沿用論壇 `bank_ane:bank` 插件。
+- 銀行列表、開戶標記；已開戶銀行的活期摘要、論壇錢包餘額、幣別、利息及注意事項；自己／收到的交易記錄及分頁。日誌的 IP 欄位不保存或顯示。
+- 原生業務選單包括營業大廳／開戶、活期存取、定期、匯款、貸款、帳戶管理、手動結息、帳戶總覽及排行。定期／貸款紀錄不依賴活期餘額；銀行頁面依伺服器文字呈現條款、日期、利率及狀態。積分買賣目前由論壇停用，直接顯示停用原因。
+- 交易輸入後再確認銀行、操作、金額、幣別、天數、收款人、費用與相關記錄；不顯示密碼。金額及天數為最多18位正整數，不截斷或四捨五入；定存至少30天，匯款至少10。匯款費用依公布的千分比費率用整數運算向上取整，最終以論壇結算為準。開戶及改密碼需兩次輸入一致，銷戶有獨立確認提示。交易處理中不可連點送出或返回而遺失結果，一般 GET 仍可離頁。
+- 表單須為同源 `/plugin.php?id=bank_ane:bank` POST，伺服器供應的 `bankid`、`action=cur`、`op=in/out`、`banknum`、`bankpass`、`banksubmit=true` 必須完整且啟用。未知／缺欄位、錯銀行、幣別不明只顯示網頁入口；不從瀏覽路徑補猜隱藏參數。
+- 交易前用同一帳號 client 重新 GET 驗證表單、UID、銀行及幣別；每次確認最多一個 POST。各種失敗不重送；只 GET 更新餘額／日誌。尚未取得實際成功回應作為成功判定依據，因此明確標示「結果待核對」，不以 HTTP 200 或餘額差值判成功。
+- 新增業務表單以真實 response HTML 核對 `cur/ok`、`fix/in`、`chg/ok`、`len/try`、`pas/cg`、`pas/cl` 及 `open`。只接受對應銀行／服務、同源 POST、已知可輸入欄位、伺服器明確提供的隱藏值。定期支取／貸款記錄操作限於有記錄描述、數字識別欄位及操作按鈕的實際 POST 表單，不猜測記錄 ID 或操作；未知格式提供網頁入口。送出前重讀並比對記錄、條款、幣別和表單，僅允許 CSRF token 更新。
+- 多帳號以 UID + 請求世代丟棄舊結果，切帳号或換銀行使舊確認失效。密碼不放入 cubit state、不存本機，日誌遮罩涵蓋 `bankpass`、`bankpass2`、`newbankpass`、`newbankpass2`。
+- 銀行表單使用 `singleAttempt` 傳輸：Dio 不跟隨轉址；Android OkHttp 專用 client 禁重試／轉址並以 one-shot body 阻止 408／503 或斷線後重送。其他請求維持既有策略。`test_123` 覆蓋實際 Dart 編碼與 IO 轉址，`HttpClientTest` 用 MockWebServer 驗證原生送出次數；獨立 Android CI 與 Android test build 納入這些測試。
+- 理財日誌允許表格內含分頁列，空資料維持正常空狀態。日誌讀取失敗不清空已讀餘額；交易後日誌刷新失敗不抹去新的餘額及結果待核對提示。
+- 完整設計见 `docs/specs/2026-09-26-bank-complete-design.md`；初始設計保留於 `docs/specs/2026-09-26-bank-design.md`。
+- 驗證由 `test_120`（解析／表單）、`test_121`（活期畫面／确认）、`test_122`（帳號與競態）、`test_123`（實際傳輸）、`test_124`（業務表單／同帳號重驗／費率與記錄變動／遮罩）及 `test_125`（業務畫面／確認／小螢幕／銷戶後選單）覆蓋。樣本為合成資料；沒有用真實帳戶執行交易、改密碼或銷戶。非空定期／貸款記錄的實際操作表單尚待帳號持有人驗收，不能把合成表單測試當成線上成功證據。
+
+## 39. 勳章關鍵字搜尋、原生頭銜商店（GitHub #122、#123，2026-09-27）
+
+- 勳章搜尋：照網站搜尋表單 `POST plugin.php?id=dsu_medalCenter:memcp`（`formhash`＋`searchstr`），範圍為全部勳章的名稱與說明；翻頁用伺服器 `sq=<UTF-8 base64>&page=N` 連結。重新整理保留查詢（第 1 頁重送搜尋、之後重讀連結），清除回到搜尋前分類，選分類即離開搜尋，空白查詢回一般列表。搜尋中／失敗／無結果文案與一般載入、空分類區分；購買、申請、重試在結果內照常。
+- 搜尋表單須同源且只帶 `id=dsu_medalCenter:memcp`；分頁連結只允許 `id`／`typeid`／`page`／`sq`，`sq` 不與 `typeid` 並存，重複參數、壞跳脫、非 base64 或非 UTF-8 皆拒絕；`sq` 以 `%2B`/`%2F`/`%3D` 重組，`+` 不會變空白。舊搜尋、切分類前與切帳號前的回應丟棄。
+- 頭銜商店：「我的頭銜」商店鈕開原生頁 `/titleShop`，返回時刷新擁有頭銜。列出 `table.dt`（称号ID／称号名称／称号价格／图片／购买）各列、伺服器說明段落、「天使币」餘額行；價格保留原字串（含 4294967295）；狀態依伺服器：有合法表單可購買、「已拥有」、其餘顯示原文。
+- 購買：確認框優先引用 `data-c` 原句、註明不自動佩戴；確認後以同帳號 repository 重讀當頁，核對 UID、表單、ID、名稱、價格、確認句，變動則不送出並要求重新確認；再以 `singleAttempt` POST 一次，之後 GET 商店，該列成為「已拥有」才算成功，`.alert_error` 且未擁有為被拒，其餘一律「結果未確認」且不重送。購買中鎖住連點、翻頁與重新整理；切帳號作廢流程、不顯示舊結果。購買表單只接受同源 `action=buy` POST、恰好 `formhash`／`tsdmtitle_return`（只回商店）／`buyid`（等於該列）三個隱藏欄位及 `buysubmit=true`。
+- 設計見 `docs/specs/2026-09-27-medal-search-title-shop-design.md`。測試：`test_126`（搜尋連結／表單／狀態／畫面）、`test_127`（商店解析與表單驗證）、`test_128`（購買狀態、重驗、單次 POST、切帳號）、`test_129`（商店畫面、取消、鎖定、窄螢幕）。樣本皆為合成資料。
+- 尚未實機驗證：真實購買的成功／失敗回應頁（未做購買），成功只以購買後商店狀態判定。
+
+## 40. 全 App UI 預覽 110 回饋修正（PR #135、GitHub #139，2026-09-28）
+
+### 40.1 回覆編輯器
+
+- Material 3 預設把 bottom sheet 限制在 640dp 寬；手機橫向（792dp）時展開的編輯器比頁面窄，底部收合的回覆框從兩側露出來，看起來像兩個輸入框。`ReplyBar` 開 sheet 時改傳空的 `BoxConstraints`，sheet 與回覆列一樣貫穿整頁，內容仍靠自己置中到閱讀欄寬。
+- 編輯器頂部的拖動條移除（#139）：與右下角「收起」按鈕功能重複，只佔空間；向下滑仍可關閉。
+
+### 40.2 首頁簽到／紅包狀態
+
+- 簽到：`CheckinBloc` 新增 `CheckinStatusRequested`，讀 `CheckinRepository.checkedInToday(uid)`（cookie 表的 `lastCheckin` 是否為本機今天），是則進 `CheckinStateChecked`；首頁載入成功後送出。按鈕在 `CheckinStateChecked`、`CheckinStateSuccess`、`CheckinStateFailed(CheckinResultAlreadyChecked)` 時顯示「已簽到」並停用，tooltip 說明是本 App 的記錄。只知道 App 自己做過的簽到（手動或自動）；網頁上簽到的要再點一下，論壇回「已經簽到」後才會記錄。
+- 紅包：論壇首頁只有在尚未領取時才嵌 `hongbaoDailyInit`，領過後頁面與沒有紅包時一樣。App 在領取成功或論壇回「已領過」時，把該帳號的 `dateflag` 存到設定表 `dailyRedPacketClaimed.<uid>`；首頁沒有紅包時，若記錄的 `dateflag` 等於本機今天（`YYYYMMDD`），顯示「紅包已領取」，tooltip 說明是 App 的記錄。頁面上有紅包時一律以頁面為準。站方的日界未知，以本機日期近似，跨午夜前後可能差幾小時。
+- 不會為了狀態多打任何請求；不會把「沒有紅包」直接說成「已領取」。
+
+### 40.3 作者牌子
+
+- 樓層作者列：用戶組牌子與第二牌子同高 `postAuthorBadgeHeight`（32dp），第二牌子依 184:100 比例約 59dp 寬（原本 120／138dp，明顯大過用戶組牌子）。
+- 作者彈窗：兩枚牌子同高 72dp；個人資料頁的稱號區塊改為置中，與用戶組區塊一致。
+
+### 40.4 驗證
+
+- `test/regression/test_172_feedback111_test.dart`：三種視窗（橫向含瀏海、直向、寬視窗）編輯器貫穿整頁且無拖動條、收起後回覆列回來；簽到記錄今天／昨天／換帳號／未登入；紅包記錄今天／別天／別帳號、頁面有紅包優先、領取成功與「已領過」會記錄、失敗不記錄；牌子尺寸換算。
+- 未實機驗證：Android 橫向鍵盤面板、真實論壇簽到與紅包流程。
+
+### 40.5 第二輪（preview112 回饋）
+
+- 首頁排版：`homeLayoutFor(width, platform)` 與版塊列表同一原則——Android／iOS 任何寬度都是 compact；只有桌面平台依寬度進 medium（≥600）／wide（≥960）。橫屏手機原本被當成寬視窗，問候卡片的稱號牌子放大到 240dp、簽到／紅包／活動／勳章四顆按鈕排成不整齊兩行。
+- 設定「主題模式」：三段式切換鈕改為列尾 `trailing`，與標題同列；副標仍顯示目前模式。2 倍字級下仍在視窗內（test_172 第 4 組）。
+
+### 40.6 第三輪（preview113 回饋）
+
+- 首頁問候卡片（compact）：內容寬 ≥ 560×字級 時四顆按鈕（簽到、紅包、活動總覽、勳章與稱號）排一行；≥ 300×字級 維持簽到／紅包一行＋入口第二行；更窄全部直疊。
+- 帖子標題：`AppContentWidth` 置中子元件，短標題原本因此看起來置中、長標題靠左；標題改包 `SizedBox(width: double.infinity)` 一律靠左。
+- 標題上方空白：`EasyRefreshController(controlFinishRefresh: true)` 但從未呼叫 `finishRefresh()`，下拉更新後 header 停在 processing、在 locator 位置留下 100dp 空白（新 UI 重新載入時列表不再被拆掉重建，所以顯露出來）。改為 build 時 `finishRefresh()` 與 `finishLoad()` 一起結束。test_171 加下拉更新案例（測試環境下修正前後都沒有空白，未能重現回報畫面；此修正依 EasyRefresh 的 API 契約補上，實機效果待測試者確認）。
+
+## 41. 貼文內容縮放、桌面端 Esc／滑鼠返回鍵（GitHub #137、#138，2026-09-28）
+
+- 貼文內容縮放：設定 → 外觀新增 `threadContentScale`（double，預設 1.0，範圍 1.0–2.0、步進 0.1），存於 drift `settings` 表既有的 `double_value` 欄位，不需 migration。貼文頁（`ThreadPage`）只對樓層列表（`PostList`／`PostCard`）套用 `MediaQuery.textScaler = 全域文字縮放 × 貼文內容縮放`，乘積上限 3.0；標題列、軟關閉提示與回覆列維持全域縮放。所有平台皆可用。
+- 桌面返回鍵：`DesktopBackHandler` 掛在 `MaterialApp.router` 的 builder（`lib/app.dart`），只在 `isDesktop` 生效。Esc（按下）與滑鼠返回側鍵（`kBackMouseButton`）以主焦點所在的路由判定：只處理 `PageRoute` 且非該 navigator 首頁的情況，呼叫 `Navigator.maybePop`，因此頁面的 `PopScope`（例如草稿確認）仍然生效，主頁各分頁（首頁／主題／設定的殼路由）不會觸發退出 App。對話框、彈出選單、modal bottom sheet 不是 `PageRoute`，Esc 交還給路由自身的 dismiss 動作（可點遮罩關閉者才關閉）；焦點在文字輸入（`EditableText` 或任何實作 `TextInputClient` 的編輯器，含 BBCode 編輯器）時 Esc 與側鍵都不動作；展開的回覆編輯器是頁面的 local history entry，`maybePop` 會先收起編輯器、再按一次才離開頁面。右鍵不使用。
+- 測試：`test_173`（設定套用到樓層、不影響標題列與回覆列、與全域縮放相乘與上限）、`test_174`（可返回時 Esc／側鍵 pop、根頁不動、輸入框有焦點不動、對話框與持久 bottom sheet 先關閉、`PopScope` 拒絕時不 pop、非桌面停用）。
+- 尚未實機驗證：未在 Windows 實機測 Esc／滑鼠側鍵（含 BBCode 編輯器焦點下的行為）與放大後的實際觀感；測試以 Linux 桌面環境的 widget test 為準。
+
+## 42. 1.29.0 後續小修（2026-09-29）
+
+- 首頁／關於：「贊助與功能許願」改名「支援開發與功能許願」（三語）。
+- 首頁桌面版稱號牌子：`homeGreetingBadgeWideWidth` 240 → 184。論壇的稱號圖只有 184×100（`img.tsdm39.com/img01/title/*.gif`，無 @2x），放大顯示必然模糊；改回原圖尺寸。手機端本來就 ≤184。
+
+## 43. 窄屏版面修正、底欄滑動（GitHub #145，2026-09-29）
+
+- 底欄滑動（#145，bbtu1）：`StatefulShellRoute` 改用 `AnimatedBranchPageView`（PageView，關閉手勢），非當前分頁包 `TickerMode(enabled: false)`，`MediaQuery.disableAnimations` 時 `jumpToPage`。
+- 設定「主題模式」：切換鈕固定 156dp（compact 三段），`LayoutBuilder` 以 `TextPainter` 量標題與目前模式的寬度，放得下才放列尾，否則放文字下方。原因：720×1600（360dp）手機上列尾放不下，標題被擠成一字一行。
+- 首頁問候卡片：手機直向兩種排版（簽到／紅包並排或直疊）下，「活動總覽」「勳章與稱號」都改為一行各佔一半，標籤 `FittedBox` 縮字不換行。回報的手機（360dp、系統字級略大）落在直疊排版。
+- `AppDialogTitle(singleLine: true)`：標題單行、過長縮字；贊助彈窗與其 GitHub 按鈕、首頁贊助卡片標題都保持單行。
+- 驗證：test_172 第 4 組新增 320／360／384dp × 1／1.15／2 倍字級案例；主題模式與彈窗 6 項、首頁 1 項在修正前失敗。
+
+## 44. @ 提及適配 atplus 插件（2026-09-30）
+
+### 44.1 論壇端事實（2026-09-30 以測試帳號唯讀實測）
+
+- 帖子頁與回覆頁載入 `source/plugin/atplus/static/at-panel.js?v=1.3.0`，設定 `ATPLUS={"api":"plugin.php?id=atplus:search",...}`；編輯器旁有「@ 提及」按鈕。
+- 面板選到的人插入 `@` + U+2063 + 用戶名 + U+2063 + 空格；伺服器**只認**這種帶標記的 @。在輸入框直接打 `@名字` 只是普通文字（插件 1.0.3 起）。
+- 整組 @（1.1.0）：`@` + U+2064 + 組名 + U+2064，伺服器再檢查權限；測試帳號 `groups` 為空。
+- API（POST，form）：`op=init` → `{"ok":1,"recent":[...],"friends":[...],"groups":[...]}`；`op=search&q=` → `{"ok":1,"list":[...]}`；每筆 `{uid, username, avatar(相對路徑), group, friend}`。`op=card&uids=` 給名片用，App 未用。
+- 舊的 `misc.php?mod=getatuser` 仍在，但只剩名字。
+
+### 44.2 App 端行為
+
+- 送出時 `toOfficialMentions` 把編輯器的 `[@]name[/@]` 轉成 `@⁣name⁣ `（`atplusUserMark`）；原本的純 `@name` 在新插件下不會成為提及。編輯舊帖時原文內的標記原樣保留，再送出仍有效。
+- `MentionRepository.loadCandidates`：已登入時先問 `op=init`，成功就用插件的「最近 @ 過」與好友（`MentionCandidates.siteSearch = true`），不再抓好友頁與 getatuser；插件沒回 JSON（未安裝、錯誤）時退回原本兩個來源。訪客不問插件。
+- `searchUsers(keyword)` → `op=search`；`UserMentionCubit.setKeyword` 在 siteSearch 時搜尋，只保留最新關鍵字的回應。選人面板依序顯示：最近 @ 過、好友、全站搜尋（排除已顯示的）、舊 @ 名單、「提醒『輸入的名字』」。
+- 未做：整組 @（U+2064）、@ 名片。
+
+### 44.3 驗證
+
+- test_022、test_049 更新為帶標記格式；test_049 新增 atplus 群組（解析、插件優先且不問舊來源、訪客不問、cubit 搜尋、選人面板挑選全站搜尋結果）。插件回 404 時的退回路徑由原有案例涵蓋。
+- 未實測：真的發出一則 @ 並確認對方收到提醒（會對測試帳號以外的人產生提醒，未做）。
+

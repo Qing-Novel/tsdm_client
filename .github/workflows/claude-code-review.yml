@@ -1,0 +1,54 @@
+name: Claude Code Review
+
+# pull_request_target runs this workflow file from the base branch with the
+# base repo's secrets, so fork PRs can be reviewed too. The PR head is never
+# checked out or executed; Claude only reads the diff through `gh pr`.
+on:
+  pull_request_target:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  claude-review:
+    # Skip drafts. Review PRs from branches in this repo, plus fork PRs whose
+    # author is listed in the repo variable CLAUDE_REVIEW_USERS
+    # (comma-separated GitHub logins, e.g. "alice,bob").
+    if: |
+      github.event.pull_request.draft == false &&
+      (
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        contains(format(',{0},', vars.CLAUDE_REVIEW_USERS), format(',{0},', github.event.pull_request.user.login))
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    steps:
+      # No `ref:` on purpose: check out the base branch, never the PR head.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # allowed_non_write_users only takes effect with github_token; the
+          # job-scoped GITHUB_TOKEN expires when the job ends.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: ${{ vars.CLAUDE_REVIEW_USERS }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            請審查這個 pull request，重點放在：
+            - 正確性與潛在 bug
+            - 安全性問題
+            - 效能問題
+            - 缺少的測試或邊界情況
+
+            只回報有把握的問題，不要挑風格上的小事。
+            請用繁體中文，透過 `gh pr comment` 留下一則總結評論。
+          claude_args: '--model claude-opus-5-5 --allowed-tools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'

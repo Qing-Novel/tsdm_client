@@ -4,7 +4,9 @@ import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/features/achievements/view/achievements_page.dart';
 import 'package:tsdm_client/features/activities/view/activities_page.dart';
 import 'package:tsdm_client/features/authentication/view/login_page.dart';
+import 'package:tsdm_client/features/bank/view/bank_page.dart';
 import 'package:tsdm_client/features/blocking/view/user_block_page.dart';
+import 'package:tsdm_client/features/blocking/view/website_blocklist_page.dart';
 import 'package:tsdm_client/features/chat/view/chat_history_page.dart';
 import 'package:tsdm_client/features/chat/view/chat_page.dart';
 import 'package:tsdm_client/features/checkin/view/auto_checkin_page.dart';
@@ -15,10 +17,12 @@ import 'package:tsdm_client/features/forum/view/forum_group_page.dart';
 import 'package:tsdm_client/features/forum/view/forum_page.dart';
 import 'package:tsdm_client/features/friend/view/friend_page.dart';
 import 'package:tsdm_client/features/home/view/home_page.dart';
+import 'package:tsdm_client/features/home/widgets/widgets.dart';
 import 'package:tsdm_client/features/homepage/view/homepage_page.dart';
 import 'package:tsdm_client/features/image/view/image_detail_page.dart';
 import 'package:tsdm_client/features/latest_thread/view/latest_thread_page.dart';
 import 'package:tsdm_client/features/medal_center/view/medal_center_page.dart';
+import 'package:tsdm_client/features/medal_center/view/medal_title_hub_page.dart';
 import 'package:tsdm_client/features/multi_user/view/manage_account_page.dart';
 import 'package:tsdm_client/features/my_thread/view/my_thread_page.dart';
 import 'package:tsdm_client/features/notification/models/models.dart';
@@ -30,9 +34,18 @@ import 'package:tsdm_client/features/notification/view/notification_sync_all_pag
 import 'package:tsdm_client/features/open_in_app/view/open_in_app_page.dart';
 import 'package:tsdm_client/features/packet/view/packet_detail_page.dart';
 import 'package:tsdm_client/features/points/views/points_page.dart';
+import 'package:tsdm_client/features/pokemon/models/models.dart';
+import 'package:tsdm_client/features/pokemon/view/adventure_page.dart';
+import 'package:tsdm_client/features/pokemon/view/battle_page.dart';
+import 'package:tsdm_client/features/pokemon/view/pokemon_detail_page.dart';
+import 'package:tsdm_client/features/pokemon/view/pokemon_equipment_page.dart';
+import 'package:tsdm_client/features/pokemon/view/pokemon_page.dart';
+import 'package:tsdm_client/features/pokemon/view/pokemon_storage_page.dart';
 import 'package:tsdm_client/features/post/models/models.dart';
+import 'package:tsdm_client/features/post/models/poll_create.dart';
 import 'package:tsdm_client/features/post/view/fast_reply_edit_template_page.dart';
 import 'package:tsdm_client/features/post/view/fast_reply_template_page.dart';
+import 'package:tsdm_client/features/post/view/poll_create_page.dart';
 import 'package:tsdm_client/features/post/view/post_edit_page.dart';
 import 'package:tsdm_client/features/profile/view/edit_avatar_page.dart';
 import 'package:tsdm_client/features/profile/view/edit_user_profile_page.dart';
@@ -54,6 +67,7 @@ import 'package:tsdm_client/features/settings/widgets/app_license_page.dart';
 import 'package:tsdm_client/features/thread/v1/view/thread_page.dart';
 import 'package:tsdm_client/features/thread/v2/view/thread_page_v2.dart';
 import 'package:tsdm_client/features/thread_visit_history/view/thread_visit_history_page.dart';
+import 'package:tsdm_client/features/title_shop/view/title_shop_page.dart';
 import 'package:tsdm_client/features/topics/view/topics_page.dart';
 import 'package:tsdm_client/features/update/view/local_changelog_page.dart';
 import 'package:tsdm_client/features/update/view/update_page.dart';
@@ -64,21 +78,28 @@ import 'package:tsdm_client/shared/models/models.dart';
 /// Tracks root dialogs so external navigation respects their modal barriers.
 final popupRouteObserver = PopupRouteObserver();
 
+/// Tracks pushed pages, so a page that is only covered (the pokemon centre, while the battle page is on top of it) can
+/// refresh itself when it is shown again.
+final routeObserver = RouteObserver<PageRoute<dynamic>>();
+
 /// App router instance wrapped with global singleton widgets.
 final router = GoRouter(
   initialLocation: ScreenPaths.homepage,
-  observers: [popupRouteObserver],
+  observers: [popupRouteObserver, routeObserver],
   routes: _appRoutes,
 );
 
 /// All named routes in app.
 final List<RouteBase> _appRoutes = [
-  StatefulShellRoute.indexedStack(
+  StatefulShellRoute(
     builder: (context, router, navigator) {
       final hideNavigationBarPages = [ScreenPaths.settingsThreadAppearance.fullPath];
       // Partial global singleton page here.
       return HomePage(showNavigationBar: !hideNavigationBarPages.contains(router.fullPath), child: navigator);
     },
+    // Slide horizontally between the shell branches instead of switching instantly.
+    navigatorContainerBuilder: (context, navigationShell, children) =>
+        AnimatedBranchPageView(navigationShell: navigationShell, children: children),
     branches: [
       StatefulShellBranch(
         routes: [AppRoute(path: ScreenPaths.homepage, builder: (_) => const HomepagePage())],
@@ -237,7 +258,10 @@ final List<RouteBase> _appRoutes = [
   ),
   AppRoute(path: ScreenPaths.noticeSearch, builder: (_) => const NotificationSearchPage()),
   AppRoute(path: ScreenPaths.notificationSyncAll, builder: (_) => const NotificationSyncAllPage()),
-  AppRoute(path: ScreenPaths.myThread, builder: (_) => const MyThreadPage()),
+  AppRoute(
+    path: ScreenPaths.myThread,
+    builder: (state) => MyThreadPage(showDrafts: state.uri.queryParameters['tab'] == 'drafts'),
+  ),
   AppRoute(
     path: ScreenPaths.favorite,
     builder: (state) => FavoritePage(
@@ -285,8 +309,27 @@ final List<RouteBase> _appRoutes = [
   AppRoute(path: ScreenPaths.editAvatar, builder: (_) => const EditAvatarPage()),
   AppRoute(path: ScreenPaths.switchUserGroup, builder: (_) => const SwitchUserGroupPage()),
   AppRoute(path: ScreenPaths.switchTitle, builder: (_) => const MyTitlesPage()),
+  AppRoute(path: ScreenPaths.titleShop, builder: (_) => const TitleShopPage()),
   AppRoute(path: ScreenPaths.userBlock, builder: (_) => const UserBlockPage()),
+  AppRoute(path: ScreenPaths.websiteBlocklist, builder: (_) => const WebsiteBlocklistPage()),
   AppRoute(path: ScreenPaths.medalCenter, builder: (_) => const MedalCenterPage()),
+  AppRoute(path: ScreenPaths.medalTitleHub, builder: (_) => const MedalTitleHubPage()),
+  AppRoute(path: ScreenPaths.bank, builder: (_) => const BankPage()),
+  AppRoute(path: ScreenPaths.pokemon, builder: (state) => PokemonPage(initialTab: (state.extra as int?) ?? 0)),
+  AppRoute(
+    path: ScreenPaths.pokemonDetail,
+    builder: (state) => PokemonDetailPage(pokemon: state.extra! as Pokemon),
+  ),
+  AppRoute(path: ScreenPaths.pokemonAdventure, builder: (_) => const AdventurePage()),
+  AppRoute(
+    path: ScreenPaths.pokemonBattle,
+    builder: (state) => BattlePage(args: state.extra! as BattlePageArgs),
+  ),
+  AppRoute(path: ScreenPaths.pokemonStorage, builder: (_) => const PokemonStoragePage()),
+  AppRoute(
+    path: ScreenPaths.pokemonEquipment,
+    builder: (state) => PokemonEquipmentPage(pokemon: state.extra! as Pokemon),
+  ),
   AppRoute(path: ScreenPaths.editUserProfile, builder: (_) => const EditUserProfilePage()),
   AppRoute(
     path: ScreenPaths.ratePost,
@@ -334,7 +377,26 @@ final List<RouteBase> _appRoutes = [
       final pid = state.uri.queryParameters['pid'];
       assert(editType != null, 'PostEditType enum value is not a integer: $editType');
       assert(PostEditType.values.length > editType!, 'invalid PostEditType enum value: $editType');
-      return PostEditPage(editType: PostEditType.values[editType!], fid: fid, tid: tid, pid: pid);
+      return PostEditPage(
+        editType: PostEditType.values[editType!],
+        fid: fid,
+        tid: tid,
+        pid: pid,
+        pollOffered: state.uri.queryParameters['poll'] == '1',
+        transfer: state.extra is ThreadModeTransfer ? state.extra! as ThreadModeTransfer : null,
+      );
+    },
+  ),
+  AppRoute(
+    path: ScreenPaths.createPoll,
+    builder: (state) {
+      final fid = state.pathParameters['fid']!;
+      // Guard: only a positive forum id reaches the page, which then validates the forum's own form.
+      if (!RegExp(r'^[1-9]\d*$').hasMatch(fid)) return const PollCreateInvalidPage();
+      return PollCreatePage(
+        fid: fid,
+        transfer: state.extra is ThreadModeTransfer ? state.extra! as ThreadModeTransfer : null,
+      );
     },
   ),
   AppRoute(

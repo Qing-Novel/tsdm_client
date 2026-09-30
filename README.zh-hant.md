@@ -16,13 +16,14 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/Carinoasd/tsdm_client" alt="license"/></a>
 </p>
 
-## 最新更新：1.28.3（2026-09-26）
+## 最新更新：1.29.3（2026-09-30）
 
-- 修正反覆點擊系統通知造成通知頁疊加，通知頁與詳情頁新增「回到首頁」按鈕，並保留未送出的回覆及編輯中的內容。
-- 新增獨立的每日紅包自動領取開關（預設關閉），補上論壇每日登入獎勵所需的檢查請求；獎勵是否發放由論壇決定。
-- Android 內部版本號為 94，可直接從上一版升級。
+- 新增銀行功能、勳章搜尋與 App 內稱號商店。
+- 新增草稿箱、網站黑名單管理與逐人匯入本機屏蔽、帖子樓層舉報，以及建立一般單選／多選投票。
+- 修正空黑名單時 UID 查詢失敗、稱號購買頁面辨識與草稿儲存問題；改善網站黑名單、本機屏蔽、活動、我的稱號四頁的橫屏安全區。
+- Android 建置編號為 103，可直接覆蓋先前的正式版及 99–102 測試版。
 
-[下載 1.28.3](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.28.3) · [完整更新日誌](./CHANGELOG.md)
+[下載 1.29.3](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.29.3) · [完整更新日誌](./CHANGELOG.md)
 
 ## 這是什麼
 
@@ -78,7 +79,8 @@ Linux 版需要系統已安裝 `libayatana-appindicator3-1`（Debian／Ubuntu �
 - 帳號多選刪除、當前帳號「從本機移除」，不必聯網
 - 備份匯出／匯入（可選擇以密碼加密帳號登入資料，多裝置同步不必逐個重登）
 - 好友列表、送出好友請求；紅包領取與每日紅包
-- 個人資料頁的「我的成就」與「勳章中心」：查閱成就內容、勳章分類／分頁與取得條件；勳章支援論壇提供的購買、申請與領取操作，不支援的功能可從瀏覽器開啟
+- 個人資料頁的「我的成就」與「勳章中心」：查閱成就內容、勳章分類／分頁、關鍵字搜尋與取得條件；勳章支援論壇提供的購買、申請與領取操作，不支援的功能可從瀏覽器開啟
+- 「我的頭銜」切換佩戴，並可在應用內頭銜商店瀏覽與購買頭銜（購買後不自動佩戴）
 
 ### 通知與設定
 - 前台／背景輪詢新訊息並發系統通知；被清掉後從通知冷啟動直接進訊息中心
@@ -115,7 +117,7 @@ flutter build apk --release      # 需要 android/key.properties 指向你的 ke
 
 Linux 建置需要 `libgtk-3-dev`、`libsqlite3-dev` 與 `libayatana-appindicator3-dev`；測試：`flutter test`。
 
-發版：改 `pubspec.yaml` 的版本（`x.y.z+N`）與 CHANGELOG 新段 → `dart scripts/write_version_json.dart` → 測試 → 提交並推 master → `git tag -a vX.Y.Z && git push origin vX.Y.Z`，CI 依 `.github/workflows/release_build.yml` 建好各平台檔案並發布 Release，內文取自 CHANGELOG 該段。Android 內部版本號：分包為 N×10＋ABI 碼（armv7 2、arm64 3），universal 為 N×10＋9。
+發版：從合併後的 master 建立發布分支，修改 `pubspec.yaml` 的版本（`x.y.z+N`）、CHANGELOG 新段與三語首頁公告 → `dart scripts/write_version_json.dart` → 測試 → 提交並推送發布分支與 `vX.Y.Z` 標籤。CI 依 `.github/workflows/release_build.yml` 建好各平台檔案並發布 Release，內文取自 CHANGELOG 該段。確認全部平台成功、7 個下載檔齊全後，再將發布提交合入 master，啟用 App 版本提示和首頁公告。Android 內部版本號：分包為 N×10＋ABI 碼（armv7 2、arm64 3），universal 為 N×10＋9。
 
 ## 授權
 

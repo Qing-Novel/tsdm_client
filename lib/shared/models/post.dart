@@ -61,6 +61,7 @@ class Post with PostMappable {
     this.signature,
     this.pokemon,
     this.checkin,
+    this.reportTarget,
   });
 
   /// Post ID.
@@ -163,8 +164,15 @@ class Post with PostMappable {
   /// Author checkin status.
   final PostCheckinStatus? checkin;
 
+  /// The report the forum offered for this floor to the account that read the page, see [extractPostReportTarget].
+  ///
+  /// Null when the page context is unknown, for own posts and floors without the report link (#127).
+  final PostReportTarget? reportTarget;
+
   /// Build [Post] from [element] that has attribute id "post_$postID".
-  static Post? fromPostNode(uh.Element element, int page) {
+  ///
+  /// [reportContext] holds the ids of the page [element] was read from; without it no report target is kept.
+  static Post? fromPostNode(uh.Element element, int page, {PostReportPageContext? reportContext}) {
     final trRootNode = element.querySelector('table > tbody > tr');
     final postID = element.id.replaceFirst('post_', '');
     if (postID.isEmpty) {
@@ -364,7 +372,7 @@ class Post with PostMappable {
       talker.info('post $postID: user profile node not found, maybe not logged in');
     }
 
-    final isDraft = element.querySelector('a.psave') != null;
+    final isDraft = isFirstThreadPost(element) && element.querySelectorAll('a.psave').any(isDraftPublishLink);
 
     // Medals used by the current posts' author.
     //
@@ -388,9 +396,11 @@ class Post with PostMappable {
     final badge = element.querySelector('div#$avatarId div.tsdm_norm_title > img')?._lazyImageUrl();
     // We can not use `:is(.tsdmtitles, .tsdm_lv_title)` here.
     //
-    // Discuz X5: `<div class="tsdmtitle-badges"><div class="tsdmtitle-title"><img></div></div>`.
+    // Discuz X5: `<div class="tsdmtitle-badges"><div class="tsdmtitle-title"><img></div></div>`. The image is looked
+    // up anywhere inside that same title block, so a link around it (`<a><img></a>`) still counts; nothing outside
+    // the block of this floor's author column is used.
     final secondBadge =
-        userProfileNode?.querySelector('div.tsdmtitle-badges div.tsdmtitle-title > img')?._lazyImageUrl() ??
+        userProfileNode?.querySelector('div.tsdmtitle-badges div.tsdmtitle-title img')?._lazyImageUrl() ??
         element.querySelector('div.tsdm_statbar > a > img.tsdmtitles')?._lazyImageUrl() ??
         element.querySelector('div.tsdm_statbar > a > img.tsdm_lv_title')?._lazyImageUrl();
     final signature = element.querySelector('div.sign_inner')?.innerHtml;
@@ -444,13 +454,23 @@ class Post with PostMappable {
       signature: signature,
       pokemon: pokemon,
       checkin: checkin,
+      reportTarget: extractPostReportTarget(
+        element,
+        postId: postID,
+        context: reportContext,
+        authorUid: postAuthor.uid,
+      ),
     );
   }
 
   /// Build a list of [Post] from the given [ThreadData] [uh.Element].
   ///
   /// [element]'s id is "postlist".
-  static List<Post> buildListFromThreadDataNode(uh.Element? element, int page) {
+  static List<Post> buildListFromThreadDataNode(
+    uh.Element? element,
+    int page, {
+    PostReportPageContext? reportContext,
+  }) {
     if (element == null) {
       return [];
     }
@@ -465,7 +485,7 @@ class Post with PostMappable {
       // This while is a while (0), will not loop twice.
       if ((currentElement.attributes['id'] ?? '').startsWith('post_')) {
         // Build post here.
-        final post = Post.fromPostNode(currentElement, page);
+        final post = Post.fromPostNode(currentElement, page, reportContext: reportContext);
         if (post == null) {
           talker.error('warning: post is empty');
           currentElement = currentElement.nextElementSibling;

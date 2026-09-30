@@ -16,13 +16,14 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/Carinoasd/tsdm_client" alt="license"/></a>
 </p>
 
-## Latest update: 1.28.3 (2026-09-26)
+## Latest update: 1.29.3 (2026-09-30)
 
-- Reuses notification pages after repeated system notification taps and adds a Back to home button, preserving unsent replies and editing pages.
-- Adds an independent daily red-packet claim option (off by default) and restores the request used for daily login rewards. Reward eligibility and amounts are determined by the forum.
-- Android build number 94 supports upgrading directly from the previous release.
+- Adds banking, medal search and an in-app title shop.
+- Adds a draft box, website blacklist management with individual imports into local blocking, post reporting, and creation of ordinary single- or multiple-choice polls.
+- Fixes UID lookup with an empty blacklist, title purchase page recognition and draft saving; improves landscape safe areas on the website blacklist, local blocking, activities and My Titles pages.
+- Android build number 103 supports upgrading over earlier stable releases and preview builds 99–102.
 
-[Download 1.28.3](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.28.3) · [Full changelog](./CHANGELOG.md)
+[Download 1.29.3](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.29.3) · [Full changelog](./CHANGELOG.md)
 
 ## What it is
 
@@ -79,7 +80,8 @@ The package name is `com.tsdm.tsdm_client`, signed with the forum's official key
 - Delete several accounts at once, or remove the current account from this device without a network connection
 - Backup export/import, optionally encrypting the login data with a password so other devices need no re-login
 - Friend list and friend requests; red packets, including the daily one
-- "My achievements" and "Medal centre" on your profile page: read achievements, browse medal categories and conditions, and use the medal purchase, application and claim actions offered by the forum; open unsupported features in the browser
+- "My achievements" and "Medal centre" on your profile page: read achievements, browse medal categories/pages, search by keyword and read acquisition conditions, and use the medal purchase, application and claim actions offered by the forum; open unsupported features in the browser
+- "My titles" to switch the worn title, plus an in-app title shop to browse and buy titles (a bought title is not worn automatically)
 
 ### Notifications and settings
 - Foreground/background polling for new messages with system notifications; a cold start from a notification goes straight to the message centre
@@ -116,7 +118,7 @@ flutter build apk --release      # needs android/key.properties pointing at your
 
 Linux builds need `libgtk-3-dev`, `libsqlite3-dev` and `libayatana-appindicator3-dev`; tests: `flutter test`.
 
-Releasing: bump the version in `pubspec.yaml` (`x.y.z+N`) and add the CHANGELOG section → `dart scripts/write_version_json.dart` → tests → commit and push master → `git tag -a vX.Y.Z && git push origin vX.Y.Z`. CI builds every platform from `.github/workflows/release_build.yml` and publishes the Release with that CHANGELOG section as its notes. Android version codes: split APKs are N×10 + ABI code (armv7 2, arm64 3), the universal APK is N×10 + 9.
+Releasing: create a release branch from the merged master, update `pubspec.yaml` (`x.y.z+N`), add the CHANGELOG section and update all three README announcements → `dart scripts/write_version_json.dart` → tests → commit and push the release branch and `vX.Y.Z` tag. CI builds every platform from `.github/workflows/release_build.yml` and publishes the Release with that CHANGELOG section as its notes. After every platform succeeds and all seven downloads are available, merge the release commit into master to activate the in-app update notice and homepage announcements. Android version codes: split APKs are N×10 + ABI code (armv7 2, arm64 3), the universal APK is N×10 + 9.
 
 ## License
 

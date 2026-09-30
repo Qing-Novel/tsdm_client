@@ -74,11 +74,41 @@ class ScreenPaths {
   /// Page to switch current user's title.
   static const String switchTitle = '/switchTitle';
 
+  /// Native secondary title shop.
+  static const String titleShop = '/titleShop';
+
   /// Local block list and server notice ignore rules of the current account.
   static const String userBlock = '/userBlock';
 
+  /// Website blacklist (the forum's `blockuser` plugin) of the current account.
+  static const String websiteBlocklist = '/websiteBlocklist';
+
   /// Read-only medal catalogue.
   static const String medalCenter = '/medalCenter';
+
+  /// Common entry of the medal centre, the current account's titles and the title shop.
+  static const String medalTitleHub = '/medalTitleHub';
+
+  /// Community bank balances, records and current-account transactions.
+  static const String bank = '/bank';
+
+  /// The pokemon center (宠物中心): my pokemon, healing, inventory and shop.
+  static const String pokemon = '/pokemon';
+
+  /// Detail page of a single pokemon; receives the pokemon object via `extra`.
+  static const String pokemonDetail = '/pokemon/detail';
+
+  /// The adventure (冒险) map list.
+  static const String pokemonAdventure = '/pokemon/adventure';
+
+  /// The battle page; receives a `BattlePageArgs` via `extra`.
+  static const String pokemonBattle = '/pokemon/battle';
+
+  /// The pokemon storage (仓库) page: pokemon not carried in the bag.
+  static const String pokemonStorage = '/pokemon/storage';
+
+  /// The equipment page of one pokemon; receives the `Pokemon` via `extra`.
+  static const String pokemonEquipment = '/pokemon/equipment';
 
   /// Page to edit current user's profile.
   static const String editUserProfile = '/editUserProfile';
@@ -248,6 +278,11 @@ class ScreenPaths {
   /// Index of `PostEditType` is needed to specify the reason.
   static const String editPost = '/editPost/:editType/:fid';
 
+  /// Page to create an ordinary poll thread in forum `fid`.
+  ///
+  /// The page always fetches and validates the forum's own poll form before offering any input.
+  static const String createPoll = '/createPoll/:fid';
+
   /// Page to show image in full page.
   static const String imageDetail = '/imageDetail/:imageUrl';
 
@@ -331,6 +366,9 @@ class DialogPaths {
   /// Dialog to let user picker a text scale factor.
   static const String textScalePicker = '/dialog/textScalePicker';
 
+  /// Dialog to let user pick the extra text scale of thread content.
+  static const String threadContentScalePicker = '/dialog/threadContentScalePicker';
+
   /// Dialog to let user select the duration between auto syncing notice events.
   static const String selectAutoSyncDuration = '/dialog/selectAutoSyncDuration';
 
@@ -384,6 +422,12 @@ class DialogPaths {
 
   /// Dialog showing a red packet in a thread.
   static const String redPacket = '/dialog/redPacket';
+
+  /// Dialog confirming a pokemon action (release / forget skill / unequip / buy).
+  static const String pokemonConfirm = '/dialog/pokemonConfirm';
+
+  /// Dialog inputting pokemon related text (rename or buy quantity).
+  static const String pokemonInput = '/dialog/pokemonInput';
 }
 
 /// Route path for a screen.

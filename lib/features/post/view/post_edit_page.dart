@@ -13,26 +13,32 @@ import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/extensions/bbcode_editor_controller.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
-import 'package:tsdm_client/extensions/list.dart';
 import 'package:tsdm_client/extensions/string.dart';
+import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
+import 'package:tsdm_client/features/editor/widgets/editor_frame.dart';
 import 'package:tsdm_client/features/editor/widgets/rich_editor.dart';
 import 'package:tsdm_client/features/editor/widgets/toolbar.dart';
 import 'package:tsdm_client/features/post/bloc/post_edit_bloc.dart';
 import 'package:tsdm_client/features/post/models/models.dart';
+import 'package:tsdm_client/features/post/models/poll_create.dart';
 import 'package:tsdm_client/features/post/repository/post_edit_repository.dart';
 import 'package:tsdm_client/features/post/widgets/input_price_dialog.dart';
 import 'package:tsdm_client/features/post/widgets/select_perm_dialog.dart';
 import 'package:tsdm_client/features/settings/bloc/settings_bloc.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
+import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/routes/screen_paths.dart';
 import 'package:tsdm_client/shared/models/models.dart';
+import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
 import 'package:tsdm_client/utils/bbcode/spoiler_normalizer.dart';
+import 'package:tsdm_client/utils/browser_launcher.dart';
 import 'package:tsdm_client/utils/logger.dart';
 import 'package:tsdm_client/utils/platform.dart';
 import 'package:tsdm_client/utils/retry_button.dart';
 import 'package:tsdm_client/utils/show_bottom_sheet.dart';
 import 'package:tsdm_client/utils/show_dialog.dart';
 import 'package:tsdm_client/utils/show_toast.dart';
+import 'package:tsdm_client/widgets/app_surface.dart';
 import 'package:tsdm_client/widgets/indicator.dart';
 import 'package:tsdm_client/widgets/section_switch_list_tile.dart';
 import 'package:tsdm_client/widgets/selectable_list_tile.dart';
@@ -104,7 +110,23 @@ enum _BottomPanelType { none, keyboard, toolbar }
 /// lost".
 class PostEditPage extends StatefulWidget {
   /// Constructor.
-  const PostEditPage({required this.editType, required this.fid, required this.tid, required this.pid, super.key});
+  const PostEditPage({
+    required this.editType,
+    required this.fid,
+    required this.tid,
+    required this.pid,
+    this.pollOffered = false,
+    this.transfer,
+    super.key,
+  });
+
+  /// The forum page offered a poll creation link to the current account; only used for new threads.
+  ///
+  /// The poll page still validates the forum's own form before offering any input.
+  final bool pollOffered;
+
+  /// Subject and body carried over from the poll editor.
+  final ThreadModeTransfer? transfer;
 
   /// Reason to enter [PostEditPage].
   ///
@@ -191,6 +213,10 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
   late BBCodeEditorController bbcodeController;
 
   bool initialized = false;
+  bool _confirming = false;
+
+  /// Content switched in from the poll editor by the same account, dropped on any identity change.
+  ThreadModeTransfer? _transfer;
 
   // BBCode text attribute status.
   Color? foregroundColor;
@@ -219,7 +245,7 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
       price: price,
       perm: threadPerm?.perm,
     );
-    debug('collected EditorDocumentMetadata $metadata');
+    debug('collected editor metadata');
     return metadata;
   }
 
@@ -296,83 +322,93 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
   }
 
   Future<void> _onFinish(BuildContext context, PostEditState state, {bool saveDraft = false}) async {
-    if (widget.editType.isEditingDraft) {
-      final tr = context.t.postEditPage.threadPublish;
-      final ret = await showQuestionDialog(
-        context: context,
-        title: saveDraft ? context.t.postEditPage.saveAsDraft : tr.title,
-        richMessage: tr.warningBeforePost.body(
-          forumName: TextSpan(
-            text: state.forumName ?? '<unknown>',
-            style: TextStyle(color: Theme.of(context).colorScheme.primary),
-          ),
-          threadTitle: TextSpan(
-            text: threadTitleController.text,
-            style: TextStyle(color: Theme.of(context).colorScheme.primary),
-          ),
-          threadType: TextSpan(
-            text: threadTypeController.text,
-            style: TextStyle(color: Theme.of(context).colorScheme.primary),
-          ),
-          warning: TextSpan(
-            text: tr.warningBeforePost.warning,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-        ),
-      );
-      if (ret != true) {
+    final bloc = context.read<PostEditBloc>();
+    if (_confirming || !bloc.canSubmit || !identical(state.content, bloc.state.content)) return;
+    if (saveDraft && !state.content!.canSaveDraft) return;
+    setState(() => _confirming = true);
+    try {
+      if (widget.editType.isEditingDraft) {
+        final tr = context.t.postEditPage.threadPublish;
+        final ret = await showQuestionDialog(
+          context: context,
+          title: saveDraft ? context.t.postEditPage.saveAsDraft : tr.title,
+          message: saveDraft ? context.t.draftBox.saveConfirm : null,
+          richMessage: saveDraft
+              ? null
+              : tr.warningBeforePost.body(
+                  forumName: TextSpan(
+                    text: state.forumName ?? '#${widget.fid}',
+                    style: TextStyle(color: Theme.of(context).colorScheme.primary),
+                  ),
+                  threadTitle: TextSpan(
+                    text: threadTitleController.text,
+                    style: TextStyle(color: Theme.of(context).colorScheme.primary),
+                  ),
+                  threadType: TextSpan(
+                    text: threadTypeController.text,
+                    style: TextStyle(color: Theme.of(context).colorScheme.primary),
+                  ),
+                  warning: TextSpan(
+                    text: tr.warningBeforePost.warning,
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
+        );
+        if (ret != true) {
+          return;
+        }
+      }
+      if (!context.mounted || !bloc.canSubmit || !identical(state.content, bloc.state.content)) {
         return;
       }
-    }
-    if (!context.mounted) {
-      return;
-    }
 
-    final event = switch (widget.editType) {
-      PostEditType.editPost || PostEditType.editDraft => PostEditCompleteEditRequested(
-        formHash: state.content!.formHash,
-        postTime: state.content!.postTime,
-        delattachop: state.content?.delattachop ?? '0',
-        page: state.content!.page!,
-        wysiwyg: state.content!.wysiwyg,
-        fid: widget.fid,
-        // Not null when editing post
-        tid: widget.tid!,
-        // Not null when editing post
-        pid: widget.pid!,
-        threadType: threadType,
-        threadTitle: threadTitleController.text,
-        data: bbcodeController.toForumBBCode(),
-        options: additionalOptionsMap?.values.toList() ?? [],
-        save: saveDraft ? '1' : '',
-        perm: threadPerm?.perm,
-        price: price,
-      ),
-      PostEditType.newThread => ThreadPubPostThread(
-        ThreadPublishInfo(
+      final event = switch (widget.editType) {
+        PostEditType.editPost || PostEditType.editDraft => PostEditCompleteEditRequested(
           formHash: state.content!.formHash,
           postTime: state.content!.postTime,
-          delAttachOp: state.content?.delattachop ?? '0',
-          wysiwyg: state.content?.wysiwyg ?? '0',
+          delattachop: state.content?.delattachop ?? '0',
+          page: state.content!.page!,
+          wysiwyg: state.content!.wysiwyg,
           fid: widget.fid,
+          // Not null when editing post
+          tid: widget.tid!,
+          // Not null when editing post
+          pid: widget.pid!,
           threadType: threadType,
-          checkbox: '0',
-          subject: threadTitleController.text,
-          message: bbcodeController.toForumBBCode(),
+          threadTitle: threadTitleController.text,
+          data: bbcodeController.toForumBBCode(),
+          options: additionalOptionsMap?.values.toList() ?? [],
+          save: saveDraft ? '1' : '',
           perm: threadPerm?.perm,
           price: price,
-          save: saveDraft ? '1' : '',
-          options: additionalOptionsMap?.values.toList() ?? [],
         ),
-      ),
-    };
-    if (saveDraft) {
-      uploadMethod = _UploadMethod.saveDraft;
-    } else {
-      uploadMethod = _UploadMethod.publish;
+        PostEditType.newThread => ThreadPubPostThread(
+          ThreadPublishInfo(
+            formHash: state.content!.formHash,
+            postTime: state.content!.postTime,
+            delAttachOp: state.content?.delattachop ?? '0',
+            wysiwyg: state.content?.wysiwyg ?? '0',
+            fid: widget.fid,
+            threadType: threadType,
+            checkbox: '0',
+            subject: threadTitleController.text,
+            message: bbcodeController.toForumBBCode(),
+            perm: threadPerm?.perm,
+            price: price,
+            save: saveDraft ? '1' : '',
+            options: additionalOptionsMap?.values.toList() ?? [],
+          ),
+        ),
+      };
+      if (saveDraft) {
+        uploadMethod = _UploadMethod.saveDraft;
+      } else {
+        uploadMethod = _UploadMethod.publish;
+      }
+      context.read<PostEditBloc>().add(event);
+    } finally {
+      if (mounted) setState(() => _confirming = false);
     }
-    context.read<PostEditBloc>().add(event);
-    return;
   }
 
   // TODO: Fix duplicate with same logic in fast reply edit page.
@@ -488,202 +524,224 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
     );
   }
 
+  /// Thread type and title fields: side by side on wide windows, the type above the title on phones and with large
+  /// text, so neither field is squeezed.
   Widget _buildTitleRow(BuildContext context, PostEditState state) {
     final tr = context.t.postEditPage;
 
-    final ret = <Widget>[];
+    Widget? typeField;
     if (state.content?.threadTypeList?.isNotEmpty ?? false) {
-      ret.add(
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 100),
-          child: TextFormField(
-            key: formKey,
-            controller: threadTypeController,
-            decoration: InputDecoration(labelText: tr.threadType, suffixIcon: const Icon(Icons.arrow_drop_down)),
-            readOnly: true,
-            onTap: () async => _showSelectThreadTypeBottomSheet(context, state),
-            // Only auto focus to title field when writing new thread.
-            validator: (v) {
-              if (widget.editType.isEditingPost) {
-                // Skip check when editing post, post have no thread type.
-                return null;
-              }
+      typeField = TextFormField(
+        key: formKey,
+        controller: threadTypeController,
+        decoration: InputDecoration(labelText: tr.threadType, suffixIcon: const Icon(Icons.arrow_drop_down)),
+        readOnly: true,
+        onTap: () async => _showSelectThreadTypeBottomSheet(context, state),
+        // Only auto focus to title field when writing new thread.
+        validator: (v) {
+          if (widget.editType.isEditingPost) {
+            // Skip check when editing post, post have no thread type.
+            return null;
+          }
 
-              // Thread type should not be null nor no more than zero.
-              if (v == null ||
-                  threadType == null ||
-                  threadType!.typeID == null ||
-                  ((threadType!.typeID?.parseToInt() ?? -1) <= 0)) {
-                return tr.threadTypeShouldNotBeEmpty;
-              }
-              return null;
-            },
-          ),
-        ),
+          // Thread type should not be null nor no more than zero.
+          if (v == null ||
+              threadType == null ||
+              threadType!.typeID == null ||
+              ((threadType!.typeID?.parseToInt() ?? -1) <= 0)) {
+            return tr.threadTypeShouldNotBeEmpty;
+          }
+          return null;
+        },
       );
     }
 
     // Always add title no matter thread type presents or not.
     // All thread floors have a legal "subject" here.
-    ret.add(
-      Expanded(
-        child: TextFormField(
-          controller: threadTitleController,
-          decoration: InputDecoration(
-            labelText: tr.title,
-            suffixText: ' $threadTitleRestLength',
-            suffixIcon: IconButton(
-              icon: const Icon(Icons.info_outline),
-              onPressed: () async => showMessageSingleButtonDialog(
-                context: context,
-                title: tr.whyTitleDialog.title,
-                message: tr.whyTitleDialog.detail,
-              ),
-            ),
+    final titleField = TextFormField(
+      controller: threadTitleController,
+      decoration: InputDecoration(
+        labelText: tr.title,
+        suffixText: ' $threadTitleRestLength',
+        suffixIcon: IconButton(
+          icon: const Icon(Icons.info_outline),
+          onPressed: () async => showMessageSingleButtonDialog(
+            context: context,
+            title: tr.whyTitleDialog.title,
+            message: tr.whyTitleDialog.detail,
           ),
-          onChanged: (value) {
-            setState(() {
-              threadTitleRestLength =
-                  (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength) - value.parseUtf8Length;
-            });
-          },
-          validator: (v) {
-            if (widget.editType.isEditingPost) {
-              // Skip check when editing post, post have no thread type.
-              return null;
-            }
-            if (v == null) {
-              return tr.titleShouldNotBeEmpty;
-            }
-            final titleLength = v.parseUtf8Length;
-            if (titleLength <= 0) {
-              return tr.titleShouldNotBeEmpty;
-            }
-            if (titleLength >= (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength)) {
-              return tr.titleTooLong;
-            }
-            return null;
-          },
         ),
       ),
+      onChanged: (value) {
+        setState(() {
+          threadTitleRestLength =
+              (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength) - value.parseUtf8Length;
+        });
+      },
+      validator: (v) {
+        if (widget.editType.isEditingPost) {
+          // Skip check when editing post, post have no thread type.
+          return null;
+        }
+        if (v == null) {
+          return tr.titleShouldNotBeEmpty;
+        }
+        final titleLength = v.parseUtf8Length;
+        if (titleLength <= 0) {
+          return tr.titleShouldNotBeEmpty;
+        }
+        if (titleLength >= (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength)) {
+          return tr.titleTooLong;
+        }
+        return null;
+      },
     );
-    if (ret.isEmpty) {
-      return Container();
+    if (typeField == null) {
+      return titleField;
     }
-    return Padding(
-      padding: edgeInsetsL8R8.add(edgeInsetsT8),
-      child: Row(children: ret.insertBetween(sizedBoxW24H24)),
+    final type = typeField;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Keep the title at least ~16 characters wide beside the type, otherwise stack them.
+        final stacked = constraints.maxWidth < MediaQuery.textScalerOf(context).scale(520);
+        if (stacked) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [type, sizedBoxW8H8, titleField],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: 180, child: type),
+            sizedBoxW12H12,
+            Expanded(child: titleField),
+          ],
+        );
+      },
     );
   }
 
-  /// Build the row to control a
-  Widget _buildControlRow(BuildContext context, PostEditState state) {
-    return Row(
-      children: [
-        Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                sizedBoxW4H4,
-                // Only control expand or collapse on mobile platforms.
-                // For desktop, always expand the toolbar.
-                if (isMobile)
-                  IconButton(
-                    icon: const Icon(Icons.expand),
-                    tooltip: context.t.bbcodeEditor.toolbar,
-                    selectedIcon: Icon(Icons.expand_outlined, color: Theme.of(context).primaryColor),
-                    isSelected: fullScreen,
-                    onPressed: () {
-                      setState(() {
-                        fullScreen = !fullScreen;
-                      });
-                      if (fullScreen) {
-                        panelController.updatePanelType(ChatBottomPanelType.other, data: _BottomPanelType.toolbar);
-                      } else {
-                        panelController.updatePanelType(ChatBottomPanelType.keyboard);
-                      }
-                    },
-                  ),
-                if (additionalOptionsMap != null)
-                  IconButton(
-                    icon: const Icon(Icons.settings_outlined),
-                    tooltip: context.t.bbcodeEditor.additionalOptions,
-                    onPressed: () async => _showAdditionalOptionBottomSheet(context, state),
-                  ),
-                // Reply template
-                IconButton(
-                  icon: const Icon(Icons.quickreply_outlined),
-                  tooltip: context.t.fastReplyTemplate.title,
-                  onPressed: () async {
-                    final pickResult = await context.pushNamed<FastReplyTemplateModel>(
-                      ScreenPaths.fastReplyTemplate,
-                      pathParameters: {'pick': 'true'},
-                    );
+  /// Build the row of editor controls (toolbar, options, templates, permission, price) under the writing area.
+  Widget _buildControlRow(BuildContext context, PostEditState state, EdgeInsets horizontalPadding) {
+    return EditorControlBar(
+      padding: horizontalPadding.add(edgeInsetsT4B4),
+      leading: [
+        // Only control expand or collapse on mobile platforms.
+        // For desktop, always expand the toolbar.
+        if (isMobile)
+          IconButton(
+            icon: const Icon(Icons.expand),
+            tooltip: context.t.bbcodeEditor.toolbar,
+            selectedIcon: Icon(Icons.expand_outlined, color: Theme.of(context).primaryColor),
+            isSelected: fullScreen,
+            onPressed: () {
+              setState(() {
+                fullScreen = !fullScreen;
+              });
+              if (fullScreen) {
+                panelController.updatePanelType(ChatBottomPanelType.other, data: _BottomPanelType.toolbar);
+              } else {
+                panelController.updatePanelType(ChatBottomPanelType.keyboard);
+              }
+            },
+          ),
+        if (additionalOptionsMap != null)
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: context.t.bbcodeEditor.additionalOptions,
+            onPressed: () async => _showAdditionalOptionBottomSheet(context, state),
+          ),
+        // Reply template
+        IconButton(
+          icon: const Icon(Icons.quickreply_outlined),
+          tooltip: context.t.fastReplyTemplate.title,
+          onPressed: () async {
+            final pickResult = await context.pushNamed<FastReplyTemplateModel>(
+              ScreenPaths.fastReplyTemplate,
+              pathParameters: {'pick': 'true'},
+            );
 
-                    if (!context.mounted) {
-                      return;
-                    }
-                    if (pickResult != null) {
-                      bbcodeController.insertBBCode(normalizeBlockMarkerNesting(pickResult.data));
-                    }
-                    focusNode.requestFocus();
-                  },
-                ),
-                if (state.content?.permList?.isNotEmpty ?? false)
-                  Badge(
-                    label: Text(threadPerm?.perm ?? ''),
-                    offset: const Offset(-4, 4),
-                    isLabelVisible: threadPerm != null && threadPerm!.perm.isNotEmpty,
-                    child: IconButton(
-                      icon: const Icon(Icons.lock_open_outlined),
-                      selectedIcon: const Icon(Icons.lock_outline),
-                      isSelected: threadPerm != null && threadPerm!.perm.isNotEmpty,
-                      tooltip: context.t.bbcodeEditor.readPerm,
-                      onPressed: () async {
-                        final selectedPerm = await showSelectPermDialog(context, state.content!.permList!, threadPerm);
-                        if (selectedPerm == null || !context.mounted) {
-                          return;
-                        }
-                        setState(() {
-                          threadPerm = selectedPerm;
-                        });
-                      },
-                    ),
-                  ),
-                if (price != null)
-                  Badge(
-                    label: Text('$price'),
-                    textStyle: Theme.of(context).textTheme.labelSmall,
-                    offset: const Offset(-4, 4),
-                    isLabelVisible: price != null && price != 0,
-                    child: IconButton(
-                      icon: const Icon(Icons.money_off_outlined),
-                      tooltip: context.t.postEditPage.priceDialog.entryTooltip,
-                      selectedIcon: const Icon(Icons.attach_money_outlined),
-                      isSelected: price != null && price != 0,
-                      onPressed: () async {
-                        // TODO: show a dialog to set price.
-                        final inputPrice = await showInputPriceDialog(context, price, state.content?.maxPrice);
-                        if (inputPrice != null) {
-                          setState(() {
-                            price = inputPrice;
-                          });
-                        }
-                      },
-                    ),
-                  ),
-                sizedBoxW4H4,
-              ],
+            if (!context.mounted) {
+              return;
+            }
+            if (pickResult != null) {
+              bbcodeController.insertBBCode(normalizeBlockMarkerNesting(pickResult.data));
+            }
+            focusNode.requestFocus();
+          },
+        ),
+        if (state.content?.permList?.isNotEmpty ?? false)
+          Badge(
+            label: Text(threadPerm?.perm ?? ''),
+            offset: const Offset(-4, 4),
+            isLabelVisible: threadPerm != null && threadPerm!.perm.isNotEmpty,
+            child: IconButton(
+              icon: const Icon(Icons.lock_open_outlined),
+              selectedIcon: const Icon(Icons.lock_outline),
+              isSelected: threadPerm != null && threadPerm!.perm.isNotEmpty,
+              tooltip: context.t.bbcodeEditor.readPerm,
+              onPressed: () async {
+                final selectedPerm = await showSelectPermDialog(context, state.content!.permList!, threadPerm);
+                if (selectedPerm == null || !context.mounted) {
+                  return;
+                }
+                setState(() {
+                  threadPerm = selectedPerm;
+                });
+              },
             ),
           ),
-        ),
+        if (price != null)
+          Badge(
+            label: Text('$price'),
+            textStyle: Theme.of(context).textTheme.labelSmall,
+            offset: const Offset(-4, 4),
+            isLabelVisible: price != null && price != 0,
+            child: IconButton(
+              icon: const Icon(Icons.money_off_outlined),
+              tooltip: context.t.postEditPage.priceDialog.entryTooltip,
+              selectedIcon: const Icon(Icons.attach_money_outlined),
+              isSelected: price != null && price != 0,
+              onPressed: () async {
+                // TODO: show a dialog to set price.
+                final inputPrice = await showInputPriceDialog(context, price, state.content?.maxPrice);
+                if (inputPrice != null) {
+                  setState(() {
+                    price = inputPrice;
+                  });
+                }
+              },
+            ),
+          ),
       ],
     );
   }
 
   Widget _buildBody(BuildContext context, PostEditState state) {
+    if (state.status == PostEditStatus.identityChanged) {
+      return AppStateView(icon: Icons.manage_accounts_outlined, message: context.t.draftBox.accountChanged);
+    }
+    if (state.status == PostEditStatus.unsupported) {
+      return AppStateView(
+        icon: Icons.web_outlined,
+        message: context.t.draftBox.unsupported,
+        action: TextButton.icon(
+          icon: const Icon(Icons.open_in_browser_outlined),
+          onPressed: () async {
+            final url = widget.editType == PostEditType.newThread
+                ? '$baseUrl/forum.php?mod=post&action=newthread&fid=${widget.fid}'
+                : _formatDataUrl(fid: widget.fid, tid: widget.tid!, pid: widget.pid!);
+            try {
+              await openInExternalBrowser(Uri.parse(url));
+            } on Object {
+              if (context.mounted) showSnackBar(context: context, message: context.t.general.failedToLoad);
+            }
+          },
+          label: Text(context.t.draftBox.openBrowser),
+        ),
+      );
+    }
     if (state.status == PostEditStatus.initial || state.status == PostEditStatus.loading) {
       return const CenteredCircularIndicator();
     }
@@ -709,7 +767,7 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
     }
 
     if (!initialized) {
-      final data = state.content?.data;
+      final data = _transfer?.body ?? state.content?.data;
       if (data != null) {
         if (context.read<SettingsBloc>().state.settingsMap.enableEditorBBCodeParser) {
           final delta = parseBBCodeTextToDelta(normalizeBlockMarkerNesting(data));
@@ -721,56 +779,94 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
       initialized = true;
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildTitleRow(context, state),
-        sizedBoxW4H4,
-        // Post data editor.
-        // Now we don't restrict the thread type and thread title, so it's better to focus on content area.
-        Expanded(
-          child: Padding(
-            padding: isMobile ? edgeInsetsL16R16 : edgeInsetsL4R4,
-            child: RichEditor(autoFocus: true, controller: bbcodeController, editorFocusNode: focusNode),
-          ),
-        ),
-        if (isDesktop)
-          // Expand and can not replace with Align.
-          Row(
-            children: [
-              Expanded(
-                child: ColoredBox(
-                  color: Theme.of(context).colorScheme.surfaceContainerLow,
-                  child: Padding(
-                    padding: edgeInsetsL4R4.add(edgeInsetsT4),
-                    child: EditorToolbar(
-                      bbcodeController: bbcodeController,
-                      disabledFeatures: _disabledFeatures,
-                      editorFocusNode: focusNode,
-                      collectDocumentMetadata: collectThreadMetata,
-                      applyDocumentMetadata: (metadata) => applyThreadMetadata(metadata, state),
-                    ),
+    // Title fields and the writing area stay at a readable width on wide windows; the bars under them keep the full
+    // width of the page with their buttons aligned to the same column.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final horizontal = appCenteredPadding(constraints.maxWidth, maxWidth: appReadingMaxWidth);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(padding: horizontal.add(edgeInsetsT12), child: _buildTitleRow(context, state)),
+            // Post data editor.
+            // Now we don't restrict the thread type and thread title, so it's better to focus on content area.
+            Expanded(
+              child: Padding(
+                padding: horizontal.add(const EdgeInsets.symmetric(vertical: 12)),
+                child: EditorFrame(
+                  focusNode: focusNode,
+                  child: RichEditor(autoFocus: true, controller: bbcodeController, editorFocusNode: focusNode),
+                ),
+              ),
+            ),
+            if (isDesktop)
+              ColoredBox(
+                color: Theme.of(context).colorScheme.surfaceContainerLow,
+                child: Padding(
+                  padding: horizontal.add(edgeInsetsT4),
+                  child: EditorToolbar(
+                    bbcodeController: bbcodeController,
+                    disabledFeatures: _disabledFeatures,
+                    editorFocusNode: focusNode,
+                    collectDocumentMetadata: collectThreadMetata,
+                    applyDocumentMetadata: (metadata) => applyThreadMetadata(metadata, state),
                   ),
                 ),
               ),
-            ],
-          ),
-        ColoredBox(
-          color: Theme.of(context).colorScheme.surfaceContainerLow,
-          child: Padding(padding: edgeInsetsR4.add(edgeInsetsB4), child: _buildControlRow(context, state)),
-        ),
-        if (isMobile) _buildMobileToolbar(context, state),
-      ],
+            _buildControlRow(context, state, horizontal),
+            if (isMobile) _buildMobileToolbar(context, state),
+          ],
+        );
+      },
     );
   }
 
   Future<void> _onListen(BuildContext context, PostEditState state) async {
+    if (state.status == PostEditStatus.identityChanged) {
+      _transfer = null;
+      threadTitleController.clear();
+      threadTypeController.clear();
+      bbcodeController.setDocumentFromRawText('');
+      additionalOptionsMap = null;
+      return;
+    }
     if (state.status == PostEditStatus.failedToUpload) {
-      showSnackBar(context: context, message: state.errorText ?? context.t.general.failedToLoad);
+      showSnackBar(
+        context: context,
+        message:
+            state.errorText ??
+            (widget.editType.isEditingPost ? context.t.draftBox.editUnconfirmed : context.t.draftBox.submitUnconfirmed),
+      );
       if (isMobile) {
         WidgetsBinding.instance.focusManager.primaryFocus?.unfocus();
       }
+    } else if (state.status == PostEditStatus.draftUnconfirmed) {
+      await showMessageSingleButtonDialog(
+        context: context,
+        title: context.t.draftBox.title,
+        message: context.t.draftBox.acceptedUnconfirmed,
+      );
+      if (context.mounted && context.read<PostEditRepository>().isCurrent) context.pop(true);
     } else if (state.status == PostEditStatus.success) {
+      if (uploadMethod == _UploadMethod.saveDraft) {
+        if (widget.editType == PostEditType.editDraft) {
+          showSnackBar(context: context, message: context.t.draftBox.saved);
+          context.pop(true);
+          return;
+        }
+        final view = await showQuestionDialog(
+          context: context,
+          title: context.t.draftBox.saved,
+          message: context.t.draftBox.viewSaved,
+        );
+        if (!context.mounted || !context.read<PostEditRepository>().isCurrent) return;
+        if (view ?? false) {
+          context.pushReplacementNamed(ScreenPaths.myThread, queryParameters: {'tab': 'drafts'});
+        } else {
+          context.pop(true);
+        }
+        return;
+      }
       // Some action succeeded.
       if (widget.editType.isEditingPost) {
         // Edit post.
@@ -785,7 +881,7 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
           // Could redirect to new thread page.
           final tr = context.t.postEditPage.threadPublish.afterPostDialog;
           final result = await showQuestionDialog(context: context, title: tr.title, message: tr.message);
-          if (!context.mounted) {
+          if (!context.mounted || !context.read<PostEditRepository>().isCurrent) {
             return;
           }
           if (result ?? false) {
@@ -794,11 +890,11 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
           }
         }
 
-        context.pop();
+        context.pop(true);
       }
     } else if (state.status == PostEditStatus.editing && !init) {
       threadTypeController.text = state.content?.threadType?.name ?? '  ';
-      threadTitleController.text = state.content?.threadTitle ?? '';
+      threadTitleController.text = _transfer?.subject ?? state.content?.threadTitle ?? '';
       // Update the length of chars user can still input.
       // Bytes of chars for title in utf-8 encoding.
       threadTitleRestLength =
@@ -839,6 +935,32 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
     );
     bbcodeController = buildBBCodeEditorController();
     fullScreen = isDesktop;
+    final transfer = widget.transfer;
+    if (widget.editType == PostEditType.newThread &&
+        transfer != null &&
+        transfer.appliesTo(uid: context.read<AuthenticationRepository>().effectiveCurrentUid, fid: widget.fid)) {
+      _transfer = transfer;
+    }
+  }
+
+  /// Intentional mode switch: subject and body go to the poll page, which fetches its own form; nothing is posted.
+  void _switchToPoll(BuildContext context) {
+    if (!mounted || ModalRoute.of(context)?.isActive == false || !context.read<PostEditRepository>().isCurrent) {
+      return;
+    }
+    final uid = context.read<AuthenticationRepository>().effectiveCurrentUid;
+    context.pushReplacementNamed(
+      ScreenPaths.createPoll,
+      pathParameters: {'fid': widget.fid},
+      extra: uid == null || !initialized
+          ? null
+          : ThreadModeTransfer(
+              uid: uid,
+              fid: widget.fid,
+              subject: threadTitleController.text,
+              body: bbcodeController.toForumBBCode(),
+            ),
+    );
   }
 
   @override
@@ -873,10 +995,18 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
       },
       child: MultiBlocProvider(
         providers: [
-          RepositoryProvider(create: (_) => PostEditRepository()),
+          RepositoryProvider(
+            create: (context) => PostEditRepository(
+              client: getIt.get<NetClientProvider>(),
+              currentUid: () => context.read<AuthenticationRepository>().effectiveCurrentUid,
+            ),
+          ),
           BlocProvider(
             create: (context) {
-              final bloc = PostEditBloc(postEditRepository: context.repo());
+              final bloc = PostEditBloc(
+                postEditRepository: context.repo(),
+                authenticationChanges: context.read<AuthenticationRepository>().status,
+              );
 
               final event = switch (widget.editType) {
                 PostEditType.editPost || PostEditType.editDraft => PostEditLoadDataRequested(
@@ -898,9 +1028,20 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
               appBar: AppBar(
                 title: Text(title),
                 actions: [
-                  if (widget.editType.isEditingDraft) ...[
+                  if (widget.editType == PostEditType.newThread &&
+                      widget.pollOffered &&
+                      state.status != PostEditStatus.uploading &&
+                      state.status != PostEditStatus.success &&
+                      state.status != PostEditStatus.draftUnconfirmed &&
+                      state.status != PostEditStatus.identityChanged)
                     IconButton(
-                      onPressed: state.status == PostEditStatus.uploading
+                      tooltip: context.t.pollCreate.switchToPoll,
+                      icon: const Icon(Icons.poll_outlined),
+                      onPressed: _confirming ? null : () => _switchToPoll(context),
+                    ),
+                  if (widget.editType.isEditingDraft && (state.content?.canSaveDraft ?? false)) ...[
+                    IconButton(
+                      onPressed: _confirming || !context.read<PostEditBloc>().canSubmit
                           ? null
                           : () async => _onFinish(context, state, saveDraft: true),
                       icon: state.status == PostEditStatus.uploading && uploadMethod == _UploadMethod.saveDraft
@@ -914,7 +1055,9 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
                     icon: state.status == PostEditStatus.uploading && uploadMethod == _UploadMethod.publish
                         ? sizedCircularProgressIndicator
                         : const Icon(Icons.send),
-                    onPressed: state.status == PostEditStatus.uploading ? null : () async => _onFinish(context, state),
+                    onPressed: _confirming || !context.read<PostEditBloc>().canSubmit
+                        ? null
+                        : () async => _onFinish(context, state),
                   ),
                 ],
               ),
