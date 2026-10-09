@@ -1,0 +1,454 @@
+import 'dart:io';
+import 'dart:isolate';
+
+import 'package:cryptography/dart.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:tsdm_client/features/update/models/latest_version_info.dart';
+import 'package:tsdm_client/features/update/repository/windows_update_installer.dart';
+import 'package:tsdm_client/instance.dart';
+
+/// Actionable failures, translated by the update page instead of exposing raw network errors.
+enum UpdateDownloadFailure {
+  /// The download service could not be reached.
+  network,
+
+  /// This version does not yet have a published APK.
+  releaseUnavailable,
+
+  /// Release metadata does not identify a supported official asset.
+  invalidRelease,
+
+  /// Downloaded bytes do not match the published size or digest.
+  integrity,
+
+  /// The private update cache could not be written.
+  storage,
+
+  /// Android could not open or validate the installer request.
+  install,
+
+  /// This platform or version cannot use in-app installation.
+  unsupported,
+
+  /// The folder of the running app cannot be written, e.g. it is under Program Files (Windows).
+  installLocation,
+}
+
+/// A download that cannot safely be offered to the installer.
+class UpdateDownloadException implements Exception {
+  /// Constructor.
+  const UpdateDownloadException(this.failure);
+
+  /// User-facing error category.
+  final UpdateDownloadFailure failure;
+}
+
+/// The official release asset a platform installs.
+enum UpdateTarget {
+  /// Android: the universal APK; its version code carries the ABI suffix 9.
+  android(assetName: 'tsdm_client-universal.apk', extension: 'apk', abiSuffix: 9),
+
+  /// Windows: the portable zip, holding the `tsdm_client` folder.
+  windows(assetName: 'tsdm_client-windows.zip', extension: 'zip')
+  ;
+
+  const UpdateTarget({required this.assetName, required this.extension, this.abiSuffix});
+
+  /// File name of the asset in the GitHub release.
+  final String assetName;
+
+  /// Extension of a complete download in the update cache.
+  final String extension;
+
+  /// Android ABI digit appended to the version code of the installed package.
+  final int? abiSuffix;
+
+  /// Version code of the installed build for the release [versionCode].
+  int installedVersionCode(int versionCode) => abiSuffix == null ? versionCode : versionCode * 10 + abiSuffix!;
+}
+
+/// An asset whose size and SHA-256 matched the exact published release asset.
+class DownloadedUpdate {
+  /// Constructor.
+  const DownloadedUpdate({required this.path, required this.version, required this.versionCode});
+
+  /// File in the application's private update cache.
+  final String path;
+
+  /// Expected APK version name.
+  final String version;
+
+  /// Expected version code of the installed build (Android: including the universal ABI suffix).
+  final int versionCode;
+}
+
+class _ReleaseAsset {
+  const _ReleaseAsset({required this.url, required this.size, required this.digest});
+
+  final String url;
+  final int size;
+  final String digest;
+}
+
+/// The platform side of an update: where downloads are kept and how a verified one is installed.
+abstract interface class UpdateInstaller {
+  /// The release asset this platform installs.
+  UpdateTarget get target;
+
+  /// Directory holding downloads; only this app writes to it.
+  Future<String> directory();
+
+  /// Whether the app may request installation now.
+  Future<bool> canInstall();
+
+  /// Opens the settings that allow installation, false when the platform has none.
+  Future<bool> openPermissionSettings();
+
+  /// Why an update downloaded now could not be installed, null when nothing is known to stand in the way.
+  ///
+  /// Checked before downloading, so a run that can never install (e.g. not the portable Windows folder, or a folder
+  /// that cannot be written) does not download the release first.
+  Future<UpdateDownloadFailure?> preflight();
+
+  /// Installs [update] after the user asked for it.
+  Future<bool> install(DownloadedUpdate update);
+}
+
+/// Native operations are separate from downloading, allowing offline verification of both layers.
+class AndroidUpdateInstaller implements UpdateInstaller {
+  static const _channel = MethodChannel('kzs.th000.tsdm_client/updateChannel');
+
+  @override
+  UpdateTarget get target => UpdateTarget.android;
+
+  /// Returns the private directory exposed only to the system installer.
+  @override
+  Future<String> directory() async {
+    final path = await _channel.invokeMethod<String>('getUpdateDirectory');
+    if (path == null || path.isEmpty) {
+      throw const UpdateDownloadException(UpdateDownloadFailure.storage);
+    }
+    return path;
+  }
+
+  /// Whether the user has allowed this application to request installation.
+  @override
+  Future<bool> canInstall() async => await _channel.invokeMethod<bool>('canInstallPackages') ?? false;
+
+  /// Opens Android's per-application installation permission settings.
+  @override
+  Future<bool> openPermissionSettings() async => await _channel.invokeMethod<bool>('openInstallPermission') ?? false;
+
+  /// The system installer checks the package itself; the installation permission is asked for at Install.
+  @override
+  Future<UpdateDownloadFailure?> preflight() async => null;
+
+  /// Native code rechecks the private path, package, version and signer before granting temporary read access.
+  @override
+  Future<bool> install(DownloadedUpdate update) async =>
+      await _channel.invokeMethod<bool>('installUpdate', {
+        'path': update.path,
+        'version': update.version,
+        'versionCode': update.versionCode,
+      }) ??
+      false;
+}
+
+/// Downloads only the platform's asset ([UpdateTarget]) from an exact official GitHub release.
+///
+/// Uses an independent streaming Dio client: forum cookies and the native forum client's buffered GET transport
+/// must never be used for update downloads. Network failures retain the external GitHub fallback in the UI.
+class ReleaseUpdateRepository {
+  /// Optional dependencies support offline release/download/installer tests.
+  ReleaseUpdateRepository({Dio? dio, UpdateInstaller? installer})
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              connectTimeout: const Duration(seconds: 20),
+              receiveTimeout: const Duration(seconds: 60),
+            ),
+          ),
+      installer = installer ?? (Platform.isWindows ? WindowsUpdateInstaller() : AndroidUpdateInstaller());
+
+  final Dio _dio;
+
+  /// Platform bridge for private cache access and explicit installation actions.
+  final UpdateInstaller installer;
+
+  UpdateTarget get _target => installer.target;
+
+  static const _repository = 'Carinoasd/tsdm_client';
+  static const int _maxSize = 512 * 1024 * 1024;
+
+  Future<_ReleaseAsset> _resolve(LatestVersionInfo info, CancelToken cancelToken) async {
+    if (!RegExp(r'^\d+\.\d+\.\d+$').hasMatch(info.version) || info.versionCode <= 0) {
+      throw const UpdateDownloadException(UpdateDownloadFailure.invalidRelease);
+    }
+    final tag = 'v${info.version}';
+    final response = await _dio.get<Object?>(
+      'https://api.github.com/repos/$_repository/releases/tags/$tag',
+      options: Options(headers: {'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}),
+      cancelToken: cancelToken,
+    );
+    final release = response.data;
+    if (release is! Map<String, dynamic> ||
+        release['tag_name'] != tag ||
+        release['draft'] != false ||
+        release['prerelease'] != false ||
+        release['assets'] is! List<dynamic>) {
+      throw const UpdateDownloadException(UpdateDownloadFailure.invalidRelease);
+    }
+    final assets = (release['assets'] as List<dynamic>).whereType<Map<String, dynamic>>().where(
+      (asset) => asset['name'] == _target.assetName && asset['state'] == 'uploaded',
+    );
+    if (assets.length != 1) {
+      throw const UpdateDownloadException(UpdateDownloadFailure.releaseUnavailable);
+    }
+    final asset = assets.single;
+    final expectedUrl = 'https://github.com/$_repository/releases/download/$tag/${_target.assetName}';
+    final size = asset['size'];
+    final digest = asset['digest'];
+    if (asset['browser_download_url'] != expectedUrl ||
+        size is! int ||
+        size <= 0 ||
+        size > _maxSize ||
+        digest is! String ||
+        !RegExp(r'^sha256:[0-9a-fA-F]{64}$').hasMatch(digest)) {
+      throw const UpdateDownloadException(UpdateDownloadFailure.invalidRelease);
+    }
+    return _ReleaseAsset(url: expectedUrl, size: size, digest: digest.substring(7).toLowerCase());
+  }
+
+  Future<bool> _matchesAsset(File file, _ReleaseAsset asset, CancelToken cancelToken) async {
+    if (cancelToken.cancelError case final error?) throw error;
+    if (FileSystemEntity.typeSync(file.path, followLinks: false) != FileSystemEntityType.file ||
+        await file.length() != asset.size) {
+      return false;
+    }
+    // Hashing tens of megabytes in pure Dart takes seconds: keep it off the UI isolate, restore() runs at startup.
+    // A cancellation cannot stop the background hash, but its result is never used then.
+    final path = file.path;
+    final size = asset.size;
+    final actual = await Isolate.run(() => hashFile(path, size));
+    if (cancelToken.cancelError case final error?) throw error;
+    return actual != null && actual == asset.digest;
+  }
+
+  /// Lowercase hex SHA-256 of the file at [path], null when it does not hold exactly [size] bytes.
+  ///
+  /// Runs in a background isolate; only the path and size are sent to it.
+  static Future<String?> hashFile(String path, int size) async {
+    final hash = const DartSha256().newHashSink();
+    var received = 0;
+    await for (final bytes in File(path).openRead()) {
+      received += bytes.length;
+      if (received > size) return null;
+      hash.add(bytes);
+    }
+    hash.close();
+    if (received != size) return null;
+    return (await hash.hash()).bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// Recover a completed download after Android restarts the app when installation permission changes.
+  ///
+  /// Only matching regular APK files in the native private update directory are candidates. No cached receipt or
+  /// manifest is trusted: the exact official release metadata is fetched again and every byte is rehashed against
+  /// its current published length and SHA-256. APK download and installation never start here. Native package,
+  /// version and signer checks still run when the reader explicitly presses Install.
+  Future<DownloadedUpdate?> restore(
+    LatestVersionInfo info, {
+    required CancelToken cancelToken,
+    required void Function() onVerifying,
+  }) async {
+    try {
+      if (cancelToken.cancelError case final error?) throw error;
+      if (!RegExp(r'^\d+\.\d+\.\d+$').hasMatch(info.version) || info.versionCode <= 0) {
+        throw const UpdateDownloadException(UpdateDownloadFailure.invalidRelease);
+      }
+      final directory = Directory(await installer.directory());
+      if (!directory.existsSync()) return null;
+      final name = RegExp('^update-${info.versionCode}-[0-9]+\\.${_target.extension}\$');
+      final candidates = await directory
+          .list(followLinks: false)
+          .where((entry) => entry is File && name.hasMatch(p.basename(entry.path)))
+          .cast<File>()
+          .toList();
+      if (cancelToken.cancelError case final error?) throw error;
+      if (candidates.isEmpty) return null;
+      final asset = await _resolve(info, cancelToken);
+      onVerifying();
+      // Try the most recent complete file first; an interrupted replacement may leave an older valid candidate.
+      candidates.sort((a, b) => b.path.compareTo(a.path));
+      for (final candidate in candidates) {
+        if (cancelToken.cancelError case final error?) throw error;
+        if (await _matchesAsset(candidate, asset, cancelToken)) {
+          return DownloadedUpdate(
+            path: candidate.path,
+            version: info.version,
+            versionCode: _target.installedVersionCode(info.versionCode),
+          );
+        }
+        await _delete(candidate);
+      }
+      return null;
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) rethrow;
+      throw UpdateDownloadException(
+        error.response?.statusCode == 404 ? UpdateDownloadFailure.releaseUnavailable : UpdateDownloadFailure.network,
+      );
+    } on FileSystemException {
+      throw const UpdateDownloadException(UpdateDownloadFailure.storage);
+    } on PlatformException {
+      throw const UpdateDownloadException(UpdateDownloadFailure.storage);
+    }
+  }
+
+  /// Resolve metadata, stream to a partial file, verify, then atomically make the APK available for installation.
+  Future<DownloadedUpdate> download(
+    LatestVersionInfo info, {
+    required CancelToken cancelToken,
+    required void Function(int received, int total) onProgress,
+    required void Function() onVerifying,
+  }) async {
+    File? partial;
+    File? complete;
+    RandomAccessFile? writer;
+    var success = false;
+    try {
+      final asset = await _resolve(info, cancelToken);
+      final size = asset.size;
+      if (cancelToken.cancelError case final error?) throw error;
+      final directory = Directory(await installer.directory());
+      await directory.create(recursive: true);
+      final name = 'update-${info.versionCode}-${DateTime.now().microsecondsSinceEpoch}';
+      partial = File('${directory.path}/$name.part');
+      complete = File('${directory.path}/$name.${_target.extension}');
+      writer = await partial.open(mode: FileMode.writeOnly);
+      final body = await _dio.get<ResponseBody>(
+        asset.url,
+        options: Options(responseType: ResponseType.stream),
+        cancelToken: cancelToken,
+      );
+      if (body.data == null) {
+        throw const UpdateDownloadException(UpdateDownloadFailure.network);
+      }
+      var received = 0;
+      onProgress(0, size);
+      await for (final bytes in body.data!.stream) {
+        if (cancelToken.cancelError case final error?) throw error;
+        received += bytes.length;
+        if (received > size) {
+          throw const UpdateDownloadException(UpdateDownloadFailure.integrity);
+        }
+        await writer.writeFrom(bytes);
+        onProgress(received, size);
+      }
+      await writer.close();
+      writer = null;
+      if (cancelToken.cancelError case final error?) throw error;
+      if (received != size) {
+        throw const UpdateDownloadException(UpdateDownloadFailure.integrity);
+      }
+      onVerifying();
+      if (!await _matchesAsset(partial, asset, cancelToken)) {
+        throw const UpdateDownloadException(UpdateDownloadFailure.integrity);
+      }
+      if (cancelToken.cancelError case final error?) throw error;
+      await partial.rename(complete.path);
+      success = true;
+      return DownloadedUpdate(
+        path: complete.path,
+        version: info.version,
+        versionCode: _target.installedVersionCode(info.versionCode),
+      );
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) rethrow;
+      throw UpdateDownloadException(
+        error.response?.statusCode == 404 ? UpdateDownloadFailure.releaseUnavailable : UpdateDownloadFailure.network,
+      );
+    } on FileSystemException {
+      throw const UpdateDownloadException(UpdateDownloadFailure.storage);
+    } on PlatformException {
+      throw const UpdateDownloadException(UpdateDownloadFailure.storage);
+    } finally {
+      if (writer != null) await writer.close();
+      if (!success) {
+        await _delete(partial);
+        await _delete(complete);
+      }
+    }
+  }
+
+  static final _artifact = RegExp(r'^update-([0-9]+)-[0-9]+\.(apk|zip|part)$');
+  static final _windowsWorkDirectory = RegExp(r'^(staging-[0-9]+|backup-[0-9]+(-[0-9]+)?)$');
+
+  /// A cancel marker of a Windows update attempt (see `WindowsUpdateInstaller.cancelledMarkerName`); kept for an
+  /// hour, far longer than the script it is for could still be waiting.
+  static final _windowsCancelMarker = RegExp(r'^apply-update\.started\.[0-9a-f]+\.cancelled$');
+
+  /// Removes what no later step will use: unfinished downloads, and downloads of any version but [keepVersionCode]
+  /// (an installed or replaced release). Windows also leaves the unpacked and backed up folders of an applied update;
+  /// a backup marked by an incomplete rollback (`<backup>.incomplete` next to it) is kept with its marker.
+  ///
+  /// Only direct entries named by this repository are touched; the cache directory itself is kept. Call it only when
+  /// no download is running.
+  Future<void> cleanup({int? keepVersionCode}) async {
+    try {
+      final directory = Directory(await installer.directory());
+      if (!directory.existsSync()) return;
+      await for (final entry in directory.list(followLinks: false)) {
+        final name = p.basename(entry.path);
+        if (entry is File) {
+          final match = _artifact.firstMatch(name);
+          if (match != null && (match.group(2) == 'part' || int.parse(match.group(1)!) != keepVersionCode)) {
+            await _delete(entry);
+          } else if (_windowsCancelMarker.hasMatch(name) &&
+              DateTime.now().difference(entry.statSync().modified) > const Duration(hours: 1)) {
+            await _delete(entry);
+          }
+        } else if (entry is Directory &&
+            _windowsWorkDirectory.hasMatch(name) &&
+            !File('${entry.path}.incomplete').existsSync()) {
+          try {
+            await entry.delete(recursive: true);
+          } on FileSystemException {
+            // Held by another program (e.g. antivirus): retried next time, the other entries are still cleaned.
+          }
+        }
+      }
+    } on Exception catch (e, st) {
+      // Leftovers are retried at the next check; they never block an update. Besides file system errors this also
+      // covers a native side that has no update folder (UpdateDownloadException, MissingPluginException): the
+      // result is awaited by nobody at startup, so nothing may escape from here.
+      _logCleanupFailure(e, st);
+    }
+  }
+
+  static void _logCleanupFailure(Exception error, StackTrace stackTrace) {
+    try {
+      talker.warning('update cache cleanup failed: $error', error, stackTrace);
+      // Logging must not throw either, also where no logger was set up (tests, a check before initLogger).
+      // ignore: avoid_catching_errors
+    } on Error {
+      // Nothing to log to.
+    }
+  }
+
+  /// Removes only the receipt's file, never recursively removing the private directory.
+  Future<void> discard(DownloadedUpdate? update) => _delete(update == null ? null : File(update.path));
+
+  Future<void> _delete(File? file) async {
+    try {
+      if (file != null && file.existsSync()) await file.delete();
+    } on FileSystemException {
+      // A cache cleanup failure must not mask the original download failure.
+    }
+  }
+
+  /// Closes the download-only client, without touching the forum session.
+  void dispose() => _dio.close(force: true);
+}

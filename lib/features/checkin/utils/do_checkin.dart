@@ -6,6 +6,7 @@ import 'package:tsdm_client/exceptions/exceptions.dart';
 import 'package:tsdm_client/extensions/fp.dart';
 import 'package:tsdm_client/features/checkin/models/models.dart';
 import 'package:tsdm_client/features/checkin/utils/parse_checkin.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
 import 'package:universal_html/parsing.dart';
@@ -22,6 +23,23 @@ const _checkInRequestUrl = '$baseUrl/plugin.php?id=dsu_paulsign:sign&operation=q
 /// class, because they don't have it.
 Task<CheckinResult> doCheckin(NetClientProvider netClient, CheckinFeeling feeling, String message) {
   return Task(() async {
+    // The forum's app API tells the state plainly when the forum has it; checking in itself stays the web form.
+    final apiAnswer = await TsdmAppApi.ask(netClient, 'checkin');
+    if (apiAnswer != null && apiAnswer['ok'] == 0 && apiAnswer['error'] == 'login') {
+      talker.error('check in failed: not logged in (app api)');
+      return const CheckinResultNotAuthorized();
+    }
+    switch (checkinStateOf(apiAnswer)) {
+      case (checkedToday: true, openNow: _):
+        talker.info('check in skipped: checked in today (app api)');
+        return const CheckinResultAlreadyChecked();
+      case (checkedToday: false, openNow: false):
+        talker.warning('check in not done: checkin is not open now (app api)');
+        return const CheckinResultEarlyInTime();
+      case (checkedToday: false, openNow: true) || null:
+        break;
+    }
+
     final respEither = await netClient.get(_checkInPageUrl).run();
     if (respEither.isLeft()) {
       return _requestFailed(respEither.unwrapErr());
@@ -42,6 +60,12 @@ Task<CheckinResult> doCheckin(NetClientProvider netClient, CheckinFeeling feelin
     if (document.querySelector('form#lsform') != null && document.querySelector('div#um') == null) {
       talker.error('check in failed: not logged in');
       return const CheckinResultNotAuthorized();
+    }
+
+    // The service desk box tells the truth; the page title may not (see below).
+    if (parseCheckinDeskStatus(document) ?? false) {
+      talker.info('check in skipped: the checkin page says checked in today');
+      return const CheckinResultAlreadyChecked();
     }
 
     final maybeCheckinMessage = parseCheckinPageMessage(document);
@@ -110,6 +134,14 @@ CheckinResult _requestFailed(AppException e) {
 }
 
 CheckinResult? _checkCheckinResultText(String result) {
+  // "您今天已经签到过了或者签到时间还未开始" is all the forum says before 1:00, when checkin is not open yet. Read as
+  // "already checked in" it was recorded as today's checkin: the app showed it checked in, never tried again, and the
+  // website had no checkin. Only "not open yet" is safe: an account that did check in is then simply tried again.
+  // When the page says it checked in, the service desk box above has already answered.
+  if (result.contains('签到时间还未开始') || result.contains('签到时间还没有到')) {
+    talker.warning('check in not done: checkin is not open yet (or already done): $result');
+    return const CheckinResultEarlyInTime();
+  }
   if (result.contains('签到成功')) {
     talker.info('check in success: $result');
     return CheckinResultSuccess(result);
@@ -125,10 +157,6 @@ CheckinResult? _checkCheckinResultText(String result) {
   if (result.contains('已经过了签到时间')) {
     talker.error('check in failed: late in time');
     return const CheckinResultLateInTime();
-  }
-  if (result.contains('签到时间还没有到') || result.contains('签到时间还未开始')) {
-    talker.error('check in failed: early in time');
-    return const CheckinResultEarlyInTime();
   }
   return null;
 }

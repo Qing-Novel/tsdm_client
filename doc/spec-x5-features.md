@@ -1338,3 +1338,241 @@ B. 論壇提醒屏蔽規則
 - 修正：單一連結且指向個人空間的列解析成「成員」（名字取自「欢迎…加入」，點開個人資料）；沒有任何可顯示列的分頁不畫；排行分頁改用 `PinnedThreadGroup.isRank` 標記，不再靠索引 6（拿掉空分頁後索引會變）。解析抽成 `HomepageBloc.parsePinnedThreadGroups`。
 - 驗證：test_185（`test/data/homepage_kahrpba_tabs_x5.html`，2026-10-01 實際區塊，使用者已去識別化）。
 
+
+## 46. 巢狀引用框下方的大片空白（GitHub #158，2026-10-02）
+
+- 現象：活動帖 tid 1267109 全文包在四層 `<blockquote>` 裡，App 在內文結束後留下比內文還長的空白，外面三層的引用豎線一路延伸。
+- 事實（2026-10-02 測試帳號唯讀，未回帖）：四層引用同時開、同時關；最內層結尾是隱藏內容區塊加 `<br />`。
+- 根因：`_buildBlockQuote` 回傳 `[WidgetSpan(引用框), emptySpan]`，靠 `\n` 讓後面的文字換行。引用框是外層引用的最後一個元素時，這個 `\n` 結束的空白末行在 Flutter 會和前一行（整個內層引用框）一樣高，每包一層高度就翻倍（實測內層 2119 → 4258 → 8536 → 17092）。最外層 `munchElement` 本來就會刪尾端換行，巢狀內容沒刪。
+- 修正：引用框內容在包進 `QuotedText` 前刪掉尾端的換行與純空白文字，做法同折疊區塊與 details 卡片。網頁上區塊尾端的 `<br>` 本來就不會多一行，行為一致。
+- 驗證：test_186（自組結構，不含原帖內容）：兩層、活動帖四層結構、引用後接文字仍換行。修正前前兩項失敗（差 96px、1624px）。
+
+## 47. 取下第二稱號誤報失敗（GitHub #160，2026-10-02）
+
+- 現象：取下稱號後提示載入錯誤，網頁上其實已取下。日誌：`failed to set title 0: current title is 674, message=设定成功…`。
+- 事實（2026-10-02 測試帳號唯讀）：沒有裝備稱號時，「当前使用的称号」區塊內只有 `<p class="emp">您当前还没有装备称号哦...</p>`，沒有 `table.dt`。
+- 根因：`SecondaryTitle.parseTitlesPage` 在區塊裡找不到表格時退回「頁面第一個 `table.dt`」，那是「当前拥有的称号」，第一列被當成正在使用，核對失敗。
+- 修正：只有找不到區塊標題時才依表格順序退回；區塊存在但沒有表格＝未裝備。
+- 驗證：test_187（自組頁面）：有裝備、未裝備、無區塊標題的舊版面。修正前「未裝備」案例得到 `[674]`。未實測取下（會改動帳號狀態，測試帳號也沒有稱號）。
+
+## 48. App 內更新與互動檢視的後續修正、Windows App 內更新（PR #162 審查，2026-10-03）
+
+### 48.1 審查的三項 P2
+
+- 更新快取：`ReleaseUpdateRepository.cleanup(keepVersionCode)` 刪除快取目錄下直接的 `update-<code>-<ts>.(apk|zip|part)`：`.part` 一律刪，完整檔只留目前提供的新版版本碼；Windows 另刪 `staging-<code>`、`backup-<code>`。`UpdateDownloadCubit.restore` 每次檢查版本都會觸發，已是最新版時也會；清理不阻塞 restore（restore 只讀同版本的完整檔），下載開始前會先等清理完成，避免刪到正在寫的 `.part`。
+- 互動視窗來源：`documentUrl` 改成 `https://p<SHA-256 前 62 位>.invalid/document.html`，每個（帳號、來源頁、樓層）各自是一個可註冊網域。原本都在 `tsdm.invalid` 底下，帖子腳本可以用 `Domain=tsdm.invalid` 的 Cookie 跨帖子、跨帳號傳資料。
+- NAT64：`publicAddress` 遇到 `64:ff9b::/96` 時取最後 4 bytes，套用原本的 IPv4 規則。
+
+### 48.2 Windows App 內更新
+
+- 資產：`tsdm_client-windows.zip`（內含 `tsdm_client/` 資料夾），版本碼不加 ABI 位數。下載、大小與 SHA-256 核對、重啟後恢復，都和 Android 共用同一套流程（`UpdateTarget`）。快取放在 application support 的 `updates/`。
+- 安裝（`WindowsUpdateInstaller`）：
+  1. 前提檢查：執行檔必須是 `tsdm_client.exe`，旁邊要有 `flutter_windows.dll`（debug 執行或不明的資料夾配置不處理）；資料夾要可寫入（Program Files 會提示搬家）。
+  2. 解壓到 `staging-<code>`：每個項目都必須在 `tsdm_client/` 底下，不能有 `..`、反斜線或磁碟代號，解壓結果必須含 exe 和 engine。
+  3. 寫入 `apply-update.ps1`（純 ASCII），用 detached 方式啟動 `powershell.exe`，約 0.8 秒後 App 自行結束。
+  4. 腳本流程：等 App 行程結束，備份「新版會覆蓋到的舊檔」，逐檔複製（每檔重試 20 次），完成後重新啟動 App。換檔失敗時，只還原實際換過的檔案，並刪除新增的檔案。日誌寫在 `updates/update.log`。
+  5. 只寫入 release 裡有的檔案，資料夾裡其他檔案不動；使用者資料本來就在 AppData。
+- 驗證：
+  - test_188：清理、Windows 資產與恢復、解壓的路徑檢查（含 zip-slip）、安裝參數、不可寫入、Windows 卡片文字。
+  - 在實機 Windows 用真的腳本、舊版資料夾（885 檔）加 1.30.0 檔案驗證三種情況：
+    - 成功：檔案與新版 SHA-256 一致，資料夾裡的其他檔案保留，App 自動重開。
+    - 檔案被鎖、連讀取都不行：在備份階段就停下，沒有改任何東西。
+    - 檔案可讀不可寫：換檔失敗後還原，結果與舊版 SHA-256 一致。
+  - 未做：在 App 內實際按下安裝的完整流程（需要用含此功能的 Windows 版，從舊版更新到新版才能驗）。
+
+## 49. 互動內容的閃退、誤判與顯示（GitHub #165，2026-10-03）
+
+- **閃退**：日誌顯示 7:39:42 打開互動視窗、7:39:53 返回帖子，7:39:55 App 重新啟動。`InteractiveHtmlImages.close()` 在 `onDestroy`（主執行緒）取消請求、`evictAll` 連線池，會關閉 TLS socket；TLS 關閉要寫網路，Android 會丟 `NetworkOnMainThreadException`，OkHttp 的 `closeQuietly` 對 RuntimeException 會再丟出，最後讓整個行程結束。現在 `close()` 立刻拒絕新的載入，socket 改在背景執行緒關閉，並吞掉例外。沒有 logcat，這是依時間點和程式推斷的最可能原因。
+- **誤判**：論壇自己加在每則訊息的三種標記都被當成作者寫的互動內容：
+  - 圖片的 `onmouseover="img_onmouseoverfunc(this)"`
+  - 正文開頭的 `<script>replyreload += ',' + pid;</script>`
+
+  前兩者現在視為論壇原生；作者自己寫的 handler、script、按鈕照樣算。折疊區塊的原生按鈕帶 `class="spoilerbutton"`，原本就已排除（PR #166 審查後拿掉了多餘的「沒有 class 也排除」規則）。
+- **細長豎條**（tid 1267377）：全文包在四層 `<blockquote>`。互動視窗沒有論壇的樣式表，瀏覽器預設每層左右各留 40px，四層就把手機寬度吃光了。文件現在加上論壇的引用框樣式（左邊框、不縮排右側），`overflow-wrap` 也從 `anywhere` 改成 `break-word`，避免表格的最小寬度被壓成一個字。
+- **延遲載入圖片**：論壇把圖片網址放在 `file`／`zoomfile`，沒有 `src`。互動視窗沒有論壇的載入腳本，所以圖片空白。現在這兩個屬性也列入允許的圖片清單；`src` 空白或是 `none.gif` 佔位圖時，文件載入後改用 `file`。
+- **語言**：Dart 端把 `LocaleSettings.currentLocale.languageTag` 傳給原生；`InteractiveHtmlActivity.Labels` 有簡體、繁體、英文三組文字，沒收到語言時才依系統語言。
+- **橫屏安全區**：`layoutInDisplayCutoutMode = SHORT_EDGES`，背景延伸到瀏海；原本的 insets padding（systemBars、displayCutout、ime）讓控制列和頁面避開瀏海。
+- **驗證**：
+  - test_189：用實際帖子結構（名字已替換）驗證貼圖回覆、四層引用活動帖不算互動，作者自己寫的 handler、script、按鈕照樣算；interactive_post_viewer_test 驗證會傳出語言。
+  - 原生 InteractiveHtmlPolicyTest：引用樣式、延遲載入圖片、`Labels`、`close()` 立即返回並拒絕新的載入。
+  - 未在實機上重現閃退。
+
+## 50. 0 點到 1 點的簽到被記成已簽（2026-10-06 回報）
+
+- 現象：不能自動簽到，App 顯示「已簽到」，網頁上「今天未簽到」。回報版本 1.31.1+122。
+- 事實（2026-10-06 測試帳號唯讀 GET，未簽到）：
+  - 簽到頁寫著「本社区规定的签到时间是自1:00到23:59时止」。
+  - 不能簽到時，頁面標題是 `<h1 class="mt">您今天已经签到过了或者签到时间还未开始</h1>`，「已簽」和「還沒開放」都是這一句。
+  - 右側「簽到服務台」`div#qdmsgt` 會明確寫【今天未签到】或【今天已签到】，並附上次簽到時間。
+- 根因：`_checkCheckinResultText` 先比對「已经签到」，0:00–0:59 的頁面就被判成 `CheckinResultAlreadyChecked`。手動和自動簽到都會因此記下今天的簽到時間，所以首頁顯示已簽到、按鈕停用，自動簽到當天也不再嘗試。
+- 修正：
+  1. 新增 `parseCheckinDeskStatus`：服務台寫【今天已签到】時，回報已簽到。
+  2. 文字裡只要有「签到时间还未开始／还没有到」，就判為 `CheckinResultEarlyInTime`（不記錄），而且這項判斷放在「已经签到」之前。真的已簽過的帳號只是下次再試一次，論壇會再回「已簽到」，沒有副作用。
+  3. 只寫「您今天已经签到过了」的回應，照舊判為已簽到。
+- 驗證：test_190 用 2026-10-06 實際簽到頁的結構（帳號名已替換），涵蓋：
+  - 0 點時段＋服務台未簽 → 未開放，不送出簽到。
+  - 同樣的標題＋服務台已簽 → 已簽到。
+  - 沒有服務台區塊的模稜兩可標題 → 不當成已簽。
+  - 只說「已经签到」→ 已簽到。
+  - 開放時段 → 照常送出簽到。
+
+  修正前，第 1、3 項會得到 AlreadyChecked。
+- 已知限制：已被誤記的帳號，當天首頁仍顯示已簽到，要到隔天才恢復；當天請在網頁補簽。
+
+## 51. 論壇 App 接口（tsdmapp 插件）第一階段（2026-10-06）
+
+- 背景：App 全靠抓網頁解析 HTML，論壇改版或改字就壞（簽到、通知漏收、首頁分頁…）。改由論壇插件 `tsdmapp` 提供固定 JSON：`plugin.php?id=tsdmapp:api&action=status|notify|checkin`。插件在 `~/discuz-plugin-work/projects/tsdmapp-work`（1.1.0：唯讀、只回本人資料、後台總開關、每帳號頻率限制 429）。
+- App：`lib/features/tsdmapp/tsdmapp_api.dart`
+  - `TsdmAppApi.ask`：用帶 Cookie 的同一個 client 問。回應不是 JSON（沒裝插件），或回 `error: off`（站方關閉），就一小時內不再問。429、斷線只影響這一次。
+  - 提醒輪詢（`fetchNotificationWith` 有 timestamp 時）：先問 `notify&since=`。
+    - 提醒、私信在 since 之後都沒有，公共消息也沒有未讀 → 不抓三頁，回空結果和論壇時鐘。
+    - 有新東西 → 照舊抓三頁。網頁仍是顯示內容的來源，而且抓提醒頁就是論壇把提醒標為已讀的時機，行為不變。
+    - API 回未登入 → 視同 session 過期。
+    - 公共消息只看未讀：它的時間是撰寫時間（§45、#154）。
+  - 簽到（`doCheckin`）：先問 `checkin`。
+    - 已簽 → 已簽到，不再發請求。
+    - 未開放 → 未開放（不記錄）。
+    - 開放且未簽 → 照舊走網頁表單。
+    - 未登入 → NotAuthorized。
+    - 沒裝簽到插件，或拿不到 API 回答 → 照舊讀簽到頁（§50 的判斷）。
+- 驗證：
+  - test_191：閘門判斷；沒裝、關閉、429、斷線、舊版插件；提醒輪詢只發 1 個請求或照舊 4 個；簽到各狀態。
+  - 依序回應網頁的舊測試（036、046、060、190）明確設定成「沒有 API」。
+  - JSON 格式取自測試站插件 1.1.0 的實際回應。
+
+## 52. App 內更新與互動檢視的審查修正（2026-10-06）
+
+審查 App 內更新（#48）與互動檢視（#49）時找到 8 項問題，一次修正。
+
+- **互動視窗不重建**：`InteractiveHtmlActivity` 原本沒有 `configChanges`，旋轉、調整視窗大小、切換深色模式都會重建 Activity、重新載入帖子，頁面裡的 JS 狀態（測驗進度、未送出的欄位）全部消失。manifest 現在宣告 `orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|density|uiMode`，`onConfigurationChanged` 只重新套用背景、標題與狀態文字的顏色及系統列明暗，並重新要求 insets；WebView 保持同一個。
+- **互動判斷改從根本判別**：圖片、連結上的 `on*` handler 原本靠一份 Discuz 輔助函數清單判斷，清單外的論壇標記就誤判。現在收集帖子自己 `<script>` 定義的函數（`function NAME`、`NAME = function／箭頭函數`、`var/let/const NAME =`、`window.NAME =`），handler 符合以下任一項就算作者寫的：呼叫帖子自己定義的函數；不是單一呼叫（多條語句、`this.` 屬性賦值、`document.` 等）；參數裡有賦值或遞增；呼叫瀏覽器函數（`alert`、`open`…）；或是放在沒有實際 `href`（空白、`#`、`javascript:`）的連結上。其餘「單純呼叫一個帖子沒定義的函數」視為論壇標記。原本的已知清單保留，作為 `javascript:;` 連結上 `showWindow` 這類論壇寫法的例外。
+- **檢視器文字來自 App 翻譯**：Dart 端在 `openHtml` 加上 `labels`（title、back、original、originalDescription、loading、loadFailed、openFailed、linkFailed、browserFailed、downloadInOriginal、pageMessage），取自 `postCard.interactiveHtml.viewer`（三語 i18n 已補）。`MainActivity` 轉成 Bundle 放進 intent extra，Activity 優先使用；缺少或空白的項目才退回 Kotlin 內建的三語表。
+- **Windows 更新腳本必須回報已啟動**：`install()` 啟動 PowerShell 前先刪除舊的 `<updates>/apply-update.started`，並以新參數 `-Marker`、`-Nonce` 傳入隨機 nonce；腳本的第一個動作就是把 nonce 寫進該檔。App 最多等 5 秒，讀到相同 nonce 才排定 800 ms 後退出；沒讀到就丟出 `UpdateDownloadFailure.install`，App 不退出。腳本仍只含 ASCII。
+- **App 沒退出時不再啟動第二個**：腳本以 `$exited` 記錄 App 是否在 60 秒內結束；沒結束時只寫日誌，不執行最後的 `Start-Process`。
+- **下載前先檢查**：`UpdateInstaller` 新增 `preflight()`，回傳 null 表示可安裝。Android 一律 null；Windows 檢查是否為便攜版資料夾（`tsdm_client.exe` 旁有 `flutter_windows.dll`）以及可否寫入，分別回傳 `unsupported`、`installLocation`。`UpdateDownloadCubit.download()` 一開始就呼叫，失敗時直接顯示失敗、不下載；`install()` 仍會再檢查一次。
+- **清理不再丟例外**：`ReleaseUpdateRepository.cleanup()` 改為攔下所有 `Exception`（包括 `UpdateDownloadException`、`MissingPluginException`）並寫入日誌（沒有 logger 時略過）；`download()` 等待清理時也忽略其錯誤，卡片不會停在「正在查找」。
+- **雜湊移到背景**：`_matchesAsset` 先在主 isolate 檢查取消與檔案大小，再用 `Isolate.run` 呼叫 `ReleaseUpdateRepository.hashFile` 計算 SHA-256；計算期間無法中斷，但結束後若已取消就丟棄結果並拋出取消。
+- **驗證**：
+  - test_192：清理遇到三種例外仍完成且之後的下載會結束；背景雜湊的正確值與長度不符；雜湊期間取消會丟棄結果且保留檔案；非便攜版、不可寫入時下載前就失敗且沒有網路請求；腳本沒回報時不退出、舊 marker 不算數；腳本第一行寫 marker、只在 `$exited` 時重新啟動；新增的互動判斷正反例；三語 labels 的鍵與 Kotlin 端一致。
+  - test_188、interactive_post_viewer_test 依新參數更新。
+  - 原生：InteractiveHtmlActivityTest 驗證 manifest 的 configChanges、設定變更後 WebView 不重載且顏色跟著深色模式、畫面使用 App 傳入的文字；InteractiveHtmlPolicyTest 驗證 labels 的取用與退回。
+  - 未在實機或 Windows 上執行更新腳本。
+
+## 53. 論壇 App 接口第二階段：網頁 JSON 模式（2026-10-06）
+
+- 插件 tsdmapp 1.2.0：網頁地址加上 `tsdmapp=json`。插件用全站 `common` 掛點擋掉論壇的最終輸出，頁面照常處理（所有權限與其他插件都照舊），結束時改回 JSON：
+  - 白名單結構化欄位：主題、樓層、版塊、頁數。
+  - `document`：App 解析器要用的區塊，從論壇最終輸出依位置原樣切出。不經 DOM 重新輸出，因為 libxml 會把網址裡的中文改寫成 `%XX`。樓層區的結尾以它後面固定出現的 `form#modactions` 定位，因為作者寫的 HTML 可能不成對。
+  - `head`：原頁的 `<link>`（含 canonical）和宣告 `discuz_uid` 的腳本。檢舉連結要靠它們取得 tid 和目前登入的帳號。
+- App：
+  - `ThreadRepository.fetchThread` 和 `ForumRepository.fetchForum` 的請求都帶上 `tsdmapp=json`，回應交給 `tsdmAppPageDocument`：是 JSON 就以 `head` 加 `document` 重組精簡頁，是網頁就照原樣解析。後面的解析器不變。
+  - 沒裝插件、裝的是舊版插件或插件關閉時，參數會被忽略，論壇照常回網頁，不會多一次請求。
+  - 用 pid 找帖（`mod=redirect`）時論壇會轉址並丟掉參數，回的是網頁，照舊。
+- 不接的頁面：
+  - 個人資料：解析器依賴頁首 `#um`、外層 `div#wp`。
+  - 版塊首頁：首頁的特殊區塊和使用者資訊。
+
+  插件已支援這兩頁，App 之後再接。
+- 驗證：
+  - test_193 用測試站成對素材（網頁與 JSON，ag_low），涵蓋：
+    - 帖子 5 種：一般、回覆可見、付費、第 2 頁、閱讀權限。每一樓的所有欄位（Post 的 map）、回覆參數、麵包屑、勳章、頁數都和網頁一致。
+    - 版塊頁、無權限版塊。
+    - JSON 裡沒有敏感欄位。
+  - 測試站的 X5 模板用 `<li>` 列主題，App 只認正式站的 `<tbody>`，所以正式站樣式另外離線比對（不進 repo，頁面含真實使用者內容）：用測試帳號唯讀抓正式站 4 個帖子頁（40 樓）和 3 個版塊頁，以插件同一段切取程式產生精簡頁，App 解析結果全部一致。
+  - 插件端的權限比對、升級預演見插件專案的 verify.md。
+
+## 54. 論壇 App 接口第三階段（2026-10-06）
+
+- 插件 tsdmapp 1.3.0–1.4.0：
+  - JSON 模式擴及私信、收藏、搜尋（送出搜尋後的轉址會帶著參數）、勳章中心、稱號／成就／稱號商店（其他插件的 plugin.php 頁）、依 pid 找帖（轉址帶參數，放在錨點之前）。
+  - 只處理 GET，不處理 AJAX（`inajax`）。
+  - 確定要回 JSON 後，就把參數從請求裡拿掉。稱號插件會把目前網址寫進購買表單的回跳地址，帶著參數時 App 的安全檢查會拒絕那張表單。
+  - `#ct` 一律切到頁尾 `#ft` 之前，因為首頁的 DIY 區塊不成對。
+  - formhash 補在最前面：補在最後時，沒寫結尾的 `<form>` 會把它算進去。
+  - 另外保留頁尾的 `checknewpm` 腳本（每日登入，#111）、`div.block_name`。
+  - `status` 回傳 formhash（1.3.1）。
+- App：
+  - `withTsdmAppJson`（AJAX 網址不加）、`tsdmAppPageDocument`（重組的精簡頁包在 `div#wp.wp` 裡，因為有些解析器的選擇器經過它）、`tsdmAppPageHtml`（給把頁面當字串傳遞的地方用）。
+  - 接上：私信紀錄頁（`fetchChatHistory`；聊天視窗是 AJAX，不接）、收藏三種列表、搜尋（`queryParameters` 加 `tsdmapp`）、我的稱號、稱號商店、成就、勳章中心、首頁（`ForumHomeRepository` 兩處）、個人資料。
+  - 寵物中心的 formhash 先問 `status`，uid 相符才用，否則照舊讀 `pokemon:game`。
+  - 首頁狀態的解析加 `HomepageBloc.parseStateForTest`（`@visibleForTesting`）。
+- 驗證：
+  - test_194 用測試站成對素材，涵蓋勳章中心、稱號、稱號商店、成就、首頁（狀態、分頁區塊、登入使用者、每日登入網址、紅包設定、formhash）、個人資料、搜尋，App 解析結果與網頁一致。
+  - test_193 素材以 1.4.0 重抓。
+  - 正式站樣式另外離線比對（不進 repo），涵蓋私信對話、收藏、搜尋、勳章、稱號、商店、成就、首頁、個人資料，全部一致。測試帳號沒有收藏、稱號、成就，這幾頁只比到空列表。
+
+## 55. 通知重複拉取與 Windows 更新診斷（2026-10-07，#173、#172）
+
+**#173 背景拉取常失敗。** 回報的 log 裡，3 次自動拉取失敗都是網路層錯誤（`Unable to resolve host`、timeout），同時間的一般網頁也一起失敗，與接口無關；另有 1 次 `notify` 被插件以 429（`error: busy`）擋下，之後改抓網頁成功。429 的原因是 Android 開了背景訊息服務（#80）時，App 內的 `AutoNotificationCubit` 與服務 isolate 的 `backgroundSyncTick` 各有一個計時器、同一間隔各拉一次，兩邊落在插件 3 秒的間隔內就撞上。
+
+- **共用一次拉取**：新增 `NotificationPollSlot`（`lib/features/notification/utils/poll_slot.dart`），在共用資料庫的設定表記 `notificationPolledAt.<uid>`（毫秒）。`take()` 讀上次時間，距今不超過半個間隔就回 null（這次不拉），否則寫入現在時間並回傳這個時間戳（第二輪改為時間戳，供 `release()` 用）；時間在未來（時鐘被調回）不擋。兩個計時器不論相位差多少，每個間隔只會拉一次。
+  - `AutoNotificationCubit._onTimeout`：取得 uid 後先 `take()`，失敗時記 debug、回到 ticking 狀態並結束；服務存進去的資料由既有的 `BackgroundSyncBridgeCubit` 帶進頁面。
+  - `backgroundSyncTick`：確認已登入後先 `take()`，失敗回 `BackgroundSyncSkipped('polled by the app moments ago')`；App 存的資料，服務下次拉取時會判定為已知。新增選用參數 `now`（測試用）。
+- **連不上時重試一次**：`NotificationRepository.fetchNotificationWith` 拆出 `_fetchNotificationOnce`。輪詢（有 `timestamp`）的結果若是 `HttpHandshakeFailedException` 且 `statusCode == null`（沒有任何回應：DNS、連線、逾時），等 `retryDelay`（預設 5 秒，建構子可設定）後整個流程再跑一次；有狀態碼的錯誤（含 429、5xx）不重試。
+
+**#173 第二輪（2026-10-08）。** 測試包 1.33.1-test.1 回報：App 在前景或小窗模式時都正常；「純背景」時有一段時間沒有推送，之後一次拉到 21 條；兩台裝置同一網路。附的「log_2026-10-08.txt」是 App 自己的每日日誌（匯出檔名 `log_<日期>.txt`），只含兩段前景時間，中間沒有任何自動拉取紀錄；App 每次打開都記 `start app`，表示 UI isolate 在背景時已被系統回收，而服務通知的時間一直是 6:34，表示服務 isolate（同一程序）一直活著。所以純背景期間只有背景服務在拉，但它那段時間沒有拉到、也沒有存進任何東西（否則 11:01 不會一次「新」21 條）。要判斷是服務的 tick 失敗、被略過還是接口判定沒有新消息，需要服務自己的日誌 `tsdm_client_bg_<日期>.log`，但「查看歷史日誌」頁只列 `tsdm_client_<日期>.log`，使用者看不到也匯不出。這一輪：
+- `DebugHistoricalLogPage` 的檔名正則接受 `tsdm_client_(bg_)?<yyyyMMdd>.log`，`HistoricalLog.background` 標記服務日誌；列表標題「日期 · 背景服務」（三語 `viewHistoryLog.backgroundService`）、圖示 `sync`，同一天 App 的在前；匯出檔名 `log_bg_<日期>.txt`。
+- `NotificationPollSlot.take()` 改回傳取得的時間戳（null 表示略過），新增 `release(storage, uid, slot)`：存的值仍是這個 slot 時清為 0，讓另一邊可以立刻拉；之後另一邊已取走的不動。`AutoNotificationCubit._onTimeout` 拉取失敗時 release；`backgroundSyncTick` 的 `syncAll` 失敗或結果不是 `NotificationSyncResultSuccess` 時 release。避免 App 在背景拉取失敗（Kotlin client 逾時）卻佔掉服務那一輪。
+- 驗證：test_195 新增「失敗的拉取把這一輪還回去、過期的 release 不影響新 slot」「服務連不上論壇時 release，App 可立刻拉」。
+- **根因（同日稍後，使用者用 test.2 匯出服務日誌 `log_bg_2026-10-08.txt`）**：服務每分鐘的 tick 正常，但日誌裡有三段 67、76、229 分鐘的空白，各自的開頭都是一個 tick 剛 `build client without stored cookie` 就沒了下文，空白結束時才出現那個請求的錯誤（例如 8:03 發出的 privatepm 頁 GET 在 9:10 才報錯），而結束時間正好是使用者打開 App 的時間；最後一段 15:46 的 tick 到匯出時（16:18）仍未結束，16:00～16:01 的評分提醒因此漏掉。服務用的是 dart:io client（`buildDefaultDio(nativeHttp: false)`），`BaseOptions` 沒有任何 timeout；裝置休眠時系統把連線掛住，請求就一直不回，而 `backgroundSyncEntryPoint.tick()` 以 `ticking` 旗標跳過還在跑的 tick（而且不記 log），所以之後每一輪都靜悄悄地被跳過，直到 App 打開、網路恢復、那個請求才報錯結束。Kotlin client 有 15 s／30 s 逾時，所以前景和小窗模式不受影響。
+  - `buildDefaultDio`：`BaseOptions` 加 `connectTimeout` 20 s、`sendTimeout` 30 s、`receiveTimeout` 60 s（dart:io client 用於桌面版與背景服務；比 Kotlin 寬，因為插件頁面較慢）。
+  - `backgroundSyncTick` 新增 `deadline`（預設 `backgroundSyncDeadline` 3 分鐘）：`syncAll().run().timeout()` 逾時當作 `HttpRequestFailedException(null)`，記 warning，release poll slot，回 `BackgroundSyncSkipped('sync failed: …')`；下一輪重新建 client 拉取。
+  - `tick()` 跳過仍在跑的 tick 時記 debug。
+  - 驗證：test_195「論壇永不回應的 tick 在 deadline 結束並把這一輪還回去」。
+- **對抗性審查（2026-10-09）修正**：
+  - `take()` 原本在 `prepareNetwork`／`refreshCookieCache` 之前，這兩步失敗沒有 release，App 半個間隔內也不拉，兩邊都不拉。改成拿到 cookie 後、`syncAll` 前才 take，整段 `try/finally`，不是 `Success` 一律 release（含例外）。
+  - deadline 只放棄等待、不中止請求；放棄的那輪晚點完成時，`NotificationSyncAllRepository._currentInfo` 是共用欄位，它的結果會 append 進下一輪的 `finished`，下一輪明明成功卻回報上一輪的失敗（或推送上一輪的 latest）。`syncAll` 改用區域 list 回傳自己這輪的結果，`_currentInfo` 只做進度廣播；tick 取 `finished` 裡本帳號的最後一筆。
+  - 放棄的那輪晚點成功時，列已經存進資料庫但沒有推送，之後也不會再算新。`backgroundSyncTick` 新增 `onLate`：逾時後把那個 future 接到 `_outcomeOf()`（重讀設定判 Disabled／Stale），交給 entry 的 `report()`，與正常結果同樣推送、`invoke(synced)`。deadline 由 3 分鐘改 6 分鐘，高於 client 逾時加一次重試的最壞情況（約 330 s）。
+  - 5 秒重試讓 `AutoNotificationCubit` 停在 Pending，登入／切換帳號等 3 秒就被拒；`fetchNotificationWith` 加 `retry` 參數，只有 `NotificationSyncAllRepository`（背景服務、同步全部帳號）帶 `retry: true`，App 內自動同步不重試。
+  - 既有 bug：`_onTimeout` 先 `emit(Pending)` 再檢查 uid，未登入時狀態永遠 Pending，登出後再登入被 login_form 拒絕直到重啟。改成有 uid 才 emit Pending。
+  - `take()` 的半個間隔由 `<` 改 `<=`，兩個計時器恰好差半個間隔時不再每輪都拉兩次。
+  - `exitApp` 在 `exit(0)` 前 `closeLogSink()`（2 秒上限），關閉前的錯誤才會寫進檔案。
+  - 歷史日誌檔名正則 `\.log$` 跳脫、日期要是真日期（`20261399` 不列）。
+  - Windows 更新：App 等不到腳本回報（20 秒）時寫 `apply-update.started.<nonce>.cancelled`，腳本在 App 結束後、動任何檔案前檢查到就記錄並退出（否則遲到的腳本會在使用者之後自行關閉 App 時換檔重開，重試時兩支腳本同時換檔、開兩個實例）；`cleanup()` 刪超過一小時的取消檔。`$exited` 預設 `$false`，只在確認結束後設 `$true`；`Write-Log` 與清空日誌包 try/catch，日誌寫不進去不會讓腳本在重啟 App 前終止；`New-Item -Path`／`Copy-Item -Destination`／`Start-Process -FilePath` 會把 `[ ]` 當萬用字元，改用 `[System.IO.Directory]::CreateDirectory`、`[System.IO.File]::Copy`、`ProcessStartInfo`。腳本仍只含 ASCII。
+  - 驗證：test_195 新增 prepareNetwork 失敗後 App 可立刻拉、兩輪 `syncAll` 重疊各回自己的結果、逾時後晚到的結果交給 `onLate`、未登入時不停在 Pending、取消檔與腳本的取消檢查、`$exited` 預設與 .NET 呼叫；`powershell.exe` 斷言改為同時接受完整路徑（Windows 開發機）。
+
+**#172 Windows App 內更新沒有套用。** 回報附的是之後手動重開的 log，沒有更新過程，`update.log` 也沒附，無法確定斷在哪一步。依症狀（App 關閉、沒有重開、仍是舊版）只可能是腳本等不到 App 結束而放棄，或腳本在換檔前被中斷；換檔中途失敗會還原並重開舊版，不符合。這次先補強並讓下次回報能看出原因：
+
+- `exitApp()`：`StorageProvider.dispose()` 加 3 秒逾時並攔下所有錯誤，桌面版之後一定執行 `exit(0)`。原本 dispose 出錯時 `exit` 不會執行，而安裝流程是以 `unawaited` 呼叫，錯誤無人處理、App 不退出。
+- 更新腳本：寫完 marker、清空日誌後立刻記 `started, waiting for the app (process N) to exit`，App 結束後記 `the app exited`；`WaitForExit` 由 60 秒延長為 600 秒。腳本仍只含 ASCII。
+- `WindowsUpdateInstaller.reportLastAttempt()`：`apply-update.started` 存在時，把 `update.log` 全文以 info 寫進 App 日誌，再刪除 marker，因此每次嘗試只回報一次。`main.dart` 在 Windows 啟動時以 `unawaited` 呼叫，錯誤只記 warning。
+- 啟動日誌的分隔行加上 `appFullVersion`（版本、commit、日期）。
+- 第三個測試包（wintest.3）2026-10-08 回報「可以了，测试成功」，附的 log 以 1.33.0 正式版啟動（分隔行沒有版本號，是 1.33.0 的格式）。
+- 第一個測試包（1.33.0-wintest.1）回報：按安裝後顯示「無法開始更新」、App 沒退出，日誌裡沒有任何更新紀錄。也就是 5 秒內沒讀到 marker（或 PowerShell 啟動不了），但看不出是哪一種。第二輪修正：
+  - 等 marker 的時間由 5 秒延長為 20 秒：冷啟動的 PowerShell 加上防毒掃描腳本，可能超過 5 秒。
+  - 以 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` 的完整路徑啟動（`powershellPath`），檔案不存在時才退回 `powershell.exe`。
+  - `install()` 記錄更新資料夾與安裝資料夾、解壓完成、啟動的程式；檔案錯誤與 `ProcessException` 記 error。等不到 marker 時記錄腳本是否還在（防毒刪除）、marker 與 `update.log` 的內容。
+  - `UpdateDownloadCubit` 的下載、安裝失敗都記 warning，附上失敗種類或例外。
+- 第二個測試包（wintest.2）回報的 log：`release unpacked, starting C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`，20 秒後 `script present, marker missing, log missing`，兩次一樣；只有 Defender，沒有提示，檔案都在。PowerShell 有啟動但腳本第一行都沒執行。
+- **根因：`ProcessStartMode.detached`。** Dart 的 `process_win.cc` 對非 attached 模式加 `DETACHED_PROCESS`（子程序沒有任何主控台），std handle 指向 NUL；一般模式則加 `CREATE_NO_WINDOW`（隱藏的主控台）並接 pipe。在使用者的 Windows 上以 P/Invoke `CreateProcessW` 重現（`%TEMP%\tsdm-ps-test`，假的 App 程序與目標資料夾）：
+  - `DETACHED_PROCESS` + NUL：powershell.exe 立刻結束、exit code 0，marker、日誌都沒有，與回報完全一致。
+  - `CREATE_NO_WINDOW` + NUL：marker 寫入，腳本等到假 App 結束，`backed up 2 files`、`installed 3 files`，目標資料夾其他檔案保留。
+  - `CREATE_NO_WINDOW` + pipe、父程序立刻結束（等同 App 退出後 pipe 斷掉）：腳本照常跑完。
+  - 修正：`_launchDetached` 改用一般模式 `Process.start`，並 `drain` stdout／stderr。Windows 不會因父程序結束而終止子程序，Dart 也沒有用 Job object。腳本的腳本本身沒有改。
+- 未處理的可能性：若 App 由會在結束時終止子程序的 Job（某些啟動器）啟動，PowerShell 會跟著被結束。腳本日誌只會停在 `started`，下次回報可以看出來；屆時再考慮脫離 Job 的啟動方式。
+- **驗證**：
+  - test_195：兩個輪詢者在半個間隔內第二個略過、下一個間隔照常；七種相位差下十分鐘內都只拉 10～11 次；帳號互不影響、時鐘調回不擋；App 剛拉過時服務的 tick 略過且沒有發出請求；第一次完全連不上時重試成功、持續連不上只重試一次、有狀態碼的錯誤不重試；腳本含啟動與退出的日誌、等待 600 秒、marker 寫在日誌之前、全 ASCII；上次嘗試的日誌只寫進 App 日誌一次並刪除 marker；腳本沒回報時日誌記下更新資料夾，以及腳本、marker、日誌的狀態，非 Windows 環境退回 `powershell.exe`。
+  - test_090 的 tick 改用相隔一分鐘的 `now`。
+  - 未在實機或 Windows 上執行。
+## 56. 評分視窗按帖保留（論壇回報：連續撒糖變慢，2026-10-08）
+
+- 回報：「如果去掉這個刷新的機制，撒糖會很快；之前 App 撒糖不會刷新」。調查：帖子頁在評分後本來就不重載（§35）；每次評分慢在 `RatePostPage` 一開啟就 GET 評分視窗（`fetchInfo`），轉圈結束才有表單，一樓一次。視窗內容除了 `pid` 和「今日剩餘」之外（formhash、分數列與區間、預設理由、`sendreasonpm` 是否強制、referer、handlekey）同一帳號在同一帖裡都相同；TSDM 允許連續評分，formhash 數天才換（§35.2）。
+- `RateWindowCache`（`lib/features/rate/repository/rate_window_cache.dart`）：以「登入 uid／tid」為鍵保留最後一次抓到的 `RateWindowInfo`，`maxAge` 30 分鐘；沒有登入 uid（`SettingsRepository.loginUid` 為 0）時不保留。`tidOf()` 從 rateAction 網址取 tid。`put()` 在每次抓到視窗時（首次、背景、被拒後重抓）呼叫；`putRated()` 在評分成功時把送出的各分數（取絕對值）從「今日剩餘」扣掉再保留，剩餘或分數不是整數的欄位不動。
+- `RateBloc._onRateFetchInfoRequested`：有保留的視窗時直接 `gotInfo`，`info` 用保留的視窗換上這次的 `pid`，不經過 `fetchingInfo`；接著在同一個 handler 裡抓這一樓的視窗：成功就 `put()`，而且只在 `status` 仍為 `gotInfo` 且頁面的 pid 沒變時以新視窗取代 `info`（使用者已送出就不動）；論壇拒絕這一樓（`RateInfoWithErrorException`，例如不能重複評、不能評自己）且仍在 `gotInfo` 時照舊 `failed`＋`shouldRetry=false`，頁面關閉並顯示原因；其他錯誤忽略，保留的視窗照用，過期的 formhash 會被論壇以訊息拒絕、進入 `rateFailed` 重抓。沒有保留時流程不變。
+- 不做的：跨帳號、一鍵全樓、免開頁直接套範本送出。
+- 對抗性審查（2026-10-09）修正四項：
+  - 保留的表單讓理由下拉（`showDialog`）或範本頁可以疊在評分頁上；論壇此時拒絕這一樓，listener 的 `pop()` 關掉的是上面那層，評分頁留在 `failed` 永遠轉圈。listener 在 `shouldRetry == false` 時先 `popUntil` 回到評分頁自己的 route 再 pop。
+  - 評分送出前發出的視窗 GET 在送出後才回來，`put()` 會把扣過的今日剩餘蓋回去：kept 分支與 `_refreshInfo` 都記下發出時的 `_rateCount`，回來時不同就不存。
+  - `copyWith(pid:)` 漏改 referer 的 `#pid`：改用 `RateWindowCache.forPost()` 同時換 pid 與 referer 錨點（論壇只拿 referer 跳轉，無功能影響）。
+  - 被拒的評分重抓視窗時論壇也拒絕這一樓（自己的樓、太舊）：`_refreshInfo` 現在和首次載入一樣 `failed`＋`shouldRetry=false` 關頁顯示原因，不再留下送不出去的表單。
+  - `put()` 順手清掉過期項目。
+  - 驗證：test_098 新增四項（對話框開著時拒絕仍關頁、晚到的視窗不蓋回扣分、referer 帶新 pid、被拒後重抓也被拒則關頁）。
+- 驗證（test_098 新群組）：評完 A 樓再開同帖 B 樓，B 的視窗還沒回來時表單已在、天使币剩餘 20→15、此時送出用保留的 formhash 與 B 的 pid；B 的視窗先回來時剩餘與 formhash 換成論壇的；另一帖先轉圈再有表單；論壇拒絕 B 樓時頁面關閉並顯示原因、沒有送出；快取按帳號與帖分開、30 分鐘過期、扣分計算（'5'、''、'-3' → 15、40、37）。
+
+## 57. 評分成功後留在頁面（2026-10-09）
+
+- 需求：按「評分」成功後不跳回帖子，更新剩餘後可以直接再評同一樓；分數和理由保留；成功提示放在按鈕上方。
+- `RateState.justRated`：最後一次送出被接受且之後沒再送出。`_onRateRateRequested` 成功時以 `RateWindowCache.rated()` 算出扣掉這次分數的視窗、`put()` 進快取，emit `gotInfo`＋`justRated: true`，接著 `_refreshInfo()` 背景重抓（和被拒時同一條路）；重抓回來時只在 `rate == _rateCount` 且狀態仍是 `rateFailed` 或 `gotInfo && justRated` 才取代 `info`。送出時 `justRated` 清掉。kept 分支的背景抓取也改成送出過就不存、不顯示（否則舊視窗會把剛扣的數字蓋回去）。
+- 頁面：移除成功 snackbar 與相關的 `_visibleRateSuccess`／`_openRatePages` 機制、不再 `pop`；`justRated` 時在送出鈕上方顯示 `AppNoticeBanner(tr.success)`（info 色），被拒的原因橫幅優先。`RateStatus.success` 保留但不再使用。
+- 驗證：test_098 改寫：成功後頁面仍在、提示在按鈕上方、分數保留、剩餘 20→15、再送一次用重抓後的 formhash、剩餘隨論壇答覆更新；被拒的原因取代成功提示；「同帖下一樓」各測試改為評完先返回再開下一樓，並多一個重抓視窗的答覆。
+

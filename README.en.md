@@ -16,15 +16,15 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/Carinoasd/tsdm_client" alt="license"/></a>
 </p>
 
-## Latest update: 1.30.0 (2026-10-01)
+## Latest update: 1.33.3 (2026-10-09)
 
-- Adds banking, medal search and an in-app title shop.
-- Adds a draft box, website blacklist management with individual imports into local blocking, post reporting, and creation of ordinary single- or multiple-choice polls.
-- Fixes UID lookup with an empty blacklist, title purchase page recognition and draft saving; improves landscape safe areas on the website blacklist, local blocking, activities and My Titles pages.
-- Android build number 103 supports upgrading over earlier stable releases and preview builds 99–102.
+- Rating: the page stays after an accepted rate, with a notice above the button; scores and reason are kept and today's remaining is reduced, so the same floor can be rated again at once or with other scores; press back to leave.
+- Rating floor after floor in one thread shows the form at once instead of loading the rate window for every floor.
+- Message sync (Android): the background service's requests time out, so a request held while the phone sleeps no longer blocks new messages; the app and the service no longer each poll.
+- In-app update (Windows): "cannot start the update" is fixed; the upgrade from 1.33.0 still has to be installed by hand, later ones update in the app.
+- Android build number 130, installs over earlier releases and test builds.
 
-[Download 1.30.0](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.30.0) · [Full changelog](./CHANGELOG.md)
-
+[Download 1.33.3](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.33.3) · [Full changelog](./CHANGELOG.md)
 ## What it is
 
 A cross-platform client for the [天使动漫 forum](https://www.tsdm39.com/). When the forum moved to Discuz! X5 in 2026 the original client could no longer parse its pages; this project took over maintenance at the forum's request, adapted the app to the X5 page structure and keeps adding features. It is the client version recognised by the forum as official.

@@ -529,7 +529,8 @@
       "viewHistoryLog": {
         "title": "View historical log",
         "historicalLogs": "Historical logs",
-        "export": "Export"
+        "export": "Export",
+        "backgroundService": "Background service"
       },
       "copyDatabaseDir": "Copy database path",
       "testNotification": {
@@ -1204,6 +1205,26 @@
     }
   },
   "postCard": {
+    "interactiveHtml": {
+      "open": "Interactive content",
+      "description": "Open this post’s interactive layout, forms and buttons.",
+      "browserDescription": "Open the original post in your browser to use its interactive content.",
+      "browserFallback": "Opened the original post in your browser.",
+      "openFailed": "Could not open interactive content. Try opening the original post in your browser.",
+      "viewer": {
+        "title": "Interactive content",
+        "back": "Back",
+        "original": "Original",
+        "originalDescription": "Open original page in browser",
+        "loading": "Loading…",
+        "loadFailed": "Unable to load interactive content. Open the original page instead.",
+        "openFailed": "Unable to open interactive content",
+        "linkFailed": "Unable to open link",
+        "browserFailed": "Unable to open browser",
+        "downloadInOriginal": "Open the original page to download files",
+        "pageMessage": "Page message"
+      }
+    },
     "reply": "Reply",
     "rate": "Rate",
     "onlyViewAuthor": "Only view the author",
@@ -1609,6 +1630,47 @@
     "sourceTip": "Official builds are published on GitHub; checking for the latest version reads the version file of the newest release",
     "announcementThread": "Announcement thread",
     "checkLatest": "Check latest version",
+    "download": {
+      "title": "Android APK · ${version: String}",
+      "downloadApk": "Download APK (${version: String})",
+      "universalApk": "The universal Android APK is downloaded from the official GitHub release only when you tap Download. Android will ask you to confirm installation.",
+      "resolving": "Finding the update for this version…",
+      "downloading": "Downloading the update…",
+      "verifying": "Verifying the downloaded update…",
+      "ready": "The APK is ready. Tap Install update to open the Android installer.",
+      "installing": "Opening the Android installer…",
+      "permissionRequired": "Android requires permission to install updates from this app. Open settings, enable “Allow from this source”, then return here and tap Retry installation.",
+      "installerOpened": "The Android installer has opened. Complete or cancel installation there; opening it does not mean the update is installed.",
+      "cancelled": "Download cancelled.",
+      "install": "Install update",
+      "retryInstall": "Retry installation",
+      "openPermissionSettings": "Open installation settings",
+      "retryDownload": "Retry download (${version: String})",
+      "checkToRetry": "Check the latest version again to retry the download.",
+      "bytes": "${count: String} bytes",
+      "progress": "${received: String} / ${total: String} (${percent: String}%)",
+      "received": "${bytes: String} downloaded",
+      "github": "Download from GitHub",
+      "githubTip": "Opens releases in your browser. Choose a download for your device.",
+      "networkError": "The update could not be downloaded. Check your connection and retry, or download from GitHub below.",
+      "releaseUnavailableError": "This version does not have an update file available yet. Retry later or check GitHub below.",
+      "invalidReleaseError": "The release information could not be verified. Check the official release on GitHub below.",
+      "integrityError": "The downloaded update failed verification and was removed. Retry the download or use GitHub below.",
+      "storageError": "The update could not be saved. Check available storage and retry.",
+      "installError": "The Android installer could not be opened. Retry installation or download from GitHub below.",
+      "unsupportedError": "In-app APK installation is available on Android. Download the appropriate version from GitHub below.",
+      "installLocationError": "The app folder cannot be written (for example under Program Files). Move the tsdm_client folder to a writable place such as Documents or the desktop, or download from GitHub below and replace it by hand.",
+      "windows": {
+        "title": "Windows · ${version: String}",
+        "download": "Download update (${version: String})",
+        "intro": "Downloads the official Windows build from GitHub only when you click Download. Installing closes the app, replaces the files in its folder and starts it again; your settings and accounts are kept.",
+        "ready": "The update is ready. Click Install update: the app closes and restarts with the new version.",
+        "installing": "Preparing the files…",
+        "installerOpened": "The app closes now and restarts with the new version. If it does not start again, open tsdm_client.exe in its folder.",
+        "installError": "The update could not be started. Retry installation or download from GitHub below.",
+        "unsupportedError": "This copy cannot update itself (it is not the official portable folder). Download from GitHub below."
+      }
+    },
     "availableDialog": {
       "title": "New version available",
       "version": "Version: ${version: String}",

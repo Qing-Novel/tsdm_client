@@ -5,13 +5,14 @@ homepage: https://github.com/Carinoasd/tsdm_client
 issue_tracker: https://github.com/Carinoasd/tsdm_client/issues
 publish_to: "none"
 
-version: 1.30.0+120
+version: 1.33.3+130
 
 environment:
   flutter: ">=3.38.0 <4.0.0"
   sdk: ">=3.10.0 <4.0.0"
 
 dependencies:
+  archive: ^4.0.7
   args: ^2.6.0
   bloc: ^9.2.0
   chat_bottom_container: ^0.4.0
