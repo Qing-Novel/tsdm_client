@@ -5,8 +5,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:fpdart/fpdart.dart' show Left, Right;
 import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/constants/url.dart';
+import 'package:tsdm_client/exceptions/exceptions.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/features/activities/models/forum_activity.dart';
+import 'package:tsdm_client/features/homepage/utils/homepage_api.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/shared/repositories/forum_home_repository/forum_home_repository.dart';
 import 'package:tsdm_client/utils/retry_button.dart';
@@ -43,19 +45,23 @@ class _ActivitiesPageState extends State<ActivitiesPage> {
       _failed = false;
     });
     try {
-      final uh.Document document;
+      final List<ForumActivity> activities;
       if (widget.loadDocument case final loader?) {
-        document = await loader();
+        activities = parseForumActivities(await loader());
       } else {
-        final result = await context.read<ForumHomeRepository>().fetchHomePage(force: true).run();
-        document = switch (result) {
-          Right(:final value) => value,
+        // The shared homepage: the web page parsed as before, or the structured answer of the forum's app API
+        // (plugin 2.3.0), whose description of 活动专区 holds the same links since plugin 2.8.2.
+        final repository = context.read<ForumHomeRepository>();
+        final result = await repository.fetchHomePage(force: true).run();
+        activities = switch (result) {
+          Right(value: ForumHomeWebPage(:final document)) => parseForumActivities(document),
+          Right(value: final ForumHomeApiPage page) => await _activitiesOf(repository, page),
           Left(:final value) => throw value,
         };
       }
       if (!mounted) return;
       setState(() {
-        _activities = parseForumActivities(document);
+        _activities = activities;
         _loading = false;
       });
     } on Exception {
@@ -65,6 +71,21 @@ class _ActivitiesPageState extends State<ActivitiesPage> {
         _failed = true;
       });
     }
+  }
+
+  /// The activities of the structured homepage [page]. An older plugin (2.3.0 to 2.8.1) gives the description of
+  /// 活动专区 as plain text ([activitiesNeedDocument]): the page is asked once more with its document, in the
+  /// background as the "我收藏的版块" panel is ([ForumHomeRepository.fetchPageDocument]), and the links read from it;
+  /// a failure of that request is a failed load.
+  static Future<List<ForumActivity>> _activitiesOf(ForumHomeRepository repository, ForumHomeApiPage page) async {
+    if (!activitiesNeedDocument(page.json)) {
+      return parseForumActivitiesFromApi(page.json);
+    }
+    final full = await repository.fetchPageDocument(page);
+    if (full == null) {
+      throw HttpRequestFailedException(null);
+    }
+    return parseForumActivitiesFromApi(full.json);
   }
 
   @override

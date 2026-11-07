@@ -4,6 +4,9 @@ import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/extensions/universal_html.dart';
 import 'package:tsdm_client/features/latest_thread/models/latest_thread.dart';
 import 'package:tsdm_client/features/latest_thread/repository/latest_thread_repository.dart';
+import 'package:tsdm_client/features/latest_thread/utils/guide_page_api.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
+import 'package:tsdm_client/utils/load_failure.dart';
 import 'package:tsdm_client/utils/logger.dart';
 import 'package:universal_html/html.dart' as uh;
 
@@ -28,27 +31,43 @@ final class LatestThreadBloc extends Bloc<LatestThreadEvent, LatestThreadState> 
 
   final LatestThreadRepository _latestThreadRepository;
 
+  /// Bumped by every refresh: a next page asked for the list before is dropped instead of being added to the new one.
+  int _generation = 0;
+
   Future<void> _onLatestThreadLoadMoreRequested(LatestThreadLoadMoreRequested event, LatestThreadEmitter emit) async {
-    // Do nothing, UI should check this.
-    if (state.nextPageUrl == null) {
+    // Nothing more, or already on its way: the end of the list may ask more than once.
+    if (state.nextPageUrl == null || state.loadingMore || state.refreshing) {
       return;
     }
+    final url = state.nextPageUrl!;
+    final generation = _generation;
+    emit(state.copyWith(loadingMore: true, loadMoreFailed: false));
     await _latestThreadRepository
-        .fetchDocument(state.nextPageUrl!)
+        .fetchPage(url)
         .match(
           (e) {
             handle(e);
             error('failed to load latest thread next page: $e');
-            emit(state.copyWith(status: LatestThreadStatus.failed));
+            if (generation != _generation) {
+              return;
+            }
+            // The threads loaded before stay, the end of the list tells the failure and retries.
+            emit(state.copyWith(loadingMore: false, loadMoreFailed: true, failure: LoadFailure.of(e)));
           },
           (v) {
-            final (threadList, nextPageUrl) = _parseThreadList(v);
+            if (generation != _generation) {
+              return;
+            }
+            final (threadList, nextPageUrl) = _parsePage(v, url);
             emit(
               state.copyWith(
                 status: LatestThreadStatus.success,
                 threadList: [...state.threadList, ...?threadList],
                 pageNumber: state.pageNumber + 1,
                 nextPageUrl: nextPageUrl,
+                loadingMore: false,
+                loadMoreFailed: false,
+                failure: null,
               ),
             );
           },
@@ -57,29 +76,76 @@ final class LatestThreadBloc extends Bloc<LatestThreadEvent, LatestThreadState> 
   }
 
   Future<void> _onLatestThreadRefreshRequested(LatestThreadRefreshRequested event, LatestThreadEmitter emit) async {
-    emit(state.copyWith(status: LatestThreadStatus.loading, threadList: []));
+    // The threads on screen stay while the first page is asked again, and when that fails (the page says so).
+    final shown = state.status == LatestThreadStatus.success && state.threadList.isNotEmpty;
+    if (shown && state.refreshing) {
+      return;
+    }
+    final generation = ++_generation;
+    emit(
+      shown
+          ? state.copyWith(refreshing: true, loadingMore: false, loadMoreFailed: false, failure: null)
+          : state.copyWith(
+              status: LatestThreadStatus.loading,
+              threadList: [],
+              loadingMore: false,
+              loadMoreFailed: false,
+              failure: null,
+            ),
+    );
     await _latestThreadRepository
-        .fetchDocument(event.url)
+        .fetchPage(event.url)
         .match(
           (e) {
             handle(e);
             error('failed to load latest thread page: $e');
-            emit(state.copyWith(status: LatestThreadStatus.failed));
+            if (generation != _generation) {
+              return;
+            }
+            emit(
+              shown
+                  ? state.copyWith(refreshing: false, failure: LoadFailure.of(e))
+                  : state.copyWith(status: LatestThreadStatus.failed, failure: LoadFailure.of(e)),
+            );
           },
           (v) {
-            final (threadList, nextPageUrl) = _parseThreadList(v);
+            if (generation != _generation) {
+              return;
+            }
+            final (threadList, nextPageUrl) = _parsePage(v, event.url);
             emit(
               state.copyWith(
                 status: LatestThreadStatus.success,
-                threadList: threadList,
+                threadList: threadList ?? const [],
                 pageNumber: 1,
                 nextPageUrl: nextPageUrl,
+                tagName: _tagNameOf(v),
+                refreshing: false,
+                failure: null,
               ),
             );
           },
         )
         .run();
   }
+
+  /// The tag a tag page lists the threads of: the heading "标签: name", null for any other page.
+  String? _tagNameOf(TsdmAppPageAnswer answer) {
+    if (answer is! TsdmAppWebPage || answer.document.querySelector('h1.mt > i.fico-tag') == null) {
+      return null;
+    }
+    final heading = answer.document.querySelector('h1.mt')?.text?.trim() ?? '';
+    final name = heading.replaceFirst(RegExp('^[^:：]*[:：]'), '').trim();
+    return name.isEmpty ? null : name;
+  }
+
+  /// The thread list and the next page url of the page [answer] fetched from [url]: the structured answer of the
+  /// forum's app API built from its fields (`latestThreadsFromApi`), the web page parsed as before
+  /// ([_parseThreadList]).
+  (List<LatestThread>?, String? nextPageUrl) _parsePage(TsdmAppPageAnswer answer, String url) => switch (answer) {
+    TsdmAppWebPage(:final document) => _parseThreadList(document),
+    TsdmAppStructuredPage(:final json) => latestThreadsFromApi(json, url),
+  };
 
   /// Parse thread list and next page url from [document].
   ///
@@ -91,6 +157,14 @@ final class LatestThreadBloc extends Bloc<LatestThreadEvent, LatestThreadState> 
     final List<LatestThread> data;
     if (tbodyList.isNotEmpty) {
       data = tbodyList.map(LatestThread.fromTBody).where((e) => e.isValid).toList();
+    } else if (document.querySelector('h1.mt > i.fico-tag') != null) {
+      // A tag page: plain table rows, one thread each.
+      data = document
+          .querySelectorAll('div.bm_c table tr')
+          .where((e) => e.querySelector('td.icn') != null)
+          .map(LatestThread.fromTBody)
+          .where((e) => e.isValid)
+          .toList();
     } else {
       data =
           document

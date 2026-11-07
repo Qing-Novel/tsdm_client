@@ -12,7 +12,34 @@ class SearchedThread with SearchedThreadMappable {
     required this.publishTime,
     required this.forumName,
     required this.forumUrl,
+    this.preview,
   });
+
+  /// Build a [SearchedThread] from a thread row [t] of a structured search answer of the forum's app API (plugin
+  /// 2.4.0, `schema: 6`, see `searchResultFromApi`).
+  ///
+  /// The row is the shared row shape of the list pages, read as [NormalThread.fromApi] reads it (a moved thread is
+  /// the row of its target, as the page links it; the times are the forum's unix seconds): the title is the plain
+  /// `subject` (the page's title with the keyword highlighted is `subject_html`, which the web path drops too), the
+  /// url the thread's, the author a member by uid (an anonymous author, `anonymous` 1 or no `authorid`, has no uid
+  /// and no link, as the page prints none), the forum from `fid` and `forum`. The publish time, shown as a date, is
+  /// the forum's wall clock with [timeOffset] (the answer's `timeoffset`), as the page prints it; null when the row
+  /// names none (the web path drops such a row). The row's `preview` (plugin 3.1.0) is the [preview]; the forum's own
+  /// excerpt of the search (`summary`, which the web page prints under the title) is not read.
+  factory SearchedThread.fromApi(Map<String, dynamic> t, {num timeOffset = 8}) {
+    final fid = tsdmAppInt(t['fid']);
+    final thread = NormalThread.fromApi(t, fid: fid, typePrefix: 0, timeOffset: timeOffset);
+    return SearchedThread(
+      tid: int.tryParse(thread.threadID) ?? 0,
+      title: thread.title,
+      url: thread.url,
+      author: thread.author,
+      publishTime: thread.publishDate,
+      forumName: tsdmAppText(t['forum']),
+      forumUrl: '$baseUrl/forum.php?mod=forumdisplay&fid=$fid',
+      preview: thread.preview,
+    );
+  }
 
   static final _tidRe = RegExp(r'tid=(?<tid>\d+)');
 
@@ -147,12 +174,16 @@ class SearchedThread with SearchedThreadMappable {
   /// Thread author, including username and user space url.
   final User author;
 
-  /// Thread publish date.
-  final DateTime publishTime;
+  /// Thread publish date, null when the row of a structured answer names none.
+  final DateTime? publishTime;
 
   /// Forum name this thread belongs to.
   final String forumName;
 
   /// Forum url this thread belongs to.
   final String forumUrl;
+
+  /// The excerpt and the images of the first floor the forum's app API gave for the row (plugin 3.1.0), null when it
+  /// gave none.
+  final ThreadPreview? preview;
 }

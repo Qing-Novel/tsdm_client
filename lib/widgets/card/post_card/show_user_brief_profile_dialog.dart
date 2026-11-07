@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
@@ -9,6 +11,11 @@ import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
+import 'package:tsdm_client/features/blocking/cubit/user_block_cubit.dart';
+import 'package:tsdm_client/features/blocking/repository/user_block_repository.dart';
+import 'package:tsdm_client/features/blocking/widgets/user_block_button.dart';
+import 'package:tsdm_client/features/friend/widgets/add_friend_dialog.dart';
+import 'package:tsdm_client/features/member_thread/utils/member_thread_url.dart';
 import 'package:tsdm_client/features/profile/widgets/secondary_title_badge.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/routes/screen_paths.dart';
@@ -130,7 +137,12 @@ class _UserBriefProfileDialogState extends State<_UserBriefProfileDialog> {
         AppSectionHeader(title, icon: icon, padding: const EdgeInsets.symmetric(vertical: 4));
 
     final inDarkTheme = Theme.of(context).brightness == Brightness.dark;
-    final colorOffset = inDarkTheme ? 300 : 700;
+    // The 700 shades read under 4.5:1 on the light surfaces of the dialog (the blue of the title, nickname and
+    // registration 4.2, the green of the threads 3.7, the cyan of the posts 3.2, the orange of the privilege 2.4): one
+    // shade darker for all, cyan two, and orange is deep orange.
+    final colorOffset = inDarkTheme ? 300 : 800;
+    final cyanOffset = inDarkTheme ? 300 : 900;
+    final orange = inDarkTheme ? Colors.orange[300] : Colors.deepOrange[900];
     // Measured like the badges below: the dialog content has no layout builder (the dialog sizes to intrinsics).
     final contentWidth = briefProfileDialogContentWidth(MediaQuery.sizeOf(context).width);
     final statWidth = (contentWidth - 8) / 2;
@@ -139,11 +151,20 @@ class _UserBriefProfileDialogState extends State<_UserBriefProfileDialog> {
       preferred: SecondaryTitleBadge.widthFor(profileBadgeHeight),
     );
     final authorUid = int.tryParse(widget.profile.uid);
-    // Only a verified current account counts; the uid is compared again by the badge against the title it holds.
-    final ownFloor =
-        widget.secondBadge == null &&
-        authorUid != null &&
-        authorUid == context.readOrNull<AuthenticationRepository>()?.currentUser?.uid;
+    final auth = context.readOrNull<AuthenticationRepository>();
+    // The actions follow the account the device acts as, also before the stored session was verified (an offline
+    // start, a thread opened from a link): the own floor must not offer "add friend" then.
+    final accountUid = auth?.effectiveCurrentUid;
+    final accountName = auth?.effectiveCurrentUser?.username;
+    // A floor without a uid names the author only: then the name decides, as the member thread route does.
+    final isSelf = authorUid != null && authorUid > 0
+        ? authorUid == accountUid
+        : accountName != null &&
+              widget.profile.username.isNotEmpty &&
+              forumUsernameKey(widget.profile.username) == forumUsernameKey(accountName);
+    // The title badge needs a verified current account; the uid is compared again by the badge against the title it
+    // holds.
+    final ownFloor = widget.secondBadge == null && authorUid != null && authorUid == auth?.currentUser?.uid;
 
     final avatar = Hero(
       tag: widget.avatarHeroTag,
@@ -246,7 +267,7 @@ class _UserBriefProfileDialogState extends State<_UserBriefProfileDialog> {
                     name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: textTheme.labelSmall?.copyWith(color: colorScheme.outline),
+                    style: textTheme.labelSmall?.copyWith(color: colorScheme.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -257,6 +278,18 @@ class _UserBriefProfileDialogState extends State<_UserBriefProfileDialog> {
     );
 
     final profileContent = [
+      // What to do with the author, before the details; nothing to open without a uid and a name.
+      if (_AuthorActions.hasAny(uid: authorUid, username: widget.profile.username)) ...[
+        _AuthorActions(
+          uid: authorUid,
+          username: widget.profile.username,
+          isSelf: isSelf,
+          hasAccount: accountUid != null,
+          width: contentWidth,
+        ),
+        sectionSeparator,
+      ],
+
       // Who the author is: group, titles, names and dates, one line each.
       sectionTitle(tr.tabName.info, Icons.badge_outlined),
       titleContentSeparator,
@@ -280,7 +313,7 @@ class _UserBriefProfileDialogState extends State<_UserBriefProfileDialog> {
               Icons.feedback_outlined,
               tr.privilege,
               widget.profile.privilege,
-              Colors.orange[colorOffset],
+              orange,
             ),
             _UserProfilePair(
               Icons.event_note_outlined,
@@ -301,7 +334,7 @@ class _UserBriefProfileDialogState extends State<_UserBriefProfileDialog> {
         children: [
           stat(Icons.thumb_up_outlined, tr.recommended, widget.profile.recommended, Colors.red[colorOffset]),
           stat(Icons.book_outlined, tr.thread, widget.profile.threadCount, Colors.green[colorOffset]),
-          stat(MdiIcons.commentEditOutline, tr.post, widget.profile.postCount, Colors.cyan[colorOffset]),
+          stat(MdiIcons.commentEditOutline, tr.post, widget.profile.postCount, Colors.cyan[cyanOffset]),
           stat(Icons.emoji_people_outlined, tr.famous, widget.profile.famous, Colors.purple[colorOffset]),
           stat(FontAwesomeIcons.coins, tr.coins, widget.profile.coins, Colors.purple[colorOffset]),
           stat(Icons.campaign_outlined, tr.publicity, widget.profile.publicity, Colors.purple[colorOffset]),
@@ -502,6 +535,130 @@ class _UserBriefProfileDialogState extends State<_UserBriefProfileDialog> {
   }
 }
 
+/// Chips opening the threads and replies of the author, adding the author as a friend and blocking the author.
+///
+/// Friend and block are for other accounts only, need a uid and an account in use; without a uid the lists are opened
+/// by name. Block is left out where the app provides no [UserBlockCubit] and while the list of the current account is
+/// not known.
+///
+/// Compact, and friend and block are icons only. On a phone the dialog content is about 200 wide (a 360 wide window:
+/// 204, see [briefProfileDialogContentWidth]), too narrow for the chips to wrap into two rows by themselves: there the
+/// two list chips share the first row (each at its own width, shrunk only when the row is too narrow) and the actions
+/// take the second. Wider content lets the chips wrap naturally.
+class _AuthorActions extends StatelessWidget {
+  const _AuthorActions({
+    required this.uid,
+    required this.username,
+    required this.isSelf,
+    required this.hasAccount,
+    required this.width,
+  });
+
+  /// Parsed author uid, null if the floor carries no number.
+  final int? uid;
+
+  final String username;
+
+  final bool isSelf;
+
+  /// Whether the device acts as an account: friend and block need one.
+  final bool hasAccount;
+
+  /// Width of the dialog content.
+  final double width;
+
+  /// Content narrower than this gets the fixed two rows.
+  static const _wrapWidth = 300.0;
+
+  /// Whether the author offers anything to open: a uid or a name.
+  static bool hasAny({required int? uid, required String username}) => _validUid(uid) != null || username.isNotEmpty;
+
+  static int? _validUid(int? uid) => uid != null && uid > 0 ? uid : null;
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = _validUid(this.uid);
+    // Same state as the block button of the profile page: the list of the current account has to be known. The
+    // selector exists only where the cubit does; uid and isSelf are fixed for the life of the dialog.
+    if (uid != null && hasAccount && !isSelf && context.readOrNull<UserBlockCubit>() != null) {
+      return BlocSelector<UserBlockCubit, UserBlockList, (bool, bool)>(
+        selector: (state) => (
+          state.ownerUid != null && state.ownerUid != uid && state.status == UserBlockListStatus.ready,
+          state.isBlocked(uid),
+        ),
+        builder: (context, state) => _build(context, uid, canBlock: state.$1, blocked: state.$2),
+      );
+    }
+    return _build(context, uid, canBlock: false, blocked: false);
+  }
+
+  Widget _build(BuildContext context, int? uid, {required bool canBlock, required bool blocked}) {
+    final tr = context.t.postCard.profileDialog;
+
+    // Label padding halved: at 204 wide the label of a list chip sharing a row gets 72, "TA的主題" needs about 60.
+    // Standard density: the compact one shrank the tap targets to 40.
+    Widget chip(String key, String label, VoidCallback onPressed) => ActionChip(
+      key: ValueKey('brief-profile-action-$key'),
+      label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+      onPressed: onPressed,
+    );
+
+    Widget iconChip(String key, IconData icon, String tooltip, VoidCallback onPressed) => ActionChip(
+      key: ValueKey('brief-profile-action-$key'),
+      label: Icon(icon, size: 18),
+      tooltip: tooltip,
+      onPressed: onPressed,
+    );
+
+    void openMemberThreads(String? tab) => unawaited(
+      context.pushNamed(
+        ScreenPaths.memberThread,
+        queryParameters: {
+          if (uid != null) 'uid': '$uid' else if (username.isNotEmpty) 'username': username,
+          'tab': ?tab,
+        },
+      ),
+    );
+
+    final lists = <Widget>[
+      if (uid != null || username.isNotEmpty) ...[
+        chip('threads', isSelf ? tr.myThreads : tr.memberThreads, () => openMemberThreads(null)),
+        chip('replies', isSelf ? tr.myReplies : tr.memberReplies, () => openMemberThreads('reply')),
+      ],
+    ];
+    final actions = <Widget>[
+      if (uid != null && hasAccount && !isSelf)
+        iconChip(
+          'friend',
+          Icons.person_add_alt_1_outlined,
+          context.t.friendPage.addFriend.tooltip,
+          () => unawaited(showAddFriendDialog(context, uid: '$uid', username: username)),
+        ),
+      if (canBlock)
+        iconChip(
+          'block',
+          blocked ? Icons.remove_moderator_outlined : Icons.block_outlined,
+          blocked ? context.t.userBlock.unblock : context.t.userBlock.block,
+          () => unawaited(toggleUserBlock(context, uid: uid!, username: username, blocked: blocked)),
+        ),
+    ];
+
+    if (width >= _wrapWidth) {
+      return Wrap(spacing: 8, runSpacing: 8, children: [...lists, ...actions]);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      spacing: 8,
+      children: [
+        if (lists.isNotEmpty) Row(spacing: 8, children: lists.map((e) => Flexible(child: e)).toList()),
+        if (actions.isNotEmpty) Wrap(spacing: 8, runSpacing: 8, children: actions),
+      ],
+    );
+  }
+}
+
 class _UserProfilePair extends StatelessWidget {
   const _UserProfilePair(this.iconData, this.name, this.value, this.valueColor);
 
@@ -518,9 +675,9 @@ class _UserProfilePair extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(iconData, size: 16, color: colorScheme.outline),
+        Icon(iconData, size: 16, color: colorScheme.onSurfaceVariant),
         sizedBoxW8H8,
-        Text(name, style: textTheme.bodySmall?.copyWith(color: colorScheme.outline)),
+        Text(name, style: textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant)),
         sizedBoxW12H12,
         Expanded(
           child: Text(value ?? '', style: textTheme.bodyMedium?.copyWith(color: valueColor)),

@@ -1,0 +1,1181 @@
+import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
+import 'package:tsdm_client/features/post/models/poll_create.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
+import 'package:universal_html/html.dart' as uh;
+
+/// The kind of new thread the editor writes: an ordinary thread, a reward (`special=3`), an activity (`special=4`), a
+/// debate (`special=5`) or a red packet thread (the site's `hongbao` thread plugin, `specialextra=hongbao`, which the
+/// forum stores as `special` 127).
+///
+/// A poll has its own editor.
+enum ThreadKind {
+  /// An ordinary thread.
+  normal,
+
+  /// A reward thread: the author pays credits to the best answer.
+  reward,
+
+  /// A red packet thread: the author puts credits in a packet the readers grab.
+  hongbao,
+
+  /// An activity: a time, a place, members applying.
+  activity,
+
+  /// A debate: two sides, members arguing for one.
+  debate
+  ;
+
+  /// The kind of the `kind` query parameter of the editor's route; [normal] for none or an unknown value.
+  static ThreadKind fromQuery(String? value) => switch (value) {
+    'reward' => reward,
+    'hongbao' => hongbao,
+    'activity' => activity,
+    'debate' => debate,
+    _ => normal,
+  };
+
+  /// The value of the `kind` query parameter of the editor's route, null for [normal].
+  String? get query => switch (this) {
+    normal => null,
+    reward => 'reward',
+    hongbao => 'hongbao',
+    activity => 'activity',
+    debate => 'debate',
+  };
+
+  /// The query the forum's new thread form takes for this kind (`post.php` reads `special` and `specialextra`).
+  String get formQuery => switch (this) {
+    normal => '',
+    reward => '&special=3',
+    hongbao => '&specialextra=hongbao',
+    activity => '&special=4',
+    debate => '&special=5',
+  };
+
+  /// The identifier of the thread plugin of [hongbao].
+  static const hongbaoPlugin = 'hongbao';
+}
+
+/// Why a reward price is refused, as the forum refuses it (`extend_thread_reward::before_newthread`, and
+/// `before_editpost` for a raised one).
+enum RewardPriceIssue {
+  /// No price, or below 1.
+  empty,
+
+  /// Above the forum's absolute limit (32767).
+  overflow,
+
+  /// Below the group's minimum.
+  belowMin,
+
+  /// Above the group's maximum.
+  aboveMax,
+
+  /// The price with its tax is more than the member has: for an edit, what is added to the price with its tax.
+  shortage,
+
+  /// Below the price of the thread: an edit may only raise it (`reward_credits_fall`).
+  fall,
+}
+
+/// What the `reward` block of a post form lets the member do (`state`).
+enum RewardFormState {
+  /// A new reward thread: the price is set.
+  newThread,
+
+  /// The first post of an open reward thread edited by its author: the price may be raised.
+  open,
+
+  /// The first post of a reward thread whose best answer is chosen, edited by its author: the price is kept.
+  resolved,
+
+  /// The first post of a reward thread edited by someone else (a moderator): the price is kept.
+  readonly,
+}
+
+/// The reward settings of a post form (`reward` of the forum's app API, plugin 2.9.0, `post_reward.php`): the group's
+/// price range, the credit paid, what the member has and the tax; for the edit of the first post of a reward thread,
+/// the price of the thread and whether the member may raise it ([state]).
+final class RewardFormInfo {
+  /// Constructor.
+  const RewardFormInfo({
+    required this.inputName,
+    required this.served,
+    required this.min,
+    required this.max,
+    required this.creditTitle,
+    required this.creditUnit,
+    required this.have,
+    required this.tax,
+    required this.expirationDays,
+    this.state = RewardFormState.newThread,
+    this.current,
+  }) : assert(state != RewardFormState.open || current != null, 'an open reward thread has its price');
+
+  /// The `reward` block of a post form; null when it is not one of a reward thread (`state` `none` or unknown), or a
+  /// form that lets the member set the price (`new`, `open`) lacks the price field.
+  static RewardFormInfo? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) {
+      return null;
+    }
+    final state = switch (json['state']) {
+      'new' => RewardFormState.newThread,
+      'open' => RewardFormState.open,
+      'resolved' => RewardFormState.resolved,
+      'readonly' => RewardFormState.readonly,
+      _ => null,
+    };
+    if (state == null) {
+      return null;
+    }
+    final inputs = tsdmAppList(json['inputs']);
+    final price = inputs.where((e) => e['name'] == 'rewardprice').firstOrNull;
+    final editable = state == RewardFormState.newThread || state == RewardFormState.open;
+    if (editable && (price == null || price['type'] != 'text')) {
+      return null;
+    }
+    final current = json['price'];
+    if (state == RewardFormState.open && (current is! num || current <= 0)) {
+      return null;
+    }
+    final credit = tsdmAppMap(json['credit']);
+    final tax = json['tax'];
+    return RewardFormInfo(
+      inputName: 'rewardprice',
+      served: price == null ? null : int.tryParse(tsdmAppText(price['value']).trim()),
+      min: tsdmAppInt(json['min']),
+      max: tsdmAppInt(json['max']),
+      creditTitle: tsdmAppText(credit['title']),
+      creditUnit: tsdmAppText(credit['unit']),
+      have: json['have'] is num ? (json['have'] as num).toInt() : null,
+      tax: tax is num ? tax.toDouble() : 0,
+      expirationDays: tsdmAppInt(json['expiration_days']),
+      state: state,
+      current: current is num && state != RewardFormState.newThread ? current.toInt() : null,
+    );
+  }
+
+  /// The absolute limit of the forum (`reward_credits_overflow`).
+  static const overflow = 32767;
+
+  /// The name of the price field.
+  final String inputName;
+
+  /// The price the form came with (the group's minimum for a new thread, the thread's price for an edit), null when it
+  /// is not a number or the form has no price field.
+  final int? served;
+
+  /// What the member may do with the price.
+  final RewardFormState state;
+
+  /// The price of the thread edited (`price`; negative once the best answer is chosen), null for a new thread.
+  final int? current;
+
+  /// Whether the member sets the price: a new thread, or an open one edited by its author.
+  bool get editable => state == RewardFormState.newThread || state == RewardFormState.open;
+
+  /// Whether the price is raised from [current]: the edit of an open reward thread.
+  bool get raising => state == RewardFormState.open;
+
+  /// The lowest price the forum takes: the group's minimum, for an edit not below [current] either.
+  int get floor => raising && current! > min ? current! : min;
+
+  /// The group's minimum price.
+  final int min;
+
+  /// The group's maximum price, 0 for none.
+  final int max;
+
+  /// The credit paid (`creditstransextra[2]`), its title.
+  final String creditTitle;
+
+  /// The unit of the credit, may be empty.
+  final String creditUnit;
+
+  /// How much of the credit the member has, null when the form does not tell. The plugin reads it from the member's
+  /// counts (`getuserprofile('extcredits'.$cid)`, the database), as the forum does when it checks the price.
+  final int? have;
+
+  /// The tax rate (`creditstax`), 0.2 for 20%.
+  final double tax;
+
+  /// After how many days a moderator may pick the best answer for the author, 0 when the forum does not tell.
+  final int expirationDays;
+
+  /// The credit's title with its unit, as the forum prints it.
+  String get creditLabel => '$creditUnit$creditTitle'.trim();
+
+  /// What [price] costs with the tax, as the forum computes it (`$rewardprice + ceil($rewardprice * $creditstax)`).
+  int realPrice(int price) => price + (price * tax).ceil();
+
+  /// What the member pays for [price] with the tax: all of it for a new thread, what it adds to [current] for an edit
+  /// (`extend_thread_reward::before_editpost`: `ceil(Δ + Δ * $creditstax)`).
+  int cost(int price) => realPrice(raising ? price - (current ?? 0) : price);
+
+  /// Why the forum would refuse [price], null when it takes it. An edit keeping the price is not checked
+  /// (`extend_thread_reward::before_editpost` checks a changed price only): it neither raises nor charges.
+  RewardPriceIssue? check(int? price) {
+    if (raising && price == current) {
+      return null;
+    }
+    if (price == null || price < 1) {
+      return RewardPriceIssue.empty;
+    }
+    if (raising && price < current!) {
+      return RewardPriceIssue.fall;
+    }
+    if (price > overflow) {
+      return RewardPriceIssue.overflow;
+    }
+    if (price < min) {
+      return RewardPriceIssue.belowMin;
+    }
+    if (max > 0 && price > max) {
+      return RewardPriceIssue.aboveMax;
+    }
+    if (have case final int have when cost(price) > have) {
+      return RewardPriceIssue.shortage;
+    }
+    return null;
+  }
+}
+
+/// How a red packet is split (`hb_split`).
+enum HongbaoSplit {
+  /// Each share a random amount (拼手氣).
+  lucky('1'),
+
+  /// Every share the same amount (均分).
+  even('2')
+  ;
+
+  const HongbaoSplit(this.value);
+
+  /// The value posted.
+  final String value;
+}
+
+/// Why a red packet is refused, as the plugin refuses it (`hongbao_service::create_packet`) or as the form limits it.
+enum HongbaoIssue {
+  /// No amount, or not a positive integer.
+  totalRequired,
+
+  /// No number of shares, or not a positive integer.
+  sharesRequired,
+
+  /// More shares than the plugin allows.
+  sharesAboveMax,
+
+  /// The amount does not give every share its minimum.
+  totalBelowShares,
+
+  /// An even split needs an amount the shares divide.
+  notDivisible,
+
+  /// More than the member has.
+  shortage,
+
+  /// The blessing is longer than the form takes.
+  blessingTooLong,
+
+  /// The password is longer than the form takes.
+  passwordTooLong,
+}
+
+/// A red packet as the member set it in the editor; [toFields] is what the form posts for it.
+final class HongbaoEdits {
+  /// Constructor.
+  const HongbaoEdits({
+    required this.total,
+    required this.shares,
+    this.split = HongbaoSplit.lucky,
+    this.condReply = false,
+    this.password = '',
+    this.appoint = '',
+    this.expire = '',
+    this.blessing = '',
+  });
+
+  /// The amount of credits in the packet (`hb_total`), null when not set.
+  final int? total;
+
+  /// How many shares (`hb_shares`), null when not set.
+  final int? shares;
+
+  /// How the packet is split.
+  final HongbaoSplit split;
+
+  /// Whether a reader must reply before grabbing a share (`hb_cond`).
+  final bool condReply;
+
+  /// The password of the packet (`hb_password`), empty for none.
+  final String password;
+
+  /// The members allowed to grab, by name, separated by commas (`hb_appoint`); empty for everyone.
+  final String appoint;
+
+  /// The expiry chosen (`hb_expire`, hours; one of [HongbaoFormInfo.expireChoices]).
+  final String expire;
+
+  /// The blessing (`hb_blessing`), empty for the plugin's default.
+  final String blessing;
+
+  /// The packet as kept in a [Map] (a local draft), [fromJson].
+  Map<String, Object?> toJson() => {
+    'total': total,
+    'shares': shares,
+    'split': split.value,
+    'cond_reply': condReply,
+    'password': password,
+    'appoint': appoint,
+    'expire': expire,
+    'blessing': blessing,
+  };
+
+  /// The packet kept as [json] ([toJson]), null when it is not one. A value it does not know is taken as unset (an
+  /// unknown split as [HongbaoSplit.lucky]): the dialog shows the packet before it is posted.
+  static HongbaoEdits? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) {
+      return null;
+    }
+    int? count(Object? value) => value is int && value > 0 ? value : null;
+    String text(Object? value) => value is String ? value : '';
+    return HongbaoEdits(
+      total: count(json['total']),
+      shares: count(json['shares']),
+      split: HongbaoSplit.values.where((e) => e.value == json['split']).firstOrNull ?? HongbaoSplit.lucky,
+      condReply: json['cond_reply'] == true,
+      password: text(json['password']),
+      appoint: text(json['appoint']),
+      expire: text(json['expire']),
+      blessing: text(json['blessing']),
+    );
+  }
+
+  /// The fields the form posts for this packet, as the website's form would: a checkbox only when checked.
+  Map<String, String> toFields() => {
+    'hb_total': '${total ?? ''}',
+    'hb_shares': '${shares ?? ''}',
+    'hb_split': split.value,
+    if (condReply) 'hb_cond': '1',
+    'hb_password': password,
+    'hb_appoint': appoint,
+    'hb_expire': expire,
+    'hb_blessing': blessing,
+  };
+
+  /// Why the plugin would refuse this packet against the limits of [info], null when it takes it.
+  HongbaoIssue? check(HongbaoFormInfo info) {
+    final total = this.total;
+    final shares = this.shares;
+    if (total == null || total <= 0) {
+      return HongbaoIssue.totalRequired;
+    }
+    if (shares == null || shares <= 0) {
+      return HongbaoIssue.sharesRequired;
+    }
+    if (info.maxShares > 0 && shares > info.maxShares) {
+      return HongbaoIssue.sharesAboveMax;
+    }
+    if (total < info.minShare * shares) {
+      return HongbaoIssue.totalBelowShares;
+    }
+    if (split == HongbaoSplit.even && total % shares != 0) {
+      return HongbaoIssue.notDivisible;
+    }
+    // The box prints the balance from `$_G['member']`, which may lack the credit (0 printed while the member has
+    // some; the plugin charges from the database): a printed 0 proves nothing, a positive balance is checked.
+    if (info.balance case final int balance when balance > 0 && total > balance) {
+      return HongbaoIssue.shortage;
+    }
+    if (info.blessingMax case final int max when blessing.runes.length > max) {
+      return HongbaoIssue.blessingTooLong;
+    }
+    if (info.passwordMax case final int max when password.runes.length > max) {
+      return HongbaoIssue.passwordTooLong;
+    }
+    return null;
+  }
+}
+
+/// The red packet form the site's `hongbao` thread plugin prints into the new thread page (its `newthread` hook: the
+/// `div.hb-postbox` with the `hb_*` fields), read from the web page: the member's balance, the limits of the shares,
+/// the expiry choices, the default blessing and the length limits.
+///
+/// The forum's app API does not give a thread plugin's fields (`unsupported: threadplugin`); the app knows this one.
+final class HongbaoFormInfo {
+  /// Constructor.
+  const HongbaoFormInfo({
+    required this.balance,
+    required this.creditLabel,
+    required this.maxShares,
+    required this.minShare,
+    required this.expireChoices,
+    required this.expireDefault,
+    required this.blessingMax,
+    required this.blessingDefault,
+    required this.passwordMax,
+  });
+
+  /// The form of [document], null when the page has no red packet form the app understands (the plugin's notice
+  /// instead of the form: [noticeOf]; another plugin; a page that is not the form).
+  static HongbaoFormInfo? parse(uh.Document document) {
+    final form = document.querySelector('form#postform');
+    final box = form?.querySelector('.hb-postbox');
+    if (form == null || box == null) {
+      return null;
+    }
+    uh.Element? input(String name) => box.querySelector('input[name="$name"]');
+    final total = input('hb_total');
+    final shares = input('hb_shares');
+    final split = box.querySelectorAll('input[name="hb_split"]');
+    final expire = box.querySelector('select[name="hb_expire"]');
+    final blessing = input('hb_blessing');
+    if (total == null || shares == null || split.isEmpty || expire == null || blessing == null) {
+      return null;
+    }
+    final choices = <(String, String)>[];
+    String? selected;
+    for (final option in expire.querySelectorAll('option')) {
+      final value = option.attributes['value'] ?? (option.text ?? '').trim();
+      choices.add((value, (option.text ?? '').trim()));
+      if (option.attributes.containsKey('selected')) {
+        selected = value;
+      }
+    }
+    if (choices.isEmpty) {
+      return null;
+    }
+    final text = box.text ?? '';
+    final minShare = int.tryParse(RegExp(r'每份至少\s*(\d+)').firstMatch(text)?.group(1) ?? '');
+    final balanceNode = box.querySelector('.hb-bal');
+    var creditLabel = '';
+    if (balanceNode != null) {
+      // `目前餘額 <span class="hb-bal">834</span> 天使币`: the credit's name is the text after the balance.
+      final siblings = balanceNode.parent?.childNodes ?? const <uh.Node>[];
+      final index = siblings.indexOf(balanceNode);
+      if (index >= 0) {
+        creditLabel = siblings.skip(index + 1).map((n) => n.text ?? '').join().trim();
+      }
+    }
+    return HongbaoFormInfo(
+      balance: int.tryParse((balanceNode?.text ?? '').trim()),
+      creditLabel: creditLabel,
+      maxShares: int.tryParse(shares.attributes['max'] ?? '') ?? 0,
+      minShare: minShare == null || minShare < 1 ? 1 : minShare,
+      expireChoices: choices,
+      expireDefault: selected ?? choices.first.$1,
+      blessingMax: int.tryParse(blessing.attributes['maxlength'] ?? ''),
+      blessingDefault: blessing.attributes['value'] ?? '',
+      passwordMax: int.tryParse(input('hb_password')?.attributes['maxlength'] ?? ''),
+    );
+  }
+
+  /// What the plugin printed instead of the form (the feature off, the member's group not allowed), null when the
+  /// page has the form, or no red packet box at all.
+  static String? noticeOf(uh.Document document) {
+    final box = document.querySelector('form#postform .hb-postbox');
+    if (box == null || box.querySelector('input[name="hb_total"]') != null) {
+      return null;
+    }
+    final text = (box.text ?? '').trim();
+    return text.isEmpty ? null : text;
+  }
+
+  /// The form as kept in a [Map] (the app's own key in the post form's answer).
+  static HongbaoFormInfo? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) {
+      return null;
+    }
+    final choices = [
+      for (final choice in tsdmAppList(json['expire_choices']))
+        (tsdmAppText(choice['value']), tsdmAppText(choice['label'])),
+    ];
+    if (choices.isEmpty) {
+      return null;
+    }
+    return HongbaoFormInfo(
+      balance: json['balance'] is num ? (json['balance'] as num).toInt() : null,
+      creditLabel: tsdmAppText(json['credit_label']),
+      maxShares: tsdmAppInt(json['max_shares']),
+      minShare: switch (tsdmAppInt(json['min_share'])) {
+        final min when min >= 1 => min,
+        _ => 1,
+      },
+      expireChoices: choices,
+      expireDefault: tsdmAppText(json['expire_default']),
+      blessingMax: json['blessing_max'] is num ? (json['blessing_max'] as num).toInt() : null,
+      blessingDefault: tsdmAppText(json['blessing_default']),
+      passwordMax: json['password_max'] is num ? (json['password_max'] as num).toInt() : null,
+    );
+  }
+
+  /// This form as a [Map] ([fromJson]).
+  Map<String, dynamic> toJson() => {
+    'balance': balance,
+    'credit_label': creditLabel,
+    'max_shares': maxShares,
+    'min_share': minShare,
+    'expire_choices': [
+      for (final (value, label) in expireChoices) {'value': value, 'label': label},
+    ],
+    'expire_default': expireDefault,
+    'blessing_max': blessingMax,
+    'blessing_default': blessingDefault,
+    'password_max': passwordMax,
+  };
+
+  /// How much of the credit the member has, null when the box does not tell.
+  final int? balance;
+
+  /// The credit's name as the box prints it after the balance, may be empty.
+  final String creditLabel;
+
+  /// The most shares a packet may have, 0 for no limit.
+  final int maxShares;
+
+  /// The least credits a share may hold.
+  final int minShare;
+
+  /// The expiry choices (hours, label) in the order of the form.
+  final List<(String, String)> expireChoices;
+
+  /// The expiry the form came with.
+  final String expireDefault;
+
+  /// The most characters of the blessing, null when the form sets none.
+  final int? blessingMax;
+
+  /// The blessing the form came with.
+  final String blessingDefault;
+
+  /// The most characters of the password, null when the form sets none.
+  final int? passwordMax;
+
+  /// A packet as the form comes: one share, split by luck, the default expiry and blessing.
+  HongbaoEdits get initial => HongbaoEdits(total: null, shares: 1, expire: expireDefault, blessing: blessingDefault);
+}
+
+/// The forum's date and time as its forms take them (`Y-m-d H:i`, read with `strtotime()` in the forum's time zone).
+String discuzDateTime(DateTime t) =>
+    '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')} '
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+/// The date and time [value] as the forum prints it in a form ([discuzDateTime], `Y-m-d H:i`, seconds taken; a date
+/// alone is its midnight), null when it is not one, or not a day of the calendar.
+DateTime? parseDiscuzDateTime(String? value) {
+  final match = RegExp(
+    r'^\s*(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?\s*$',
+  ).firstMatch(value ?? '');
+  if (match == null) {
+    return null;
+  }
+  int at(int i) => int.parse(match.group(i) ?? '0');
+  final (year, month, day, hour, minute, second) = (at(1), at(2), at(3), at(4), at(5), at(6));
+  if (hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+  final time = DateTime(year, month, day, hour, minute, second);
+  // DateTime carries a day past the month's last into the next month: not a date the forum prints.
+  return time.year == year && time.month == month && time.day == day ? time : null;
+}
+
+/// [value] without the backslashes PHP's `addslashes()` puts before `'`, `"`, `\` and NUL (`stripslashes()`).
+String stripSlashes(String value) => value.replaceAllMapped(RegExp(r'\\(.?)', dotAll: true), (m) {
+  final c = m.group(1)!;
+  return c == '0' ? '\u0000' : c;
+});
+
+/// The values of the inputs of a form block (`inputs`, `{name, type, value, checked}`) as the browser posts them: a
+/// checkbox's value only when checked; the last value of a name.
+Map<String, String> _servedValues(List<Map<String, dynamic>> inputs) => {
+  for (final input in inputs)
+    if (input['name'] case final String name when input['type'] != 'checkbox' || input['checked'] == 1)
+      name: tsdmAppText(input['value']),
+};
+
+/// Why an activity is refused, as the forum refuses it (`extend_thread_activity::before_newthread`).
+enum ActivityIssue {
+  /// No category (`activity_sort_please`).
+  classRequired,
+
+  /// No start (`activity_fromtime_please`).
+  startRequired,
+
+  /// The end before the start (`activity_fromtime_error`).
+  endBeforeStart,
+
+  /// No place (`activity_address_please`).
+  placeRequired,
+
+  /// More extra fields than the forum takes (`post_activity_extfield_toomany`).
+  extFieldsTooMany,
+}
+
+/// The activity settings of a new activity thread form (`activity` of the forum's app API, plugin 2.9.0,
+/// `post_activity.php`): the categories offered, the gender choices, the member data the applicants may be asked for,
+/// the credit an applicant pays, how many extra fields the author may add.
+final class ActivityFormInfo {
+  /// Constructor.
+  const ActivityFormInfo({
+    required this.types,
+    required this.genders,
+    required this.userFields,
+    required this.credit,
+    required this.extNum,
+    required this.hasCity,
+    this.served,
+  });
+
+  /// The `activity` block of a new thread form, or of the edit of the first post of an activity thread ([edit]: its
+  /// values are the activity as it is, [served]), null when it lacks a field the forum requires.
+  static ActivityFormInfo? fromJson(Object? json, {bool edit = false}) {
+    if (json is! Map<String, dynamic>) {
+      return null;
+    }
+    final inputs = tsdmAppList(json['inputs']);
+    final names = inputs.map((e) => e['name']).whereType<String>().toSet();
+    if (!names.containsAll(const [
+      'starttimefrom[0]',
+      'starttimefrom[1]',
+      'starttimeto',
+      'activitytime',
+      'activityplace',
+      'activityclass',
+    ])) {
+      return null;
+    }
+    final gender = inputs.where((e) => e['name'] == 'gender').firstOrNull;
+    final credit = tsdmAppMap(json['credit']);
+    return ActivityFormInfo(
+      types: [
+        for (final type in json['types'] is List ? json['types'] as List<dynamic> : const <dynamic>[])
+          if (type is String && type.trim().isNotEmpty) type.trim(),
+      ],
+      genders: [
+        for (final choice in tsdmAppList(gender?['choices']))
+          (tsdmAppText(choice['value']), tsdmAppText(choice['label'])),
+      ],
+      userFields: [
+        for (final input in inputs)
+          if (input['name'] == 'userfield[]' && input['type'] == 'checkbox')
+            (tsdmAppText(input['value']), tsdmAppText(input['label'])),
+      ],
+      credit: names.contains('activitycredit') && credit.isNotEmpty
+          ? '${tsdmAppText(credit['unit'])}${tsdmAppText(credit['title'])}'.trim()
+          : null,
+      extNum: names.contains('extfield') ? tsdmAppInt(json['extnum']) : 0,
+      hasCity: names.contains('activitycity'),
+      served: edit ? ActivityEdits._served(inputs) : null,
+    );
+  }
+
+  /// The activity as it is, from the form of the edit of its first post (`post_activity.php` prints it); null for a
+  /// new thread.
+  final ActivityEdits? served;
+
+  /// The categories the forum offers (`activitytype`); any other may be typed.
+  final List<String> types;
+
+  /// The gender choices (value, label), empty when the form has none.
+  final List<(String, String)> genders;
+
+  /// The member data an applicant may be asked for (`userfield[]`: value, label).
+  final List<(String, String)> userFields;
+
+  /// The name of the credit an applicant pays, null when the forum asks none (`activitycredit`).
+  final String? credit;
+
+  /// How many extra fields the author may ask the applicants (`activityextnum`), 0 for none.
+  final int extNum;
+
+  /// Whether the form asks the city (`activitycity`, added to the title as `[city]`).
+  final bool hasCity;
+}
+
+/// An activity as the member set it in the editor; [toFields] and [userFieldValues] are what the form posts for it.
+final class ActivityEdits {
+  /// Constructor.
+  const ActivityEdits({
+    required this.category,
+    required this.start,
+    required this.place,
+    this.end,
+    this.city = '',
+    this.number,
+    this.gender = '0',
+    this.userFields = const [],
+    this.credit,
+    this.cost,
+    this.expiration,
+    this.extFields = '',
+  });
+
+  /// The activity as the form of the edit of its first post prints it ([inputs]): a start alone, or a start and an
+  /// end when `activitytime` is checked; a number, credit or cost of 0 as none (the forum stores none as 0).
+  factory ActivityEdits._served(List<Map<String, dynamic>> inputs) {
+    final values = _servedValues(inputs);
+    final ranged = values['activitytime'] == '1';
+    int? count(String name) => switch (int.tryParse((values[name] ?? '').trim())) {
+      final int n when n > 0 => n,
+      _ => null,
+    };
+    return ActivityEdits(
+      category: values['activityclass'] ?? '',
+      start: parseDiscuzDateTime(values[ranged ? 'starttimefrom[1]' : 'starttimefrom[0]']),
+      end: ranged ? parseDiscuzDateTime(values['starttimeto']) : null,
+      place: values['activityplace'] ?? '',
+      city: values['activitycity'] ?? '',
+      number: count('activitynumber'),
+      gender: values['gender'] ?? '0',
+      userFields: [
+        for (final input in inputs)
+          if (input['name'] == 'userfield[]' && input['type'] == 'checkbox' && input['checked'] == 1)
+            tsdmAppText(input['value']),
+      ],
+      credit: count('activitycredit'),
+      cost: count('cost'),
+      expiration: parseDiscuzDateTime(values['activityexpiration']),
+      extFields: values['extfield'] ?? '',
+    );
+  }
+
+  /// The category (`activityclass`).
+  final String category;
+
+  /// When it starts, null when not set.
+  final DateTime? start;
+
+  /// When it ends, null for an activity with a start only (`activitytime` unchecked).
+  final DateTime? end;
+
+  /// Where (`activityplace`).
+  final String place;
+
+  /// The city (`activitycity`), empty for none.
+  final String city;
+
+  /// How many members may take part (`activitynumber`), null for no limit.
+  final int? number;
+
+  /// Who may apply (`gender`: 0 anyone, 1 men, 2 women).
+  final String gender;
+
+  /// The member data an applicant is asked for (`userfield[]` values).
+  final List<String> userFields;
+
+  /// The credits an applicant pays (`activitycredit`), null for none.
+  final int? credit;
+
+  /// What taking part costs each member (`cost`), null for nothing said.
+  final int? cost;
+
+  /// The end of the applications (`activityexpiration`), null for none.
+  final DateTime? expiration;
+
+  /// The extra fields asked to the applicants, one per line (`extfield`).
+  final String extFields;
+
+  /// The extra fields as the forum counts them: trimmed, without empty or numeric lines, each once.
+  List<String> get extFieldList => [
+    ...{
+      for (final line in extFields.split('\n'))
+        if (line.trim().isNotEmpty && num.tryParse(line.trim()) == null) line.trim(),
+    },
+  ];
+
+  /// The fields the form posts for this activity, but the list of [userFieldValues]: a start alone as
+  /// `starttimefrom[0]`, a start and an end as `starttimefrom[1]` and `starttimeto` with `activitytime` checked, as the
+  /// website's form posts them.
+  Map<String, String?> toFields(ActivityFormInfo info) {
+    final start = this.start == null ? '' : discuzDateTime(this.start!);
+    final ranged = end != null;
+    return {
+      'activitytime': ranged ? '1' : null,
+      'starttimefrom[0]': ranged ? '' : start,
+      'starttimefrom[1]': ranged ? start : '',
+      'starttimeto': ranged ? discuzDateTime(end!) : '',
+      'activityplace': place,
+      if (info.hasCity) 'activitycity': city,
+      'activityclass': category,
+      'activitynumber': number == null ? '' : '$number',
+      if (info.genders.isNotEmpty) 'gender': gender,
+      if (info.credit != null) 'activitycredit': credit == null ? '' : '$credit',
+      'cost': cost == null ? '' : '$cost',
+      'activityexpiration': expiration == null ? '' : discuzDateTime(expiration!),
+      if (info.extNum > 0) 'extfield': extFields,
+    };
+  }
+
+  /// The member data asked ([userFields]) that the form offers, in its order: posted as `userfield[0]`,
+  /// `userfield[1]`…, which PHP reads as the list the website's checkboxes (`userfield[]`) post.
+  List<String> userFieldValues(ActivityFormInfo info) => [
+    for (final (value, _) in info.userFields)
+      if (userFields.contains(value)) value,
+  ];
+
+  /// Every reason the forum would refuse this activity against [info], each field its own.
+  Set<ActivityIssue> issues(ActivityFormInfo info) {
+    final start = this.start;
+    final end = this.end;
+    return {
+      if (category.trim().isEmpty) ActivityIssue.classRequired,
+      if (place.trim().isEmpty) ActivityIssue.placeRequired,
+      if (start == null) ActivityIssue.startRequired,
+      if (start != null && end != null && end.isBefore(start)) ActivityIssue.endBeforeStart,
+      if (extFieldList.length > info.extNum) ActivityIssue.extFieldsTooMany,
+    };
+  }
+
+  /// Why the forum would refuse this activity against [info], null when it takes it: the first of [issues], in the
+  /// order the forum checks.
+  ActivityIssue? check(ActivityFormInfo info) {
+    final found = issues(info);
+    return const [
+      ActivityIssue.startRequired,
+      ActivityIssue.endBeforeStart,
+      ActivityIssue.classRequired,
+      ActivityIssue.placeRequired,
+      ActivityIssue.extFieldsTooMany,
+    ].where(found.contains).firstOrNull;
+  }
+}
+
+/// Why a debate is refused, as the forum refuses it (`extend_thread_debate::before_newthread`).
+enum DebateIssue {
+  /// A side without its point (`debate_position_nofound`).
+  pointsRequired,
+
+  /// The end is not ahead (`debate_endtime_invalid`).
+  endPassed,
+}
+
+/// The debate settings of a new debate thread form (`debate` of the forum's app API, plugin 2.9.0, `post_debate.php`).
+final class DebateFormInfo {
+  /// Constructor.
+  const DebateFormInfo({required this.hasEnd, required this.hasUmpire, this.served});
+
+  /// The `debate` block of a new thread form, or of the edit of the first post of a debate thread ([edit]: its values
+  /// are the debate as it is, [served]), null when it lacks the points.
+  static DebateFormInfo? fromJson(Object? json, {bool edit = false}) {
+    if (json is! Map<String, dynamic>) {
+      return null;
+    }
+    final inputs = tsdmAppList(json['inputs']);
+    final names = inputs.map((e) => e['name']).whereType<String>().toSet();
+    if (!names.containsAll(const ['affirmpoint', 'negapoint'])) {
+      return null;
+    }
+    final values = _servedValues(inputs);
+    return DebateFormInfo(
+      hasEnd: names.contains('endtime'),
+      hasUmpire: names.contains('umpire'),
+      // The edit page prints the row of the debate through `daddslashes()` (editpost.php), which the browser posts
+      // back as it is: each edit on the website adds a backslash before every quote. The app posts what is stored.
+      served: edit
+          ? DebateEdits(
+              affirm: stripSlashes(values['affirmpoint'] ?? ''),
+              negate: stripSlashes(values['negapoint'] ?? ''),
+              end: parseDiscuzDateTime(values['endtime']),
+              umpire: stripSlashes(values['umpire'] ?? ''),
+            )
+          : null,
+    );
+  }
+
+  /// The debate as it is, from the form of the edit of its first post; null for a new thread.
+  final DebateEdits? served;
+
+  /// Whether the form takes the end of the debate (`endtime`).
+  final bool hasEnd;
+
+  /// Whether the form takes an umpire (`umpire`, a member's name).
+  final bool hasUmpire;
+}
+
+/// A debate as the member set it in the editor; [toFields] is what the form posts for it.
+final class DebateEdits {
+  /// Constructor.
+  const DebateEdits({required this.affirm, required this.negate, this.end, this.umpire = ''});
+
+  /// The point of the side for (`affirmpoint`).
+  final String affirm;
+
+  /// The point of the side against (`negapoint`).
+  final String negate;
+
+  /// When the debate ends (`endtime`), null for no end.
+  final DateTime? end;
+
+  /// The umpire, a member's name (`umpire`), empty for none.
+  final String umpire;
+
+  /// The fields the form posts for this debate.
+  Map<String, String> toFields(DebateFormInfo info) => {
+    'affirmpoint': affirm,
+    'negapoint': negate,
+    if (info.hasEnd) 'endtime': end == null ? '' : discuzDateTime(end!),
+    if (info.hasUmpire) 'umpire': umpire.trim(),
+  };
+
+  /// Why the forum would refuse this debate at [now], null when it takes it (an umpire who is no member is only
+  /// known by the forum).
+  DebateIssue? check(DateTime now) => issues(now).firstOrNull;
+
+  /// Every reason the forum would refuse this debate at [now], in the order it checks.
+  Set<DebateIssue> issues(DateTime now) => {
+    if (affirm.trim().isEmpty || negate.trim().isEmpty) DebateIssue.pointsRequired,
+    if (end case final DateTime end when !end.isAfter(now)) DebateIssue.endPassed,
+  };
+}
+
+/// Why the forum would not take the poll settings of an edit as the member set them.
+enum PollEditIssue {
+  /// An option the member may change left empty: the forum would keep it as it is (`before_editpost` drops empty
+  /// options before it reads them).
+  optionEmpty,
+
+  /// An option with a line break.
+  optionLineBreak,
+
+  /// An option longer than the forum stores ([pollOptionStorageGuard]).
+  optionTooLong,
+
+  /// More options than the forum takes (`post_poll_option_toomany`).
+  tooManyOptions,
+
+  /// The most choices is not between 1 and the number of options.
+  maxChoicesInvalid,
+
+  /// The days are not a number of days (the text the form came with, a poll ended or closed, is kept).
+  expiryInvalid,
+}
+
+/// An option of a poll as the edit form of its first post serves it (`poll.options`).
+final class PollEditOption {
+  /// Constructor.
+  const PollEditOption({required this.id, required this.text, required this.displayOrder, required this.readonly});
+
+  /// The option's id (`polloptionid`): the forum keeps the votes of an option by it.
+  final int id;
+
+  /// The text of the option.
+  final String text;
+
+  /// Its place in the list (`displayorder`), as served.
+  final String displayOrder;
+
+  /// The member may not change the text (no `alloweditpoll`: the forum only keeps the order of the options then).
+  final bool readonly;
+}
+
+/// The poll of the edit form of the first post of a poll (`poll` of the forum's app API, plugin 2.9.0,
+/// `postform_poll`): its options and settings, which `extend_thread_poll::before_editpost` lets the author (or a member
+/// whose group has `alloweditpoll`) change.
+///
+/// What the forum does with an edit: an option's text only for a group with `alloweditpoll` (the others keep the text,
+/// votes or not); an option posted under an id the poll does not have is added (`polloption[]` on the website); an
+/// option is never removed (the website offers no way, and the forum drops an empty one before it would remove it);
+/// the most choices is cut to the number of options; the days count from the edit (`TIMESTAMP + 86400 * days`, 0
+/// for none); the two checkboxes are what they are posted.
+final class PollEditFormInfo {
+  /// Constructor.
+  const PollEditFormInfo({
+    required this.options,
+    required this.maxOptions,
+    required this.maxChoices,
+    required this.expiration,
+    required this.visibleAfterVote,
+    required this.overt,
+  });
+
+  /// The `poll` block of the edit form of the first post of a poll, null without options.
+  static PollEditFormInfo? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) {
+      return null;
+    }
+    final options = [
+      for (final option in tsdmAppList(json['options']))
+        if (option['id'] case final num id when id > 0)
+          PollEditOption(
+            id: id.toInt(),
+            text: tsdmAppText(option['text']),
+            displayOrder: tsdmAppText(option['displayorder']),
+            readonly: option['readonly'] == 1,
+          ),
+    ];
+    if (options.isEmpty) {
+      return null;
+    }
+    final values = _servedValues(tsdmAppList(json['inputs']));
+    return PollEditFormInfo(
+      options: options,
+      maxOptions: tsdmAppInt(json['max_options']),
+      maxChoices: values['maxchoices'] ?? '1',
+      expiration: values['expiration'] ?? '',
+      visibleAfterVote: values.containsKey('visibilitypoll'),
+      overt: values.containsKey('overt'),
+    );
+  }
+
+  /// The options of the poll, in order.
+  final List<PollEditOption> options;
+
+  /// The most options a poll may have (`maxpolloptions`), 0 when the form does not tell.
+  final int maxOptions;
+
+  /// The most choices as served.
+  final String maxChoices;
+
+  /// The days left as served: a number (rounded: 0 for none, or for less than half a day left), or the words of a
+  /// poll ended or closed.
+  final String expiration;
+
+  /// Whether the results are shown only to the members who voted (`visibilitypoll` served checked).
+  final bool visibleAfterVote;
+
+  /// Whether the voters are public (`overt` served checked).
+  final bool overt;
+
+  /// Whether the member may change the text of the options.
+  bool get textEditable => options.any((e) => !e.readonly);
+
+  /// The poll as served.
+  PollEdits get served => PollEdits(
+    texts: {for (final option in options) option.id: option.text},
+    maxChoices: maxChoices,
+    expiration: expiration,
+    visibleAfterVote: visibleAfterVote,
+    overt: overt,
+  );
+}
+
+/// The poll settings of the first post of a poll as the member set them in the editor; [toFields] is what the form
+/// posts for them.
+@immutable
+final class PollEdits {
+  /// Constructor.
+  const PollEdits({
+    required this.texts,
+    required this.maxChoices,
+    required this.expiration,
+    required this.visibleAfterVote,
+    required this.overt,
+    this.added = const [],
+  });
+
+  /// The text of each option of the poll, by id.
+  final Map<int, String> texts;
+
+  /// The options added, in order.
+  final List<String> added;
+
+  /// The most choices, as typed.
+  final String maxChoices;
+
+  /// The days, as typed (the served text kept for a poll ended or closed).
+  final String expiration;
+
+  /// Whether the results are shown only to the members who voted.
+  final bool visibleAfterVote;
+
+  /// Whether the voters are public.
+  final bool overt;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PollEdits &&
+      const MapEquality<int, String>().equals(texts, other.texts) &&
+      const ListEquality<String>().equals(addedOptions, other.addedOptions) &&
+      maxChoices == other.maxChoices &&
+      expiration == other.expiration &&
+      visibleAfterVote == other.visibleAfterVote &&
+      overt == other.overt;
+
+  @override
+  int get hashCode => Object.hash(
+    const MapEquality<int, String>().hash(texts),
+    const ListEquality<String>().hash(addedOptions),
+    maxChoices,
+    expiration,
+    visibleAfterVote,
+    overt,
+  );
+
+  /// The options added that are not empty.
+  List<String> get addedOptions => [
+    for (final option in added)
+      if (option.trim().isNotEmpty) option.trim(),
+  ];
+
+  /// Every reason the forum would not take these settings against [info]: the issues of the options of the poll by
+  /// id, those of the options added by their index in [added], and the issues of the poll.
+  ({Map<int, PollEditIssue> options, Map<int, PollEditIssue> added, Set<PollEditIssue> poll}) issues(
+    PollEditFormInfo info,
+  ) {
+    PollEditIssue? textIssue(String text, {bool required = false}) {
+      final option = text.trim();
+      if (option.isEmpty) {
+        return required ? PollEditIssue.optionEmpty : null;
+      }
+      if (option.contains('\n') || option.contains('\r')) {
+        return PollEditIssue.optionLineBreak;
+      }
+      if (pollOptionStorageLength(option) > pollOptionStorageGuard) {
+        return PollEditIssue.optionTooLong;
+      }
+      return null;
+    }
+
+    // What the member left as served is not checked: the forum took it, the form posts it back as it is.
+    final options = <int, PollEditIssue>{
+      for (final option in info.options)
+        if (!option.readonly && (texts[option.id] ?? option.text) != option.text)
+          option.id: ?textIssue(texts[option.id] ?? option.text, required: true),
+    };
+    final added = <int, PollEditIssue>{
+      for (final (i, option) in this.added.indexed) i: ?textIssue(option),
+    };
+    final count = info.options.length + addedOptions.length;
+    final choices = RegExp(r'^\d+$').hasMatch(maxChoices.trim()) ? int.tryParse(maxChoices.trim()) : null;
+    return (
+      options: options,
+      added: added,
+      poll: {
+        ...options.values,
+        ...added.values,
+        if (addedOptions.isNotEmpty && info.maxOptions > 0 && count > info.maxOptions) PollEditIssue.tooManyOptions,
+        // The most choices kept is cut by the forum to the options.
+        if (maxChoices != info.maxChoices && (choices == null || choices < 1 || choices > count))
+          PollEditIssue.maxChoicesInvalid,
+        if (expiration != info.expiration && parsePollExpiryDays(expiration) == null) PollEditIssue.expiryInvalid,
+      },
+    );
+  }
+
+  /// The first reason the forum would not take these settings against [info], null when it takes them.
+  PollEditIssue? check(PollEditFormInfo info) => issues(info).poll.firstOrNull;
+
+  /// The fields the form posts for what the member changed against [info] (the rest goes back as served): the text
+  /// of the options the member may change, the options added under ids after the poll's (`displayorder` after the
+  /// last, as the member would number the website's added rows), the most choices, the days (as the forum reads them:
+  /// `00` would end the poll at once) and the two checkboxes.
+  Map<String, String?> toFields(PollEditFormInfo info) {
+    final lastId = info.options.map((e) => e.id).reduce((a, b) => a > b ? a : b);
+    final lastOrder = info.options.map((e) => int.tryParse(e.displayOrder.trim()) ?? 0).reduce((a, b) => a > b ? a : b);
+    return {
+      for (final option in info.options)
+        if (!option.readonly && (texts[option.id] ?? option.text) != option.text)
+          'polloption[${option.id}]': texts[option.id]!.trim(),
+      for (final (i, option) in addedOptions.indexed) ...{
+        'displayorder[${lastId + 1 + i}]': '${lastOrder + 1 + i}',
+        'polloption[${lastId + 1 + i}]': option,
+      },
+      if (maxChoices != info.maxChoices) 'maxchoices': maxChoices.trim(),
+      if (expiration != info.expiration) 'expiration': '${parsePollExpiryDays(expiration) ?? expiration.trim()}',
+      if (visibleAfterVote != info.visibleAfterVote) 'visibilitypoll': visibleAfterVote ? '1' : null,
+      if (overt != info.overt) 'overt': overt ? '1' : null,
+    };
+  }
+}

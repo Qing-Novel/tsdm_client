@@ -253,6 +253,7 @@ class AppStateView extends StatelessWidget {
   /// Constructor.
   const AppStateView({
     required this.message,
+    this.detail,
     this.icon = Icons.inbox_outlined,
     this.action,
     this.error = false,
@@ -262,6 +263,9 @@ class AppStateView extends StatelessWidget {
 
   /// Message to show.
   final String message;
+
+  /// Optional second line under [message]: why the page is empty, how something gets in it.
+  final String? detail;
 
   /// Leading illustration icon.
   final IconData icon;
@@ -303,6 +307,14 @@ class AppStateView extends StatelessWidget {
             textAlign: TextAlign.center,
             style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
           ),
+          if (detail != null) ...[
+            sizedBoxW8H8,
+            Text(
+              detail!,
+              textAlign: TextAlign.center,
+              style: textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
+            ),
+          ],
           if (action != null) ...[sizedBoxW16H16, action!],
         ],
       ),
@@ -543,6 +555,7 @@ class AppNoticeBanner extends StatelessWidget {
     this.tone = AppNoticeTone.info,
     this.actions = const [],
     this.selectable = false,
+    this.child,
     super.key,
   });
 
@@ -551,6 +564,9 @@ class AppNoticeBanner extends StatelessWidget {
 
   /// Message.
   final String message;
+
+  /// Optional content under the message (rendered html of the forum…), before the [actions].
+  final Widget? child;
 
   /// Leading icon, chosen from [tone] when null.
   final IconData? icon;
@@ -599,6 +615,7 @@ class AppNoticeBanner extends StatelessWidget {
                   sizedBoxW4H4,
                 ],
                 if (selectable) SelectableText(message, style: messageStyle) else Text(message, style: messageStyle),
+                if (child != null) ...[sizedBoxW4H4, child!],
                 if (actions.isNotEmpty) ...[
                   sizedBoxW8H8,
                   Wrap(spacing: 8, runSpacing: 4, children: actions),
@@ -919,23 +936,14 @@ class AppPager extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Standard density: the compact one shrank the tap targets to 40.
           IconButton(
             icon: const Icon(Icons.chevron_left),
             tooltip: localizations.previousPageTooltip,
-            visualDensity: VisualDensity.compact,
             onPressed: onPrevious,
           ),
-          TextButton(
-            onPressed: onJump,
-            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-            child: Text('${current ?? '-'} / ${total ?? '-'}'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right),
-            tooltip: localizations.nextPageTooltip,
-            visualDensity: VisualDensity.compact,
-            onPressed: onNext,
-          ),
+          TextButton(onPressed: onJump, child: Text('${current ?? '-'} / ${total ?? '-'}')),
+          IconButton(icon: const Icon(Icons.chevron_right), tooltip: localizations.nextPageTooltip, onPressed: onNext),
         ],
       ),
     );

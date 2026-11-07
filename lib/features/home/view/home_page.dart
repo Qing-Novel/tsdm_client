@@ -6,9 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:responsive_framework/responsive_framework.dart';
 import 'package:tsdm_client/constants/layout.dart';
-import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
 import 'package:tsdm_client/features/home/cubit/home_cubit.dart';
-import 'package:tsdm_client/features/home/cubit/init_cubit.dart';
 import 'package:tsdm_client/features/home/widgets/widgets.dart';
 import 'package:tsdm_client/features/local_notice/callback.dart';
 import 'package:tsdm_client/features/local_notice/keys.dart';
@@ -16,11 +14,9 @@ import 'package:tsdm_client/features/local_notice/stream.dart';
 import 'package:tsdm_client/features/local_notice/tap.dart';
 import 'package:tsdm_client/features/root/bloc/root_location_cubit.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
-import 'package:tsdm_client/routes/app_routes.dart';
 import 'package:tsdm_client/routes/page_stack.dart';
 import 'package:tsdm_client/utils/logger.dart';
 import 'package:tsdm_client/widgets/app_surface.dart';
-import 'package:tsdm_client/widgets/indicator.dart';
 
 const _drawerWidth = 250.0;
 
@@ -74,24 +70,29 @@ class _HomePageState extends State<HomePage> with LoggerMixin {
   }
 
   void _onLocalNoticeStreamEvent(String? payload) {
-    switch (payload) {
-      case LocalNoticeKeys.openNotification:
-        // Ask the router which page is really on top instead of the location stack, which drifted and refused taps
-        // on the homepage as "already in the notice page" (#14). Both answers stay in the log for the next report.
-        // A notice page already open under the pages on top is shown again instead of pushing another one (#117).
-        final (:top, :action) = openNoticePageForTap(
-          GoRouter.of(context),
-          // The stored session counts: when a notification cold-starts the app the home page has its first frame
-          // before the homepage fetch verified the login, and `currentUser` is still null at that point (#14).
-          loggedIn: context.read<AuthenticationRepository>().effectiveCurrentUid != null,
-          hasPopup: popupRouteObserver.hasPopupRoute,
-        );
-        info(
-          'notification tap: action=${action.name} top=$top location=${context.read<RootLocationCubit>().currentPath}',
-        );
-      default:
-        warning('ignore local notification with unknown payload: $payload');
+    final open = LocalNoticeKeys.parseOpenNotification(payload);
+    if (open == null) {
+      warning('ignore local notification with unknown payload: $payload');
+      return;
     }
+    unawaited(_openNoticeOf(open.uid, target: LocalNoticeKeys.parseTarget(payload)));
+  }
+
+  /// Open the notice page as the account [uid] of the tapped notification, switching to it first when another one is
+  /// in use ([openNoticePageOfAccount]); the page of its [target] instead when it names one.
+  ///
+  /// Asks the router which page is really on top instead of the location stack, which drifted and refused taps on the
+  /// homepage as "already in the notice page" (#14). Both answers stay in the log for the next report. A notice page
+  /// already open under the pages on top is shown again instead of pushing another one (#117).
+  Future<void> _openNoticeOf(int? uid, {LocalNoticeTarget? target}) async {
+    final (:step, :top, :action) = await openNoticePageOfAccount(context, uid: uid, target: target);
+    if (!mounted) {
+      return;
+    }
+    info(
+      'notification tap: account=${step.name} action=${action?.name} top=$top '
+      'location=${context.read<RootLocationCubit>().currentPath}',
+    );
   }
 
   /// Open the page asked for by the notification that cold-started the app, if any (#14).
@@ -187,14 +188,12 @@ class _HomePageState extends State<HomePage> with LoggerMixin {
   Widget build(BuildContext context) {
     Translations.of(context);
 
+    // The page used to wait here for the clean up of the outdated images (a spinner instead of the homepage); that
+    // runs in the background now, long after the first frame (InitCubit.scheduleImageCacheTrim).
     return MultiBlocProvider(
       providers: [BlocProvider.value(value: _homeCubit)],
-      child: BlocBuilder<InitCubit, InitState>(
-        builder: (context, state) {
-          if (state.clearingOutdatedImageCache) {
-            return const CenteredCircularIndicator();
-          }
-
+      child: Builder(
+        builder: (context) {
           if (ResponsiveBreakpoints.of(context).largerThan(WindowSize.expanded.name)) {
             return _buildDrawerBody(context);
           } else if (ResponsiveBreakpoints.of(context).largerThan(WindowSize.compact.name)) {

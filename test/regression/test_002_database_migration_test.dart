@@ -156,4 +156,225 @@ void main() {
     expect(rows.single.ignoreType, isNull);
     await db.close();
   });
+
+  test('upgrade from 14 to 15', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final connection = await verifier.startAt(14);
+    final db = AppDatabase(connection);
+    await verifier.migrateAndValidate(db, 15);
+    await db.close();
+  });
+
+  test(
+    'upgrade from 13 to 15 in one go keeps stored notices and adds the offline thread table with its index',
+    () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final schema = await verifier.schemaAt(13);
+      schema.rawDatabase
+        ..execute(
+          'INSERT INTO notice (uid, nid, timestamp, data, already_read) VALUES (1000, 1984, 100, '
+          '\'<a href="home.php?mod=space&uid=2000">x</a>\', 0)',
+        )
+        ..execute(
+          'INSERT INTO thread_visit_history (uid, tid, username, thread_title, fid, forum_name, visit_time) '
+          "VALUES (1000, 42, 'Alice', 'a thread', 4, 'a forum', 1760000000)",
+        );
+      final db = AppDatabase(schema.newConnection());
+      await verifier.migrateAndValidate(db, 15);
+      expect((await db.select(db.notice).get()).single.nid, 1984);
+      expect((await db.select(db.threadVisitHistory).get()).single.threadTitle, 'a thread');
+      expect(await db.select(db.offlineThread).get(), isEmpty);
+      final index = await db
+          .customSelect("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'offline_thread_recent'")
+          .getSingle();
+      expect(index.read<String>('sql'), contains('(uid, tid, last_used_at, size)'));
+      await db.close();
+    },
+  );
+
+  test('a database at schema 15 without the eviction index (a development build) gets it on open', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(15);
+    schema.rawDatabase.execute('DROP INDEX offline_thread_recent');
+    final db = AppDatabase(schema.newConnection());
+    final index = await db
+        .customSelect("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'offline_thread_recent'")
+        .get();
+    expect(index, hasLength(1));
+    await db.close();
+  });
+
+  test('the 14 to 15 step runs again safely when another connection already created the table', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    // The table is there but the version is still 14: the background service isolate and the app opening the file
+    // together after an update.
+    final schema = await verifier.schemaAt(15);
+    schema.rawDatabase.execute('PRAGMA user_version = 14');
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 15);
+    await db.close();
+  });
+
+  test('upgrade from 14 to 15 keeps every stored row and starts with no offline thread page', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(14);
+    schema.rawDatabase
+      ..execute(
+        'INSERT INTO cookie (username, uid, cookie, last_checkin, session_expired_at) '
+        "VALUES ('Alice', 1000, '{\"auth\":\"x\"}', 1760000000, NULL)",
+      )
+      ..execute("INSERT INTO settings (name, bool_value) VALUES ('enableDebugOperations', 1)")
+      ..execute(
+        'INSERT INTO thread_visit_history (uid, tid, username, thread_title, fid, forum_name, visit_time) '
+        "VALUES (1000, 42, 'Alice', 'a thread', 4, 'a forum', 1760000000)",
+      )
+      ..execute('INSERT INTO replied_thread (uid, tid, fid, time) VALUES (1000, 42, 4, 1760000000)')
+      ..execute(
+        'INSERT INTO notice (uid, nid, timestamp, data, already_read, ignore_type, author_id) '
+        "VALUES (1000, 7, 100, 'x', 1, 'post', 2000)",
+      )
+      ..execute(
+        "INSERT INTO custom_image (id, name, url, sort_order, added_at) VALUES (1, 's', 'https://example.com/s.png', 0, 1)",
+      );
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 15);
+
+    final cookies = await db.select(db.cookie).get();
+    expect(cookies.single.username, 'Alice');
+    expect(cookies.single.cookie, '{"auth":"x"}');
+    expect(cookies.single.lastCheckin, DateTime.fromMillisecondsSinceEpoch(1760000000 * 1000));
+    expect((await db.select(db.settings).get()).single.boolValue, isTrue);
+    final history = await db.select(db.threadVisitHistory).get();
+    expect(history.single.threadTitle, 'a thread');
+    expect((await db.select(db.repliedThread).get()).single.tid, 42);
+    final notices = await db.select(db.notice).get();
+    expect(notices.single.authorId, 2000);
+    expect(notices.single.ignoreType, 'post');
+    expect((await db.select(db.customImage).get()).single.url, 'https://example.com/s.png');
+    expect(await db.select(db.offlineThread).get(), isEmpty);
+    await db.close();
+  });
+
+  test('upgrade from 15 to 16 keeps the notices, the new columns empty', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(15);
+    schema.rawDatabase.execute(
+      'INSERT INTO notice (uid, nid, timestamp, data, already_read, ignore_type, author_id) '
+      "VALUES (1000, 7, 100, 'x', 0, 'post', 2000)",
+    );
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 16);
+    final row = (await db.select(db.notice).get()).single;
+    expect((row.authorId, row.ignoreType, row.alreadyRead), (2000, 'post', false));
+    expect((row.author, row.fromId, row.fromIdType), (null, null, null));
+    await db.close();
+  });
+
+  test('the 15 to 16 step runs again safely when another connection already added the columns', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    // Every column there, the version still 15: the background service isolate and the app opening the file together.
+    final schema = await verifier.schemaAt(16);
+    schema.rawDatabase.execute('PRAGMA user_version = 15');
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 16);
+    await db.close();
+  });
+
+  test('the 15 to 16 step adds what another connection left out', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(15);
+    schema.rawDatabase.execute('ALTER TABLE notice ADD COLUMN "author" TEXT NULL');
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 16);
+    await db.close();
+  });
+
+  for (final from in [10, 13, 14]) {
+    test('upgrade from $from to 16 in one go', () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final connection = await verifier.startAt(from);
+      final db = AppDatabase(connection);
+      await verifier.migrateAndValidate(db, 16);
+      await db.close();
+    });
+  }
+
+  test('upgrade from 16 to 17 keeps the visits, where the reading stopped not known yet', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(16);
+    schema.rawDatabase.execute(
+      'INSERT INTO thread_visit_history (uid, tid, username, thread_title, fid, forum_name, visit_time) '
+      "VALUES (1000, 1264975, 'Alice', 'title', 2, 'forum', 100)",
+    );
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 17);
+    final row = (await db.select(db.threadVisitHistory).get()).single;
+    expect((row.uid, row.tid, row.threadTitle, row.fid), (1000, 1264975, 'title', 2));
+    expect((row.lastPage, row.lastPid, row.lastFloor, row.seenReplies), (null, null, null, null));
+    await db.close();
+  });
+
+  test('the 16 to 17 step runs again safely when another connection already added the columns', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    // Every column there, the version still 16: the background service isolate and the app opening the file together.
+    final schema = await verifier.schemaAt(17);
+    schema.rawDatabase.execute('PRAGMA user_version = 16');
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 17);
+    await db.close();
+  });
+
+  test('the 16 to 17 step adds what another connection left out', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(16);
+    schema.rawDatabase.execute('ALTER TABLE thread_visit_history ADD COLUMN "last_page" INTEGER NULL');
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 17);
+    await db.close();
+  });
+
+  for (final from in [10, 14, 15]) {
+    test('upgrade from $from to 17 in one go', () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final connection = await verifier.startAt(from);
+      final db = AppDatabase(connection);
+      await verifier.migrateAndValidate(db, 17);
+      await db.close();
+    });
+  }
+
+  test('upgrade from 17 to 18 keeps the visits and their progress, when it was written not known yet', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(17);
+    schema.rawDatabase.execute(
+      'INSERT INTO thread_visit_history (uid, tid, username, thread_title, fid, forum_name, visit_time, last_page, '
+      "last_pid, last_floor, seen_replies) VALUES (1000, 1264975, 'Alice', 'title', 2, 'forum', 100, 3, 9, 27, 40)",
+    );
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 18);
+    final row = (await db.select(db.threadVisitHistory).get()).single;
+    expect((row.uid, row.tid, row.threadTitle, row.fid), (1000, 1264975, 'title', 2));
+    expect((row.lastPage, row.lastPid, row.lastFloor, row.seenReplies), (3, 9, 27, 40));
+    expect(row.progressUpdated, isNull);
+    await db.close();
+  });
+
+  test('the 17 to 18 step runs again safely when another connection already added the column', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final schema = await verifier.schemaAt(18);
+    schema.rawDatabase.execute('PRAGMA user_version = 17');
+    final db = AppDatabase(schema.newConnection());
+    await verifier.migrateAndValidate(db, 18);
+    await db.close();
+  });
+
+  for (final from in [10, 15, 16]) {
+    test('upgrade from $from to 18 in one go', () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final connection = await verifier.startAt(from);
+      final db = AppDatabase(connection);
+      await verifier.migrateAndValidate(db, 18);
+      await db.close();
+    });
+  }
 }

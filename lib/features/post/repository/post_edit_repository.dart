@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:fpdart/fpdart.dart';
 import 'package:tsdm_client/constants/url.dart';
@@ -5,12 +7,51 @@ import 'package:tsdm_client/exceptions/exceptions.dart';
 import 'package:tsdm_client/features/authentication/utils/logged_user_parser.dart';
 import 'package:tsdm_client/features/editor/utils/mention.dart';
 import 'package:tsdm_client/features/post/models/models.dart';
+import 'package:tsdm_client/features/post/models/post_form.dart';
+import 'package:tsdm_client/features/post/models/special_thread_form.dart';
+import 'package:tsdm_client/features/post/utils/attachment_upload.dart';
 import 'package:tsdm_client/features/post/utils/draft_marker.dart';
 import 'package:tsdm_client/features/post/utils/submission_result.dart';
+import 'package:tsdm_client/features/post/utils/verification.dart';
+import 'package:tsdm_client/features/thread/v1/utils/thread_page_api.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
+import 'package:tsdm_client/shared/models/models.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
 import 'package:tsdm_client/utils/logger.dart';
 import 'package:universal_html/html.dart' as uh;
 import 'package:universal_html/parsing.dart';
+
+/// A post form page as [PostEditRepository.fetchForm] got it.
+sealed class PostEditFormAnswer {
+  const PostEditFormAnswer();
+}
+
+/// The web page, parsed as it always was: a forum without the plugin, or with one older than 2.9.0.
+final class PostEditFormPage extends PostEditFormAnswer {
+  /// Constructor.
+  const PostEditFormPage(this.document);
+
+  /// The page.
+  final uh.Document document;
+}
+
+/// The post form of the forum's app API (plugin 2.9.0, `type: post`, `schema` 16).
+final class PostEditFormApi extends PostEditFormAnswer {
+  /// Constructor.
+  const PostEditFormApi(this.form);
+
+  /// The form.
+  final PostForm form;
+}
+
+/// The forum's message shown instead of the form (plugin 2.9.0): no permission, a password forum, an edit time limit…
+final class PostEditFormRefused extends PostEditFormAnswer {
+  /// Constructor.
+  const PostEditFormRefused(this.message);
+
+  /// The message, plain text.
+  final String message;
+}
 
 /// Repository for editing posts.
 final class PostEditRepository with LoggerMixin {
@@ -20,20 +61,26 @@ final class PostEditRepository with LoggerMixin {
         currentUid: currentUid,
         getPage: (url) => client.get(url).run(),
         sendForm: (url, body) => client.postForm(url, data: body, singleAttempt: true).run(),
+        sendFile: (url, fields, file) => client.postMultipartFiles(url, data: fields, files: {'Filedata': file}).run(),
       );
 
   /// Injectable identity-bound transports; submissions must never automatically retry.
+  ///
+  /// [sendFile] posts a file upload (the fields and the file as the `Filedata` part); without it no upload is offered.
   PostEditRepository.withTransport({
     required int? Function() currentUid,
     required Future<SyncEither<Response<dynamic>>> Function(String) getPage,
     required Future<SyncEither<Response<dynamic>>> Function(String, Map<String, String>) sendForm,
+    Future<SyncEither<Response<dynamic>>> Function(String, Map<String, String>, MultipartFilePart)? sendFile,
   }) : _get = getPage,
        _post = sendForm,
+       _sendFile = sendFile,
        _currentUid = currentUid,
        _ownerUid = currentUid();
 
   final Future<SyncEither<Response<dynamic>>> Function(String) _get;
   final Future<SyncEither<Response<dynamic>>> Function(String, Map<String, String>) _post;
+  final Future<SyncEither<Response<dynamic>>> Function(String, Map<String, String>, MultipartFilePart)? _sendFile;
   final int? Function() _currentUid;
   final int? _ownerUid;
   bool _invalidated = false;
@@ -47,16 +94,227 @@ final class PostEditRepository with LoggerMixin {
   /// Ignore repeated verification events for the same active account.
   bool belongsTo(int? uid) => isCurrent && uid == _ownerUid;
 
+  /// The account this editing session belongs to, null without one.
+  int? get ownerUid => _ownerUid != null && _ownerUid > 0 ? _ownerUid : null;
+
+  /// Upload the image file at [path] as an attachment of the form offering [upload], as the website's image uploader
+  /// does ([AttachmentUpload]): the `aid` of the attachment, to show in the post with [attachmentImageBBCode] and to
+  /// bind to it with [PostFormEdits.attachNew].
+  ///
+  /// Refused before anything is sent ([AttachmentUploadFailedException] with the reason) when the forum takes no
+  /// images, not this file's type or not a file this large, or when the session is no longer the account the editor
+  /// opened for ([IdentityChangedException]). [fileSize] tells the size of a file in bytes, the file system's by
+  /// default.
+  AsyncEither<int> uploadImage(AttachmentUpload upload, String path, {int Function(String path)? fileSize}) =>
+      AsyncEither(() async {
+        if (!isCurrent) return left(IdentityChangedException());
+        final sendFile = _sendFile;
+        if (sendFile == null || !upload.image) {
+          return left(AttachmentUploadFailedException(AttachmentUploadRefusal.unavailable));
+        }
+        final filename = path.split(RegExp(r'[/\\]')).last;
+        if (!upload.acceptsImage(filename)) {
+          return left(AttachmentUploadFailedException(AttachmentUploadRefusal.type));
+        }
+        final maxKb = upload.maxKb;
+        if (maxKb != null && (fileSize != null ? fileSize(path) : await _fileSize(path)) > maxKb * 1024) {
+          return left(AttachmentUploadFailedException(AttachmentUploadRefusal.size));
+        }
+        final result = await sendFile(
+          upload.imageUrl.toString(),
+          upload.fields,
+          MultipartFilePart(path: path, filename: filename, contentType: imageContentTypeOf(filename)),
+        );
+        if (!isCurrent) return left(IdentityChangedException());
+        return switch (result) {
+          Left(:final value) => left(value),
+          Right(:final value) when value.statusCode != 200 => left(HttpRequestFailedException(value.statusCode)),
+          Right(:final value) => parseAttachmentUploadAnswer(value.data),
+        };
+      });
+
+  /// The size of the file at [path] in bytes, 0 when it cannot be told (the upload then decides).
+  static Future<int> _fileSize(String path) async {
+    try {
+      return await File(path).length();
+    } on Object {
+      return 0;
+    }
+  }
+
   /// A successful POST may instead enter moderation; verify the draft marker through GET.
-  Future<bool> confirmsDraft(String url) async =>
-      (await fetchData(url).run()).match((_) => false, isDraftThreadDocument);
+  ///
+  /// The thread page [url] is asked in the JSON mode of the forum's app API. A structured answer (plugin 2.1.0,
+  /// `schema: 3`) tells the account it was served to and whether the thread is a draft (`thread.draft`); any other
+  /// answer is the page, read as before: the account from its `discuz_uid`, the draft from the marker beside the
+  /// title ([isDraftThreadDocument]).
+  Future<bool> confirmsDraft(String url) async => await draftStatus(url) ?? false;
+
+  /// Whether the thread page [url] is a draft, as [confirmsDraft] reads it; null when it cannot tell (the request
+  /// failed, another account or a guest was served, no page came back).
+  Future<bool?> draftStatus(String url) async {
+    if (!isCurrent) return null;
+    final result = await _get(withTsdmAppJson(url));
+    if (!isCurrent) return null;
+    return result.match((_) => null, (response) {
+      if (response.statusCode != 200) return null;
+      final api = threadApiAnswerOf(response.data);
+      if (api != null) {
+        return threadApiViewerUid(api) == _ownerUid ? threadPageFromApi(api, 1).isDraft : null;
+      }
+      if (tsdmAppAnswerWithoutPage(response.data)) return null;
+      final document = tsdmAppPageDocument(response.data);
+      if (parseLoggedUidFromDocument(document) != _ownerUid) return null;
+      return isDraftThreadDocument(document);
+    });
+  }
 
   static const _postSubmitTarget = '$baseUrl/forum.php?mod=post&action=edit&extra=&editsubmit=yes';
 
-  static String _buildThreadInfoUrl(String fid) => '$homePage?mod=post&action=newthread&fid=$fid';
+  static String _buildThreadInfoUrl(String fid, {ThreadKind kind = ThreadKind.normal}) =>
+      '$homePage?mod=post&action=newthread&fid=$fid${kind.formQuery}';
+
+  /// The web page of the form of a new thread of [kind] in forum [fid], for the browser.
+  static String newThreadPageUrl(String fid, {ThreadKind kind = ThreadKind.normal}) =>
+      '$baseUrl/forum.php?mod=post&action=newthread&fid=$fid${kind.formQuery}';
 
   static String _buildThreadPostUrl(String fid) =>
       '$homePage?mod=post&action=newthread&fid=$fid&extra=&topicsubmit=yes';
+
+  /// Fetch the post form page [url] (a new thread or an edit) in the JSON mode of the forum's app API
+  /// ([withTsdmAppJson], `nodoc=1`).
+  ///
+  /// Plugin 2.9.0 answers the form as structured fields (`type: post`, `schema` 16, [PostEditFormApi]) or the forum's
+  /// message instead of it ([PostEditFormRefused]); an older plugin, or none, leaves the page alone and it is parsed as
+  /// it always was ([PostEditFormPage]). An answer the plugin could not tell the form of (`unknown`) is not read: the
+  /// page is asked again without the parameters and parsed as the web page.
+  ///
+  /// The answer must be served to the account of this session: one served to another account, or to a guest, is
+  /// [IdentityChangedException] (the `uid` of the answer, the `discuz_uid` of the page).
+  AsyncEither<PostEditFormAnswer> fetchForm(String url) => AsyncEither(() async {
+    if (!isCurrent) return left(IdentityChangedException());
+    final result = await _get(withTsdmAppJson(url));
+    if (!isCurrent) return left(IdentityChangedException());
+    final Response<dynamic> response;
+    switch (result) {
+      case Left(:final value):
+        return left(value);
+      case Right(:final value):
+        response = value;
+    }
+    if (response.statusCode != 200) return left(HttpRequestFailedException(response.statusCode));
+    if (postFormAnswerOf(response.data) case final json?) {
+      if (tsdmAppInt(json['uid']) != _ownerUid) return left(IdentityChangedException());
+      final form = PostForm.fromJson(json);
+      if (form == null) return right(PostEditFormRefused(tsdmAppText(json['message'])));
+      TsdmAppApi.notePostForm();
+      if (form.hookFields.isEmpty && !form.isHongbao && !form.editsActivity) return right(PostEditFormApi(form));
+      // Other plugins' fields (a moderator's scheduling panel, a forum's tags): the API names them only, so the web
+      // page of the form gives their values, posted back as the website would (PostForm.hookValues); a page that
+      // cannot leaves the form to the website. The red packet form of a red packet thread is on the web page too
+      // (the API gives no thread plugin's fields; the app knows this plugin's: PostForm.hongbao), and so is the image
+      // of an activity edited (PostForm.withActivityImage).
+      switch (await fetchData(url).run()) {
+        case Left(value: final IdentityChangedException e):
+          return left(e);
+        case Left(:final value):
+          warning('post form: the web page of the form failed: $value');
+        case Right(value: final document):
+          var read = form;
+          if (form.hookFields.isNotEmpty) {
+            if (hookValuesOf(document, form.hookFields) case final values?) {
+              read = read.withHookValues(values);
+            } else {
+              warning('post form: fields of other plugins not on the web page: ${form.hookFields}');
+            }
+          }
+          // The image of the activity edited: the plugin serves `activityaid` empty, which the forum takes as the
+          // image removed (PostForm.withActivityImage). Not read, the form is left to the website.
+          if (form.editsActivity && document.querySelector('form#postform') != null) {
+            read = read.withActivityImage(hookValuesOf(document, const ['activityaid'])?.lastOrNull?.$2);
+          }
+          if (form.isHongbao) {
+            if (HongbaoFormInfo.parse(document) case final info?) {
+              read = read.withHongbao(info);
+            } else if (HongbaoFormInfo.noticeOf(document) case final notice?) {
+              // The plugin printed why there is no form (off, the group not allowed) instead of it.
+              return right(PostEditFormRefused(notice));
+            } else {
+              warning('post form: the red packet form is not on the web page');
+            }
+          }
+          return right(PostEditFormApi(read));
+      }
+      return right(PostEditFormApi(form));
+    }
+    if (tsdmAppAnswerJson(response.data) == null) {
+      // The web page: a forum without the plugin, or with one older than 2.9.0. Read as it always was.
+      if (response.data is! String) return left(HttpRequestFailedException(response.statusCode));
+      final document = parseHtmlDocument(response.data as String);
+      if (parseLoggedUidFromDocument(document) != _ownerUid) return left(IdentityChangedException());
+      return right(PostEditFormPage(document));
+    }
+    // Another JSON answer (`unknown`: the plugin could not tell the form): the web page itself, as without the plugin.
+    return (await fetchData(url).run()).map(PostEditFormPage.new);
+  });
+
+  /// [fetchForm] of the form of a new thread of [kind] in forum [fid].
+  AsyncEither<PostEditFormAnswer> prepareForm(String fid, {ThreadKind kind = ThreadKind.normal}) =>
+      fetchForm(_buildThreadInfoUrl(fid, kind: kind));
+
+  /// Post the post form [form] (plugin 2.9.0) once, with the member's [edits] over every served value
+  /// ([PostForm.bodyWith]), to the url the forum gave (`submit.url`); the result is read as for the web page's form
+  /// ([parseSubmissionResult]): the url of the thread, [expectedTid] for an edit.
+  ///
+  /// [verification] answers the captcha or the security question the forum asks ([told]: what the form said); a form
+  /// asking for them is never posted without the answers ([PostVerificationRequiredException]).
+  AsyncEither<String> submitForm(
+    PostForm form,
+    PostFormEdits edits, {
+    String? expectedTid,
+    SecCheckAnswer? verification,
+    SecCheck? told,
+  }) => AsyncEither(() async {
+    final url = form.submitUrl;
+    final edited = form.bodyWith(
+      PostFormEdits(
+        message: toOfficialMentions(edits.message),
+        subject: edits.subject,
+        typeId: edits.typeId,
+        perm: edits.perm,
+        price: edits.price,
+        options: edits.options,
+        save: edits.save,
+        attachNew: edits.attachNew,
+        rewardPrice: edits.rewardPrice,
+        hongbao: edits.hongbao,
+        activity: edits.activity,
+        debate: edits.debate,
+        poll: edits.poll,
+        // A draft saved is no publication: never scheduled (a time passed meanwhile would leave a plain draft).
+        cronPublish: edits.save == '1' ? null : edits.cronPublish,
+      ),
+    );
+    if (told != null && (verification == null || !verification.covers(told))) {
+      return left(PostVerificationRequiredException(check: verification?.check.merge(told) ?? told));
+    }
+    for (final MapEntry(:key, :value) in (verification?.fields ?? const <String, String>{}).entries) {
+      edited.set(key, value);
+    }
+    final body = edited.toMap();
+    if (url == null || body == null) {
+      // Never offered for editing (PostForm.editorSupport): nothing is sent.
+      return left(ThreadPublishLocationNotFoundException());
+    }
+    return _submit(
+      url,
+      body,
+      expectedTid: expectedTid,
+      verification: verification,
+      told: told,
+      acceptsNotice: form.isHongbao && edits.hongbao != null,
+    ).run();
+  });
 
   /// Fetch edit data from given [url].
   AsyncEither<uh.Document> fetchData(String url) => AsyncEither(() async {
@@ -73,7 +331,17 @@ final class PostEditRepository with LoggerMixin {
     });
   });
 
-  AsyncEither<String> _submit(String url, Map<String, String> body, {String? expectedTid}) => AsyncEither(() async {
+  /// [acceptsNotice]: a red packet thread: the forum took the thread and the plugin then showed a notice instead of
+  /// going to it (the packet was not made; the plugin's own words, no language key, the forum's app API reports it
+  /// as `ok`): [ThreadPostedWithNoticeException], the thread is published.
+  AsyncEither<String> _submit(
+    String url,
+    Map<String, String> body, {
+    String? expectedTid,
+    SecCheckAnswer? verification,
+    SecCheck? told,
+    bool acceptsNotice = false,
+  }) => AsyncEither(() async {
     if (!isCurrent) return left(IdentityChangedException());
     final result = await _post(url, body);
     if (!isCurrent) return left(IdentityChangedException());
@@ -87,14 +355,48 @@ final class PostEditRepository with LoggerMixin {
       case Right(:final value):
         response = value;
     }
+    // The forum asked for a captcha or a security question when the form was posted (plugin 2.6.0 result: a site
+    // asking by the number of posts or their interval decides it then), or did not take the answers: nothing was
+    // posted. What to answer: the checks answered and told, with the refused one.
+    if (tsdmAppWriteResultOf(response.data) case final result? when result.asksVerification) {
+      final refused = refusedVerification(messageKey: result.messageKey, reason: result.reason);
+      return left(
+        PostVerificationRequiredException(
+          check: refused == null ? null : refusedCheck(refused, answered: verification?.check, told: told),
+          wrongAnswer: verification != null,
+        ),
+      );
+    }
     final target = parseSubmissionResult(response, expectedTid: expectedTid);
     if (target != null) return right(target);
-    if (response.data is String) {
-      final document = parseHtmlDocument(response.data as String);
-      final message = document.querySelector('#messagetext');
-      if (message != null && !message.classes.contains('alert_right')) {
-        return left(PostEditFailedToUploadResult(message.querySelector('p')?.innerText ?? ''));
+    final apiResult = tsdmAppWriteResultOf(response.data);
+    // The plugin's note after the thread (`showmessage($error, '', [], [], 1)`: a plain text shown as a note, no
+    // language key); a refusal before the thread, the forum's or another plugin's, is an error.
+    if (acceptsNotice &&
+        apiResult != null &&
+        apiResult.kind == TsdmAppWriteKind.message &&
+        apiResult.succeeded &&
+        apiResult.alert == 'info' &&
+        apiResult.messageKey.isEmpty &&
+        apiResult.message.isNotEmpty) {
+      return left(ThreadPostedWithNoticeException(apiResult.message));
+    }
+    // The forum's refusal: its 提示信息 page, or the write result of the forum's app API (plugin 2.6.0,
+    // [tsdmAppWriteResultOf]) read as that page.
+    final document =
+        apiResult?.document ?? (response.data is String ? parseHtmlDocument(response.data as String) : null);
+    final message = document?.querySelector('#messagetext');
+    if (message != null && !message.classes.contains('alert_right')) {
+      final text = message.querySelector('p')?.innerText ?? '';
+      if (refusedVerification(reason: text) case final refused?) {
+        return left(
+          PostVerificationRequiredException(
+            check: refusedCheck(refused, answered: verification?.check, told: told),
+            wrongAnswer: verification != null,
+          ),
+        );
       }
+      return left(PostEditFailedToUploadResult(text));
     }
     return left(ThreadPublishLocationNotFoundException());
   });
@@ -171,6 +473,18 @@ final class PostEditRepository with LoggerMixin {
   ///
   /// Generally the serer will response a status code of 301 with location in
   /// header to redirect to published thread page.
-  AsyncEither<String> postThread(ThreadPublishInfo info) =>
-      _submit(_buildThreadPostUrl(info.fid), info.toPostPayload());
+  ///
+  /// [verification] answers the captcha or the security question the page asks ([told]); a page asking for them is
+  /// never posted without the answers ([PostVerificationRequiredException]).
+  AsyncEither<String> postThread(ThreadPublishInfo info, {SecCheckAnswer? verification, SecCheck? told}) {
+    if (told != null && (verification == null || !verification.covers(told))) {
+      return taskLeft(PostVerificationRequiredException(check: verification?.check.merge(told) ?? told));
+    }
+    return _submit(
+      _buildThreadPostUrl(info.fid),
+      {...info.toPostPayload(), ...?verification?.fields},
+      verification: verification,
+      told: told,
+    );
+  }
 }

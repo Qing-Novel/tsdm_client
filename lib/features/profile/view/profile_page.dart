@@ -20,6 +20,7 @@ import 'package:tsdm_client/features/blocking/widgets/user_block_button.dart';
 import 'package:tsdm_client/features/checkin/bloc/checkin_bloc.dart';
 import 'package:tsdm_client/features/checkin/widgets/checkin_button.dart';
 import 'package:tsdm_client/features/friend/widgets/add_friend_dialog.dart';
+import 'package:tsdm_client/features/local_notice/tap.dart';
 import 'package:tsdm_client/features/need_login/view/need_login_page.dart';
 import 'package:tsdm_client/features/profile/bloc/current_title_cubit.dart';
 import 'package:tsdm_client/features/profile/bloc/profile_bloc.dart';
@@ -44,6 +45,7 @@ import 'package:tsdm_client/widgets/indicator.dart';
 import 'package:tsdm_client/widgets/medal_group_view.dart';
 import 'package:tsdm_client/widgets/notice_button.dart';
 import 'package:tsdm_client/widgets/obscure_list_tile.dart';
+import 'package:tsdm_client/widgets/post_layout_html.dart';
 import 'package:tsdm_client/widgets/single_line_text.dart';
 import 'package:universal_html/html.dart' as uh;
 import 'package:universal_html/parsing.dart';
@@ -170,7 +172,7 @@ class _ProfilePageState extends State<ProfilePage> {
           onSelected: (action) async {
             switch (action) {
               case _ProfileActions.viewNotification:
-                await context.pushNamed(ScreenPaths.notice);
+                openNoticePageInApp(context);
               case _ProfileActions.checkin:
                 context.read<CheckinBloc>().add(const CheckinRequested());
               case _ProfileActions.viewPoints:
@@ -311,6 +313,19 @@ class _ProfilePageState extends State<ProfilePage> {
     } else {
       // Other user's profile page.
       actions = [
+        // Their threads and replies in the app ("TA的主题"); the search by their name stays next to it.
+        if ((widget.uid ?? userProfile.uid) != null || (userProfile.username ?? widget.username) != null)
+          IconButton(
+            icon: const Icon(Icons.article_outlined),
+            tooltip: tr.memberThreads,
+            onPressed: () async => context.pushNamed(
+              ScreenPaths.memberThread,
+              queryParameters: {
+                'uid': ?(widget.uid ?? userProfile.uid),
+                if ((widget.uid ?? userProfile.uid) == null) 'username': ?(userProfile.username ?? widget.username),
+              },
+            ),
+          ),
         IconButton(
           icon: const Icon(Icons.person_search_outlined),
           tooltip: tr.searchAsThreadAuthor,
@@ -753,8 +768,9 @@ class _ProfilePageState extends State<ProfilePage> {
           title: introductionContent != null ? tr.introduction : tr.signature,
           icon: Icons.notes_outlined,
           children: [
+            // A self introduction laid out for reading as a post is: it can be long text.
             if (introductionContent != null)
-              AppInsetBlock(padding: edgeInsetsL12T12R12B12, child: munchElement(context, introductionContent)),
+              AppInsetBlock(padding: edgeInsetsL12T12R12B12, child: PostLayoutHtml(introductionContent)),
             if (introductionContent != null && signatureContent != null)
               AppSectionHeader(tr.signature, icon: Icons.draw_outlined, padding: EdgeInsets.zero),
             if (signatureContent != null)

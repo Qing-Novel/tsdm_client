@@ -1,59 +1,79 @@
-import 'dart:convert';
-
 import 'package:fpdart/fpdart.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/exceptions/exceptions.dart';
-import 'package:tsdm_client/features/profile/models/models.dart';
-import 'package:tsdm_client/features/profile/utils/parse_profile.dart';
+import 'package:tsdm_client/features/profile/models/avatar_upload.dart';
+import 'package:tsdm_client/features/profile/utils/profile_page_api.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
 import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
 import 'package:tsdm_client/utils/logger.dart';
-import 'package:universal_html/html.dart' as uh;
 import 'package:universal_html/parsing.dart';
-
-// Re-export the avatar parser for users of the profile page document (e.g. homepage bloc).
-export 'package:tsdm_client/features/profile/utils/parse_profile.dart' show parseProfileAvatarUrl;
 
 /// Repository to get profile page.
 final class ProfileRepository with LoggerMixin {
-  static const _profileV2Target = '$baseUrl/home.php?mobile=yes&tsdmapp=1&mod=space';
+  /// Constructor; [currentUid] tells the account logged in (the app's settings by default) the avatar page is
+  /// checked against.
+  ProfileRepository({int Function()? currentUid}) : _currentUid = currentUid;
+
+  final int Function()? _currentUid;
+
+  int _loginUid() => _currentUid?.call() ?? getIt.get<SettingsRepository>().currentSettings.loginUid;
+
   static const _editAvatarPage = '$baseUrl/home.php?mod=spacecp&ac=avatar';
 
-  uh.Document? _loggedUserDocument;
+  /// Profile page of the logged user, fetched for the account [_loggedUserUid].
+  ProfilePage? _loggedUserPage;
 
-  /// Cached profile v2 for current logged user.
-  UserProfileV2? _loggedProfileV2;
+  /// Uid of the account [_loggedUserPage] belongs to.
+  ///
+  /// The repository is app wide and outlives account switches and logouts, so the cache only answers for the account
+  /// in use: after a quick account switch the profile page and its unread counts showed the previous account until
+  /// the homepage happened to reload it (GitHub #184 follow-up).
+  int? _loggedUserUid;
 
-  /// Check has cached html [_loggedUserDocument] for logged user or not.
-  bool hasCache() => _loggedUserDocument != null;
+  /// [_loggedUserPage] when it belongs to the account in use, null otherwise.
+  ProfilePage? get _currentCache {
+    final page = _loggedUserPage;
+    if (page == null) {
+      return null;
+    }
+    final uid = getIt.get<SettingsRepository>().currentSettings.loginUid;
+    return uid != 0 && uid == _loggedUserUid ? page : null;
+  }
 
-  /// Get the cached [_loggedUserDocument] for logged user.
-  uh.Document? getCache() => _loggedUserDocument;
+  /// Check has cached page [_loggedUserPage] for logged user or not.
+  bool hasCache() => _currentCache != null;
+
+  /// Get the cached [_loggedUserPage] for logged user.
+  ProfilePage? getCache() => _currentCache;
 
   /// Clear cache as logged out.
   void logout() {
-    _loggedUserDocument = null;
+    _loggedUserPage = null;
+    _loggedUserUid = null;
   }
-
-  /// Profile page document cache;
 
   /// Fetch profile page from server.
   ///
   /// * Try to get the profile page of [uid] or [username] if provided.
   /// * Try to get current logged user profile if no parameter provided.
   /// * Return null if not logged in.
-  AsyncEither<uh.Document> fetchProfile({String? username, String? uid, bool force = false}) => AsyncEither(() async {
+  ///
+  /// The page is asked in the JSON mode of the forum's app API. An answer of plugin 2.2.0 or later carries the
+  /// profile as structured fields (`schema: 4`), or is the forum's own message with `login` (please log in, no such
+  /// user): a [ProfileApiPage], built by `profileFromApi`, its `document` never read. Any other answer (a web page
+  /// from a forum without the plugin, an older plugin's answer, whose `document` holds the blocks of the page) is a
+  /// [ProfileWebPage], parsed as the web page (`buildProfile`).
+  AsyncEither<ProfilePage> fetchProfile({String? username, String? uid, bool force = false}) => AsyncEither(() async {
     debug('fetch profile page');
     late final String targetUrl;
-    late final bool isLoggedUserProfile;
+    // Uid of the logged user whose profile is fetched, null for another user's profile.
+    int? loggedUid;
     if (uid != null) {
       targetUrl = '$uidProfilePage$uid';
-      isLoggedUserProfile = false;
     } else if (username != null) {
       targetUrl = '$usernameProfilePage$username';
-      isLoggedUserProfile = false;
     } else {
       // Fetching logged user profile.
       final settings = getIt.get<SettingsRepository>().currentSettings;
@@ -68,11 +88,11 @@ final class ProfileRepository with LoggerMixin {
         // Not logged in.
         return left(ProfileNeedLoginException());
       }
-      if (!force && _loggedUserDocument != null) {
-        return right(_loggedUserDocument!);
+      if (!force && _currentCache != null) {
+        return right(_currentCache!);
       }
       targetUrl = '$uidProfilePage$loginUid';
-      isLoggedUserProfile = true;
+      loggedUid = loginUid;
     }
 
     // JSON mode of the forum's app API when the forum has it (see TsdmAppApi); the web page otherwise.
@@ -80,24 +100,37 @@ final class ProfileRepository with LoggerMixin {
       case Left(:final value):
         return left(value);
       case Right(:final value):
-        final document = tsdmAppPageDocument(value.data);
-        if (isLoggedUserProfile) {
-          _loggedUserDocument = document;
+        final ProfilePage page;
+        if (profileApiAnswerOf(value.data) case final api?) {
+          page = ProfileApiPage(api);
+        } else if (tsdmAppAnswerWithoutPage(value.data)) {
+          // A failed request, not a profile page of a guest (which would read as an expired session).
+          return left(HttpRequestFailedException(value.statusCode));
+        } else {
+          page = ProfileWebPage(tsdmAppPageDocument(value.data));
         }
-        return right(document);
+        // Not when the account changed while the page was on its way: it belongs to the previous one. Nor the forum's
+        // message (please log in, no such user): it is not the profile of the account.
+        if (loggedUid != null &&
+            !(page is ProfileApiPage && page.json['ok'] != 1) &&
+            getIt.get<SettingsRepository>().currentSettings.loginUid == loggedUid) {
+          _loggedUserPage = page;
+          _loggedUserUid = loggedUid;
+        }
+        return right(page);
     }
   });
 
   /// Fetch user avatar for current user.
   ///
-  /// Parsed from the html profile page of current logged user because the v2 API is gone.
-  AsyncEither<String> fetchAvatarUrl({bool force = false}) => fetchProfile(force: force).flatMap((doc) {
-    if (!isLoggedInDocument(doc)) {
+  /// Parsed from the profile page of current logged user.
+  AsyncEither<String> fetchAvatarUrl({bool force = false}) => fetchProfile(force: force).flatMap((page) {
+    if (!page.loggedIn) {
       // Session expired, the server rendered a guest page.
       error('failed to fetch avatar url: not logged in');
       return TaskEither<AppException, String>.left(ProfileNeedLoginException());
     }
-    return switch (parseProfileAvatarUrl(doc)) {
+    return switch (page.avatarUrl) {
       final String url => TaskEither.right(url),
       null => () {
         error('failed to fetch avatar url: avatar not found in profile page');
@@ -106,120 +139,59 @@ final class ProfileRepository with LoggerMixin {
     };
   });
 
-  /// Fetch user profile through API.
+  /// Load the forum's avatar page: the external avatar url form and the avatar editor, each when printed.
   ///
-  /// ## CAUTION
-  ///
-  /// The API is GONE since the server upgraded to Discuz X5: the server responds a normal html page instead of json.
-  /// This function detects the non-json response and returns [ProfileStatusNotFoundException] gracefully, prefer
-  /// [fetchProfile] with html parsing.
-  ///
-  /// ## Return value
-  ///
-  /// ### Success
-  ///
-  /// ```json
-  /// {
-  ///   "status": 0,
-  ///   ... // Other fields can be converted into UserProfileV2.
-  /// }
-  /// ```
-  ///
-  /// ### Failure
-  ///
-  /// ```json
-  /// {
-  ///   "status": -1,
-  ///   "message": "login_before_enter_home",
-  ///   "url": null,
-  ///   "extra": {
-  ///     "showmsg": "1",
-  ///     "login": "1"
-  ///   },
-  ///   "values": []
-  /// }
-  /// ```
-  AsyncEither<UserProfileV2> fetchProfileV2({String? username, String? uid, bool force = false}) {
-    return AsyncEither(() async {
-      debug('fetch profile page v2');
-      late final String targetUrl;
-      late final bool isLoggedUserProfile;
-      if (uid != null) {
-        targetUrl = '$_profileV2Target&username=$uid';
-        isLoggedUserProfile = false;
-      } else if (username != null) {
-        targetUrl = '$_profileV2Target&uid=$username';
-        isLoggedUserProfile = false;
-      } else {
-        targetUrl = _profileV2Target;
-        isLoggedUserProfile = true;
-      }
-
-      if (!force && _loggedProfileV2 != null) {
-        return right(_loggedProfileV2!);
-      }
-
-      switch (await NetClientProvider.build(forceDesktop: false).get(targetUrl).run()) {
-        case Left(:final value):
-          return left(value);
-        case Right(:final value):
-          final Map<String, dynamic> jsonMap;
-          try {
-            final decoded = jsonDecode(value.data as String);
-            if (decoded is! Map<String, dynamic>) {
-              error('failed to fetch profile v2: response is not a json object');
-              return left(ProfileStatusNotFoundException());
-            }
-            jsonMap = decoded;
-          } on FormatException catch (e) {
-            error('failed to fetch profile v2: response is not json (API gone?): $e');
-            return left(ProfileStatusNotFoundException());
-          }
-          if (!jsonMap.containsKey('status')) {
-            error('failed to fetch profile v2: status not found');
-            return left(ProfileStatusNotFoundException());
-          }
-          final status = jsonMap['status'] as int?;
-          if (status == -1) {
-            error(
-              'failed to fetch profile v2: '
-              'message=${jsonMap.lookup("message")}',
-            );
-            return left(ProfileNeedLoginException());
-          }
-          if (status != 0) {
-            error('failed to fetch profile v2: unknown status $status');
-            return left(ProfileStatusUnknownException(jsonMap['status'].toString()));
-          }
-          // status is zero
-          final userProfile = UserProfileV2Mapper.fromMap(jsonMap);
-
-          if (isLoggedUserProfile) {
-            _loggedProfileV2 = userProfile;
-          }
-
-          return right(userProfile);
-      }
-    });
-  }
-
-  /// Load the current using avatar url from server.
-  AsyncEither<(String, String)> loadAvatarUrl() => getIt
+  /// Left with [EditAvatarUrlNotFound] when the page offers neither (the forum's message instead: no permission to
+  /// upload, the login prompt), and with [IdentityChangedException] when it was served to another account than the
+  /// one logged in.
+  AsyncEither<AvatarEditPage> loadAvatarEditPage() => getIt
       .get<NetClientProvider>()
       .get(_editAvatarPage)
-      .mapHttp((v) => parseHtmlDocument(v.data as String))
-      .map(
-        (v) => (
-          v.querySelector('input[name="headedit"]')?.attributes['value'],
-          v.querySelector('input[name="formhash"]')?.attributes['value'],
-        ),
-      )
-      .flatMap(
-        (v) => switch (v) {
-          (final String avatarUrl, final String formHash) => TaskEither.right((avatarUrl, formHash)),
-          (_, _) => TaskEither.left(EditAvatarUrlNotFound()),
-        },
-      );
+      .mapHttp((v) => AvatarEditPage.parse(parseHtmlDocument(tsdmAppAnswerText(v.data))))
+      .flatMap((page) {
+        final uid = _loginUid();
+        if (page.uid != null && page.uid != uid) {
+          return TaskEither<AppException, AvatarEditPage>.left(IdentityChangedException());
+        }
+        if (!page.hasExternal && !page.hasUpload) {
+          return TaskEither<AppException, AvatarEditPage>.left(EditAvatarUrlNotFound());
+        }
+        return TaskEither.right(page);
+      });
+
+  /// Upload the avatar [images] with the forum's avatar editor.
+  ///
+  /// The url the editor posts to is signed for the account and the user agent that opened the page, and only for a
+  /// while, so the page is opened again right before the images are posted (once: never sent twice). The forum then
+  /// opens the page once more, as the editor reloads it after saving, which marks the account as having an avatar.
+  /// Not posted when the account changed, or the page has no editor any more.
+  AsyncVoidEither uploadAvatarImages(AvatarImages images) => loadAvatarEditPage().flatMap((page) {
+    final url = page.uploadUrl;
+    final uid = _loginUid();
+    if (page.uid == null || page.uid != uid) {
+      return TaskEither<AppException, void>.left(IdentityChangedException());
+    }
+    if (url == null) {
+      return TaskEither<AppException, void>.left(EditAvatarUrlNotFound());
+    }
+    return getIt
+        .get<NetClientProvider>()
+        .postForm(url, data: images.toBody(), singleAttempt: true, tsdmAppJson: false)
+        .mapHttp((v) => tsdmAppAnswerText(v.data))
+        .flatMap((body) {
+          final answer = AvatarUploadAnswer.parse(body);
+          if (answer != AvatarUploadAnswer.success) {
+            error('failed to upload avatar: $answer');
+            return TaskEither<AppException, void>.left(EditAvatarUploadFailed(answer.name));
+          }
+          // Saved already: a failure of opening the page again is only logged (the forum marks the avatar the next
+          // time the page is opened).
+          return getIt.get<NetClientProvider>().get(_editAvatarPage).map<void>((_) {}).orElse((e) {
+            warning('avatar saved, failed to open the avatar page again: $e');
+            return TaskEither<AppException, void>.right(null);
+          });
+        });
+  });
 
   /// Upload the new avatar [url] to server.
   AsyncVoidEither uploadAvatarUrl({required String url, required String formHash}) => getIt

@@ -1,6 +1,7 @@
+import 'dart:async';
+
 import 'package:easy_refresh/easy_refresh.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tsdm_client/constants/layout.dart';
@@ -8,12 +9,17 @@ import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/extensions/list.dart';
 import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
+import 'package:tsdm_client/features/authentication/widgets/account_reload_scope.dart';
 import 'package:tsdm_client/features/favorite/utils/forum_favorite_action.dart';
 import 'package:tsdm_client/features/forum/bloc/forum_bloc.dart';
 import 'package:tsdm_client/features/forum/models/models.dart';
 import 'package:tsdm_client/features/forum/repository/forum_repository.dart';
 import 'package:tsdm_client/features/forum/widgets/thread_filter_chip.dart';
 import 'package:tsdm_client/features/jump_page/cubit/jump_page_cubit.dart';
+import 'package:tsdm_client/features/keyboard/widgets/keyboard_page_actions.dart';
+import 'package:tsdm_client/features/keyboard/widgets/keyboard_selectable.dart';
+import 'package:tsdm_client/features/moderate/repository/moderate_repository.dart';
+import 'package:tsdm_client/features/moderate/view/moderate_queue_page.dart';
 import 'package:tsdm_client/features/need_login/view/need_login_page.dart';
 import 'package:tsdm_client/features/post/models/models.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
@@ -21,15 +27,19 @@ import 'package:tsdm_client/routes/screen_paths.dart';
 import 'package:tsdm_client/shared/models/models.dart';
 import 'package:tsdm_client/utils/clipboard.dart';
 import 'package:tsdm_client/utils/html/html_muncher.dart';
+import 'package:tsdm_client/utils/load_failure.dart';
 import 'package:tsdm_client/utils/logger.dart';
-import 'package:tsdm_client/utils/retry_button.dart';
-import 'package:tsdm_client/utils/show_toast.dart';
 import 'package:tsdm_client/widgets/app_surface.dart';
-import 'package:tsdm_client/widgets/card/error_card.dart';
 import 'package:tsdm_client/widgets/card/forum_card.dart';
 import 'package:tsdm_client/widgets/card/thread_card/thread_card.dart';
-import 'package:tsdm_client/widgets/indicator.dart';
+import 'package:tsdm_client/widgets/custom_alert_dialog.dart';
+import 'package:tsdm_client/widgets/failure_view.dart';
 import 'package:tsdm_client/widgets/list_app_bar/list_app_bar.dart';
+import 'package:tsdm_client/widgets/list_footer.dart';
+import 'package:tsdm_client/widgets/list_skeleton.dart';
+import 'package:tsdm_client/widgets/post_layout_html.dart';
+import 'package:tsdm_client/widgets/scroll_travel.dart';
+import 'package:tsdm_client/widgets/two_pane.dart';
 
 const _tabsCount = 3;
 const _pinnedTabIndex = 0;
@@ -74,13 +84,62 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
   final _threadScrollController = ScrollController();
 
   /// Controller of the [EasyRefresh] in thread tab.
-  final _threadRefreshController = EasyRefreshController(controlFinishRefresh: true, controlFinishLoad: true);
+  ///
+  /// The next page is asked by the end of the list ([ListFooter]), the controller only finishes the pull to refresh.
+  final _threadRefreshController = EasyRefreshController(controlFinishRefresh: true);
 
   /// Controller of current tab: thread, subreddit.
   late TabController tabController;
 
+  /// The thread the keyboard moved to in the thread tab.
+  final _keyboardSelection = KeyboardSelection();
+
   /// Visibility of FAB.
   bool _fabVisible = true;
+
+  /// The post button shows its label; scrolling the list down folds it to its icon, scrolling up unfolds it.
+  bool _fabExtended = true;
+
+  /// How far the list scrolled since it last turned, for [_fabExtended].
+  final _fabTravel = ScrollTravel();
+
+  /// The bloc of this page, created by the provider in [build]. Created again for another account (see
+  /// [AccountReloadScope]); the new one keeps the filter of this one.
+  ForumBloc? _forumBloc;
+
+  /// The account and forum [_moderates] was asked for (`uid:fid`), null before.
+  String? _moderatorAsked;
+
+  /// The account logged in moderates this forum, as the forum says: its moderation queue is offered.
+  bool _moderates = false;
+
+  /// Ask the forum whether the account logged in moderates this forum, once per account.
+  void _askModerator(BuildContext context) {
+    final uid = context.readOrNull<AuthenticationRepository>()?.effectiveCurrentUid;
+    final fid = int.tryParse(widget.fid);
+    final key = uid == null || fid == null ? null : '$uid:$fid';
+    if (key == _moderatorAsked) {
+      return;
+    }
+    _moderatorAsked = key;
+    if (_moderates) {
+      setState(() => _moderates = false);
+    }
+    if (key == null) {
+      return;
+    }
+    ModerateRepository.network().isModerator(fid!).then((moderates) {
+      if (!mounted || _moderatorAsked != key) {
+        return;
+      }
+      if (moderates == null) {
+        // The request failed: asked again at the next load.
+        _moderatorAsked = null;
+      } else if (moderates != _moderates) {
+        setState(() => _moderates = moderates);
+      }
+    }).ignore();
+  }
 
   void _updateFabVisibilityByTabIndex() {
     if (tabController.index == _threadTabIndex) {
@@ -179,6 +238,13 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
           description: context.t.forumPage.copyFid(fid: widget.fid),
           onSelected: () async => copyToClipboard(context, widget.fid),
         ),
+        if (_moderates)
+          MenuCustomItem(
+            icon: Icons.fact_check_outlined,
+            description: context.t.moderate.queue,
+            onSelected: () async =>
+                openModerateQueue(context, fid: int.parse(widget.fid), title: widget.title ?? state.title),
+          ),
       ],
     );
   }
@@ -249,7 +315,8 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
                       icon: Icons.gavel_outlined,
                       padding: const EdgeInsets.only(bottom: 8),
                     ),
-                    munchElement(context, state.rulesElement!),
+                    // Laid out for reading as a post is: the rules are long text.
+                    PostLayoutHtml(state.rulesElement!),
                   ],
                 ),
               );
@@ -278,14 +345,44 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
   }
 
   Widget _buildNormalThreadTab(BuildContext context, List<NormalThread> normalThreadList, ForumState state) {
+    Future<void> refresh() async {
+      if (!mounted) {
+        return;
+      }
+      context.read<ForumBloc>().add(ForumRefreshRequested());
+    }
+
     // Use _haveNoThread to ensure we parsed the web page and there really
     // no thread in the forum.
     if (normalThreadList.isEmpty) {
-      final emptyContentHint = AppStateView(
-        icon: Icons.forum_outlined,
-        message: context.t.forumPage.threadTab.noThread,
+      final filtering = state.filterState.isFiltering();
+      final tr = context.t.forumPage.threadTab;
+      // "Nothing here" and "nothing left by the filters" are told apart: the latter offers to clear the filters.
+      final emptyContentHint = EasyRefresh.builder(
+        scrollBehaviorBuilder: (physics) => ERScrollBehavior(physics).copyWith(physics: physics, scrollbars: false),
+        header: const MaterialHeader(),
+        controller: _threadRefreshController,
+        onRefresh: refresh,
+        childBuilder: (context, physics) => AppScrollableStateView(
+          physics: physics,
+          child: AppStateView(
+            key: ValueKey(filtering ? 'forum-empty-filtered' : 'forum-empty'),
+            icon: filtering ? Icons.filter_alt_off_outlined : Icons.forum_outlined,
+            message: filtering ? tr.noFilteredThread : tr.noThread,
+            scrollable: false,
+            action: filtering
+                ? FilledButton.tonalIcon(
+                    icon: const Icon(Icons.filter_alt_off_outlined),
+                    label: Text(tr.clearFilter),
+                    onPressed: () => context.read<ForumBloc>().add(
+                      const ForumChangeThreadFilterStateRequested(FilterState()),
+                    ),
+                  )
+                : null,
+          ),
+        ),
       );
-      if (state.filterState.isFiltering()) {
+      if (filtering) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -297,34 +394,13 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
       return emptyContentHint;
     }
 
-    _threadRefreshController.finishLoad();
-
+    final bloc = context.read<ForumBloc>();
     return EasyRefresh.builder(
       scrollBehaviorBuilder: (physics) => ERScrollBehavior(physics).copyWith(physics: physics, scrollbars: false),
       header: const MaterialHeader(),
-      footer: const MaterialFooter(),
       controller: _threadRefreshController,
       scrollController: _threadScrollController,
-      onRefresh: () async {
-        if (!mounted) {
-          return;
-        }
-        context.read<ForumBloc>().add(ForumRefreshRequested());
-      },
-      onLoad: () async {
-        if (!mounted) {
-          return;
-        }
-        if (state.currentPage >= state.totalPages) {
-          info('already in last page');
-          _threadRefreshController.finishLoad(IndicatorResult.noMore);
-          showNoMoreSnackBar(context);
-          return;
-        }
-        // Load the next page.
-        context.read<ForumBloc>().add(ForumLoadMoreRequested(state.currentPage + 1));
-        // _refreshController.finishLoad();
-      },
+      onRefresh: refresh,
       childBuilder: (context, physics) => AppCenteredList(
         builder: (context, side, _) => CustomScrollView(
           controller: _threadScrollController,
@@ -332,9 +408,29 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
           slivers: [
             PinnedHeaderSliver(child: _buildNormalThreadFilterRow(context, state)),
             const SliverPadding(padding: edgeInsetsT8),
+            // The end of the list is its last item: built when it comes near, it asks the next page.
             SliverList.separated(
-              itemCount: normalThreadList.length,
-              itemBuilder: (context, index) => Padding(padding: side, child: NormalThreadCard(normalThreadList[index])),
+              itemCount: normalThreadList.length + 1,
+              itemBuilder: (context, index) => index < normalThreadList.length
+                  ? Padding(
+                      padding: side,
+                      child: KeyboardSelectable(
+                        selection: _keyboardSelection,
+                        index: index,
+                        child: NormalThreadCard(normalThreadList[index]),
+                      ),
+                    )
+                  : ListFooter(
+                      status: listFooterStatus(
+                        hasMore: state.canLoadMore && state.currentPage < state.totalPages,
+                        loading: state.loadingMore || state.refreshing,
+                        failed: state.loadMoreFailed,
+                      ),
+                      itemCount: normalThreadList.length,
+                      failure: state.failure,
+                      onLoadMore: () => bloc.add(ForumLoadMoreRequested(state.currentPage + 1)),
+                      onRetry: () => bloc.add(const ForumRetryRequested()),
+                    ),
               separatorBuilder: (context, index) => appListSeparator,
             ),
             SliverPadding(padding: context.safePadding()),
@@ -354,11 +450,12 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
         },
       );
     } else if (!state.havePermission) {
-      if (state.permissionDeniedMessage != null) {
-        return ErrorCard(child: munchElement(context, state.permissionDeniedMessage!));
-      } else {
-        return AppStateView(icon: Icons.lock_outline, message: context.t.general.noPermission);
-      }
+      // The forum's own words, as it wrote them, under the sentence telling what they are about.
+      return FailureView(
+        failure: LoadFailure(LoadFailureKind.noPermission),
+        message: state.permissionDeniedMessage == null ? null : munchElement(context, state.permissionDeniedMessage!),
+        onRetry: () => context.read<ForumBloc>().add(ForumRefreshRequested()),
+      );
     } else {
       return TabBarView(
         controller: tabController,
@@ -372,17 +469,25 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
   }
 
   Widget _buildBody(BuildContext context, ForumState state) {
+    if (!state.refreshing) {
+      // A refresh keeps the tabs on screen: their pulls end when it does.
+      _pinnedRefreshController.finishRefresh();
+      _threadRefreshController.finishRefresh();
+      _subredditRefreshController.finishRefresh();
+    }
     return switch (state.status) {
+      // The shape of the threads to come instead of a spinner over the whole page.
       ForumStatus.initial || ForumStatus.loading => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (state.filterState.isFiltering()) _buildNormalThreadFilterRow(context, state),
-          const Expanded(child: CenteredCircularIndicator()),
+          const Expanded(child: ThreadListSkeleton()),
         ],
       ),
-      ForumStatus.failure => buildRetryButton(context, () {
-        context.read<ForumBloc>().add(ForumLoadMoreRequested(state.currentPage));
-      }),
+      ForumStatus.failure => FailureView(
+        failure: state.failure,
+        onRetry: () => context.read<ForumBloc>().add(const ForumRetryRequested()),
+      ),
       ForumStatus.success => _buildSuccessContent(context, state),
     };
   }
@@ -440,24 +545,34 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
         pollOfferUid != null && pollOfferUid == context.read<AuthenticationRepository>().effectiveCurrentUid;
     // Wide windows have room for labelled buttons; phones keep the compact round ones over the list.
     final wide = MediaQuery.sizeOf(context).width >= 600;
-    Future<void> openNewThread() async => context.pushNamed(
-      ScreenPaths.editPost,
-      pathParameters: {'editType': '${PostEditType.newThread.index}', 'fid': widget.fid},
-      queryParameters: {if (canCreatePoll) 'poll': '1'},
-    );
+    Future<void> openNewThread() async {
+      // A guest needs an account first. The page saying the account may not post is only a hint (the plugin reads the
+      // user group, the forum also has its own permissions): told, with the editor still offered.
+      final loggedIn = context.readOrNull<AuthenticationRepository>()?.effectiveCurrentUid != null;
+      if (!loggedIn || state.postAllowed == false) {
+        final openAnyway = await showNewThreadUnavailableDialog(context, guest: !loggedIn);
+        if (!openAnyway || !context.mounted) {
+          return;
+        }
+      }
+      await context.pushNamed(
+        ScreenPaths.editPost,
+        pathParameters: {'editType': '${PostEditType.newThread.index}', 'fid': widget.fid},
+        queryParameters: {if (canCreatePoll) 'poll': '1'},
+      );
+    }
+
     Future<void> openPoll() async => context.pushNamed(ScreenPaths.createPoll, pathParameters: {'fid': widget.fid});
-    final newThread = wide
-        ? FloatingActionButton.extended(
-            onPressed: openNewThread,
-            tooltip: context.t.forumPage.tooltip.fab,
-            icon: const Icon(Icons.edit_outlined),
-            label: Text(context.t.forumPage.tooltip.fab),
-          )
-        : FloatingActionButton(
-            onPressed: openNewThread,
-            tooltip: context.t.forumPage.tooltip.fab,
-            child: const Icon(Icons.edit_outlined),
-          );
+    // Always labelled, so the way to post is plain to see; folded to its icon while the list is scrolled down (the
+    // wide windows keep the label, they have the room).
+    final newThread = FloatingActionButton.extended(
+      key: const ValueKey('forum-new-thread'),
+      onPressed: openNewThread,
+      tooltip: context.t.forumPage.tooltip.fab,
+      isExtended: wide || _fabExtended,
+      icon: const Icon(Icons.edit_outlined),
+      label: Text(context.t.forumPage.newThread.label),
+    );
     if (!canCreatePoll) return newThread;
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -495,22 +610,21 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
       ..addListener(_updateFabVisibilityByTabIndex);
   }
 
-  bool _onBodyScrollNotification(UserScrollNotification notification) {
-    if (notification.metrics.axis != Axis.vertical) {
+  bool _onBodyScrollNotification(ScrollNotification notification) {
+    // Fold the post button once the list scrolled down some way, unfold it once scrolled up as far: it stays in reach,
+    // and a flaky touch does not fold and unfold it at every turn (ScrollTravel). Nothing to do on the tabs without it.
+    if (!_fabVisible) {
       return false;
     }
-
-    // Update fab visibility according to scroll direction.
-    if (notification.direction == ScrollDirection.forward && !_fabVisible) {
-      setState(() {
-        _fabVisible = true;
-      });
-    } else if (notification.direction == ScrollDirection.reverse && _fabVisible) {
-      setState(() {
-        _fabVisible = false;
-      });
+    switch (_fabTravel.onNotification(notification)) {
+      case ScrollTravelDirection.up when !_fabExtended:
+        setState(() => _fabExtended = true);
+      case ScrollTravelDirection.down when _fabExtended:
+        setState(() => _fabExtended = false);
+      case _:
+        break;
     }
-    return true;
+    return false;
   }
 
   @override
@@ -522,17 +636,53 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
     _subredditScrollController.dispose();
     _subredditRefreshController.dispose();
     tabController.dispose();
+    _keyboardSelection.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // The threads, sub forums and actions shown are the ones the account in use may see: loaded again for another
+    // account. A wide window shows the thread tapped on the right of the list.
+    return TwoPaneLayout(list: AccountReloadScope(child: _buildPage(context)));
+  }
+
+  /// The thread of the thread tab the keyboard is on, null when none.
+  NormalThread? _selectedThread(ForumState state) {
+    final index = _keyboardSelection.index;
+    if (tabController.index != _threadTabIndex || index == null || index >= state.normalThreadList.length) {
+      return null;
+    }
+    return state.normalThreadList[index];
+  }
+
+  void _moveSelection(ForumState state, int delta) {
+    if (tabController.index == _threadTabIndex) {
+      _keyboardSelection.move(delta, state.normalThreadList.length);
+    }
+  }
+
+  void _jumpPage(BuildContext context, ForumState state, int delta) {
+    final page = state.currentPage + delta;
+    if (state.status != ForumStatus.success || page < 1 || page > state.totalPages) {
+      return;
+    }
+    _keyboardSelection.clear();
+    context.read<JumpPageCubit>().markLoading();
+    context.read<ForumBloc>().add(ForumJumpPageRequested(page));
+  }
+
+  /// The page, under the [AccountReloadScope] of [build].
+  Widget _buildPage(BuildContext context) {
     return MultiBlocProvider(
       providers: [
         BlocProvider(
           create: (context) {
             final FilterState? filterState;
-            if (widget.threadType != null) {
+            if (_forumBloc case final previous?) {
+              // Loaded again for another account: the threads stay filtered as chosen.
+              filterState = previous.state.filterState;
+            } else if (widget.threadType != null) {
               filterState = FilterState(
                 filter: 'typeid',
                 filterType: FilterType(
@@ -545,7 +695,7 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
               filterState = null;
             }
 
-            return ForumBloc(
+            return _forumBloc = ForumBloc(
               fid: widget.fid,
               forumRepository: RepositoryProvider.of<ForumRepository>(context),
               filterState: filterState,
@@ -554,20 +704,51 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
         ),
         BlocProvider(create: (context) => JumpPageCubit()),
       ],
-      // A forum without threads opens its sub forums tab. Switched from a listener, once per loaded state: switching
-      // in the builder notified the tab listener (setState) during the build, and forced the tab back on every rebuild.
-      child: BlocListener<ForumBloc, ForumState>(
-        listenWhen: (_, state) =>
-            state.status == ForumStatus.success &&
-            state.normalThreadList.isEmpty &&
-            // Do not switch tab if filtering but filtering non result left.
-            !state.filterState.isFiltering(),
-        listener: (context, state) {
-          if (!mounted || tabController.index == _subredditTabIndex) {
-            return;
-          }
-          tabController.animateTo(_subredditTabIndex, duration: const Duration(milliseconds: 500));
-        },
+      child: MultiBlocListener(
+        listeners: [
+          // A forum without threads opens its sub forums tab. Switched from a listener, once per loaded state:
+          // switching in the builder notified the tab listener (setState) during the build, and forced the tab back on
+          // every rebuild.
+          BlocListener<ForumBloc, ForumState>(
+            listenWhen: (_, state) =>
+                state.status == ForumStatus.success &&
+                state.normalThreadList.isEmpty &&
+                // Do not switch tab if filtering but filtering non result left.
+                !state.filterState.isFiltering(),
+            listener: (context, state) {
+              if (!mounted || tabController.index == _subredditTabIndex) {
+                return;
+              }
+              tabController.animateTo(_subredditTabIndex, duration: const Duration(milliseconds: 500));
+            },
+          ),
+          // The threads were replaced (a refresh, another filter): the one the keyboard was on is another one now.
+          BlocListener<ForumBloc, ForumState>(
+            listenWhen: (prev, curr) => prev.filterState != curr.filterState || (prev.refreshing && !curr.refreshing),
+            listener: (context, state) => _keyboardSelection.clear(),
+          ),
+          // The moderation queue is offered to the forum's moderators.
+          BlocListener<ForumBloc, ForumState>(
+            listenWhen: (prev, curr) => prev.status != curr.status && curr.status == ForumStatus.success,
+            listener: (context, state) => _askModerator(context),
+          ),
+          // A refresh that failed keeps the threads on screen and says so.
+          BlocListener<ForumBloc, ForumState>(
+            listenWhen: (prev, curr) => prev.refreshing && !curr.refreshing && curr.failure != null,
+            listener: (context, state) {
+              final bloc = context.read<ForumBloc>();
+              showRefreshFailedSnackBar(
+                context,
+                state.failure,
+                onRetry: () {
+                  if (!bloc.isClosed) {
+                    bloc.add(ForumRefreshRequested());
+                  }
+                },
+              );
+            },
+          ),
+        ],
         child: BlocBuilder<ForumBloc, ForumState>(
           builder: (context, state) {
             // Update jump page state.
@@ -580,18 +761,70 @@ class _ForumPageState extends State<ForumPage> with SingleTickerProviderStateMix
               context.read<JumpPageCubit>().markSuccess();
             }
 
-            return Scaffold(
-              // appBar: PreferredSize(preferredSize: const Size.fromHeight(145), child: _buildListAppBar(context, state)),
-              appBar: _buildListAppBar(context, state),
-              body: NotificationListener<UserScrollNotification>(
-                onNotification: _onBodyScrollNotification,
-                child: SafeArea(bottom: false, child: _buildBody(context, state)),
+            return KeyboardPageActions(
+              onRefresh: () {
+                _keyboardSelection.clear();
+                context.read<ForumBloc>().add(ForumRefreshRequested());
+              },
+              onNextItem: () => _moveSelection(state, 1),
+              onPreviousItem: () => _moveSelection(state, -1),
+              canOpenItem: () => _selectedThread(state) != null,
+              onOpenItem: () {
+                if (_selectedThread(state) case final thread?) {
+                  unawaited(
+                    openThread(context, threadID: thread.threadID, title: thread.title, threadType: thread.threadType),
+                  );
+                }
+              },
+              onNextPage: () => _jumpPage(context, state, 1),
+              onPreviousPage: () => _jumpPage(context, state, -1),
+              child: Scaffold(
+                // appBar: PreferredSize(preferredSize: const Size.fromHeight(145), child: _buildListAppBar(context, state)),
+                appBar: _buildListAppBar(context, state),
+                body: NotificationListener<ScrollNotification>(
+                  onNotification: _onBodyScrollNotification,
+                  child: SafeArea(bottom: false, child: _buildBody(context, state)),
+                ),
+                floatingActionButton: _buildFloatingActionButton(context, state),
               ),
-              floatingActionButton: _buildFloatingActionButton(context, state),
             );
           },
         ),
       ),
     );
   }
+}
+
+/// Tell why the post button of a forum may not lead anywhere: a [guest] needs to log in (offered here); otherwise the
+/// forum's page said the account may not post in it, which may be wrong (the forum's own permissions of the forum and
+/// of the member decide), so the editor is still offered and the forum answers there.
+///
+/// True when the editor is to be opened anyway.
+Future<bool> showNewThreadUnavailableDialog(BuildContext context, {required bool guest}) async {
+  final tr = context.t.forumPage.newThread;
+  final choice = await showDialog<bool>(
+    context: context,
+    builder: (context) => CustomAlertDialog.sync(
+      title: AppDialogTitle(
+        icon: guest ? Icons.login_outlined : Icons.lock_outline,
+        title: guest ? tr.guestTitle : tr.noPermissionTitle,
+      ),
+      content: Text(guest ? tr.guestMessage : tr.noPermissionMessage),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(context.t.general.cancel)),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(guest ? context.t.loginPage.login : tr.openAnyway),
+        ),
+      ],
+    ),
+  );
+  if (!(choice ?? false) || !context.mounted) {
+    return false;
+  }
+  if (guest) {
+    await context.pushNamed(ScreenPaths.login);
+    return false;
+  }
+  return true;
 }

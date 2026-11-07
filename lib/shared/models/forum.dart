@@ -22,7 +22,137 @@ final class Forum with ForumMappable {
     this.latestThreadTitle,
     this.latestThreadUserName,
     this.latestThreadUserUrl,
+    this.isPrivate = false,
+    this.redirectUrl,
   });
+
+  /// Build a [Forum] from a forum [s] of a structured answer of the forum's app API: a subforum of the forum page
+  /// (plugin 2.0.0, `schema: 2`, see `forumPageFromApi`), the expanded layout the forum page lists its subforums in,
+  /// a forum of a category or of the "我收藏的版块" panel of the homepage (`schema: 5`).
+  ///
+  /// * The url is the forum's page, or the address a redirect forum points to (`redirect`, empty otherwise).
+  /// * `todayposts` 0 is no count, as the page prints no `<em>` then.
+  /// * `lastpost` (null when the forum has no thread) gives the latest thread: its redirect url to the last post, its
+  ///   whole subject (the page cuts it to 30 bytes, not imitated), its time (the forum's unix seconds, the real
+  ///   instant) and its author with the member's url by username.
+  /// * `subforums` are the forum's own subforums (the page's "子版块: a, b" row), null when there are none as the page
+  ///   has no row then.
+  /// * `description_html` (plugin 2.8.2: the description as the page prints it in its `p.xg2`) gives the shortcuts to
+  ///   threads the description links to ([subThreadList], the "链接" of the card), read as [fromFlRowNode] reads them
+  ///   from the page; none without it (`description` is plain text).
+  /// * `redirect` makes a link forum ([redirectUrl], see [forumRedirectUrlOf]): the page prints no latest thread for
+  ///   it, so none is given whatever `lastpost` holds (plugins before 2.8.2 send one with the subforums of the forum
+  ///   page). `private` (plugin 2.8.1 for the panel, 2.8.2 for the categories and the subforums) gives [isPrivate];
+  ///   without it, a subforum the viewer sees only by name (`permission` 1, plugins before 2.8.2) is one, as the page
+  ///   prints "私密版块" for it. The page prints no latest thread for such a forum either.
+  factory Forum.fromApi(Map<String, dynamic> s) {
+    final fid = _apiInt(s['fid']);
+    final redirectUrl = forumRedirectUrlOf(_apiText(s['redirect']), fid);
+    final isPrivate = s.containsKey('private') ? _apiInt(s['private']) == 1 : _apiInt(s['permission']) == 1;
+    final lastPost = redirectUrl == null && !isPrivate && s['lastpost'] is Map<String, dynamic>
+        ? s['lastpost'] as Map<String, dynamic>
+        : null;
+    // An anonymous last post names no author: the page prints the forum's "匿名" in its place, without a link.
+    final lastPostAuthor = lastPost == null ? null : _apiText(lastPost['author']);
+    final latestThreadTime = lastPost == null ? null : _apiTime(lastPost['dateline']);
+    final todayCount = _apiInt(s['todayposts']);
+    final subForumList = s['subforums'] is List
+        ? (s['subforums'] as List)
+              .whereType<Map<String, dynamic>>()
+              .map((e) => (_apiText(e['name']), '$baseUrl/forum.php?mod=forumdisplay&fid=${_apiInt(e['fid'])}'))
+              .toList()
+        : const <(String, String)>[];
+    final descriptionHtml = s['description_html'];
+    final subThreadList = descriptionHtml is String && descriptionHtml.contains('tid=')
+        ? _descriptionThreadLinks(descriptionHtml)
+        : const <(String, String)>[];
+
+    return Forum(
+      forumID: fid,
+      url: redirectUrl ?? '$baseUrl/forum.php?mod=forumdisplay&fid=$fid',
+      name: _apiText(s['name']),
+      iconUrl: _apiText(s['icon']),
+      threadCount: _apiInt(s['threads']),
+      replyCount: _apiInt(s['posts']),
+      threadTodayCount: todayCount > 0 ? todayCount : null,
+      latestThreadTime: latestThreadTime,
+      latestThreadTimeText: latestThreadTime?.yyyyMMDDHHMM(),
+      latestThreadUrl: lastPost == null
+          ? null
+          : '$baseUrl/forum.php?mod=redirect&tid=${_apiInt(lastPost['tid'])}&goto=lastpost',
+      latestThreadTitle: lastPost == null ? null : _apiText(lastPost['subject']),
+      latestThreadUserName: lastPostAuthor == null || lastPostAuthor.isNotEmpty ? lastPostAuthor : _anonymousName,
+      latestThreadUserUrl: lastPostAuthor == null || lastPostAuthor.isEmpty
+          ? null
+          : '$baseUrl/home.php?mod=space&username=${Uri.encodeComponent(lastPostAuthor)}',
+      subForumList: subForumList.isEmpty ? null : subForumList,
+      subThreadList: subThreadList.isEmpty ? null : subThreadList,
+      isPrivate: isPrivate,
+      redirectUrl: redirectUrl,
+    );
+  }
+
+  /// The links to threads (`tid=`) of a forum's description [html] (`description_html`), as [fromFlRowNode] reads the
+  /// description from the page: put in its `p.xg2` in the forum's cell, the html is parsed as the page's is (a block
+  /// in the description closes the paragraph and stays in the cell).
+  static List<(String, String)> _descriptionThreadLinks(String html) => _threadLinksOf(
+    parseHtmlDocument('<table><tbody><tr><td><p class="xg2">$html</p></td></tr></tbody></table>').querySelectorAll(
+      'td > p a',
+    ),
+  );
+
+  /// The shortcuts of a forum card among the links [anchors] of its row ([subThreadList]): each link to a thread
+  /// (`tid=`) with its text, or the name of the picture an image link holds (`alt`, `title`); a link with neither
+  /// (a banner without a name, as many of the production forum's descriptions have) is left out, as a shortcut
+  /// without a label would be an empty button.
+  static List<(String, String)> _threadLinksOf(Iterable<uh.Element> anchors) => [
+    for (final anchor in anchors)
+      if (anchor.attributes['href'] case final String href when href.contains('tid='))
+        if (_linkTitleOf(anchor) case final String title) (title, href),
+  ];
+
+  /// The label of the link [anchor]: its text (the text of its first innermost element, as the page's readers take
+  /// it, else all of it), else the `alt` or `title` of a picture in it, else its own `title`; null when none.
+  static String? _linkTitleOf(uh.Element anchor) {
+    for (final text in [
+      anchor.firstEndDeepText(),
+      anchor.innerText,
+      ...anchor.querySelectorAll('img').expand((e) => [e.attributes['alt'], e.attributes['title']]),
+      anchor.attributes['title'],
+    ]) {
+      final title = text?.trim();
+      if (title != null && title.isNotEmpty) {
+        return title;
+      }
+    }
+    return null;
+  }
+
+  /// The address of the link forum [fid] whose `redirect` setting is [redirect], as [redirectUrl] keeps it; null when
+  /// [redirect] is empty (not a link forum).
+  ///
+  /// The setting is whatever the site wrote: it is resolved on the forum (a relative address) and kept only when it
+  /// is a web address (`http`, `https`, with a host). Anything else (an address that does not parse, another scheme
+  /// such as `javascript:`, `intent:` or `file:`) gives the forum's own page, which the forum redirects to the
+  /// address as it does on the web page: one forum's setting never fails the page that lists it.
+  static String? forumRedirectUrlOf(String redirect, int fid) {
+    final text = redirect.trim();
+    if (text.isEmpty) {
+      return null;
+    }
+    Uri? uri;
+    try {
+      final parsed = Uri.tryParse(text);
+      uri = parsed == null ? null : Uri.parse('$baseUrl/').resolveUri(parsed);
+    } on FormatException {
+      uri = null;
+    }
+    if (uri == null || !(uri.isScheme('http') || uri.isScheme('https')) || uri.host.isEmpty) {
+      talker.warning('link forum $fid: not a web address, the forum page is opened instead');
+      return '$baseUrl/forum.php?mod=forumdisplay&fid=$fid';
+    }
+    return uri.toString();
+  }
 
   /// Forum id.
   final int forumID;
@@ -70,6 +200,17 @@ final class Forum with ForumMappable {
 
   /// Url of the latest thread.
   final String? latestThreadUserUrl;
+
+  /// Whether the viewer may not enter the forum and the page prints "私密版块" in place of its latest thread (a forum
+  /// the site still lists to those who may not enter, `hideprivate` off).
+  final bool isPrivate;
+
+  /// The address a link forum (the page prints "链接到外部地址" in place of its counts and latest thread) leads to,
+  /// opened in the browser as the page opens it in a new window; null for any other forum.
+  ///
+  /// The `redirect` of the forum's app API, a web address ([forumRedirectUrlOf]); read from the web page, which prints
+  /// no address, the forum's own page, which the forum redirects to it.
+  final String? redirectUrl;
 
   /// Is current forum in expanded layout when parsing from server side
   /// html document.
@@ -209,12 +350,7 @@ final class Forum with ForumMappable {
         .whereType<(String, String)>()
         .toList();
 
-    final subThreadList = element
-        .querySelectorAll('td > p a')
-        .where((e) => e.attributes['href']?.contains('tid=') ?? false)
-        .map((e) => (e.firstEndDeepText(), e.attributes['href']))
-        .whereType<(String, String)>()
-        .toList();
+    final subThreadList = _threadLinksOf(element.querySelectorAll('td > p a'));
 
     return Forum(
       forumID: forumID,

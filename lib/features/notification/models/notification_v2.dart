@@ -56,35 +56,62 @@ final class NotificationV2 with NotificationV2Mappable {
   /// * [personalMessageDoc]: `home.php?mod=space&do=pm&filter=privatepm`.
   /// * [broadcastMessageDoc]: `home.php?mod=space&do=pm&filter=announcepm`.
   ///
-  /// Only notifications not earlier than [since] (timestamp in seconds) are kept, if provided.
+  /// Only notifications not earlier than [since] (timestamp in seconds) are kept, if provided. With
+  /// [allPersonalMessages] every conversation on the private message page is kept whatever its time: a refresh the
+  /// user asked for brings back a conversation an earlier poll skipped (GitHub #193).
   ///
   /// Unread broadcast messages are kept whatever their time (GitHub #154): the forum stamps a public message with the
   /// time it was written, but delivers it to the members in batches, so it can reach an account hours later with that
   /// old time. A running app has moved its window past that time by then and dropped the message for good. The list
   /// holds a handful of messages and the stored ones are told apart by pmid, so the unread ones are simply always
   /// taken.
-  // ignore: prefer_constructors_over_static_methods
   static NotificationV2 fromDocuments({
     required uh.Document noticeDoc,
     required uh.Document personalMessageDoc,
     required uh.Document broadcastMessageDoc,
     int? since,
+    bool allPersonalMessages = false,
   }) {
-    final noticeList = noticeNodes(noticeDoc).map(Notice.toV2).whereType<NoticeV2>().toList();
-    final pmList = personalMessageNodes(
-      personalMessageDoc,
-    ).map(PersonalMessage.toV2).whereType<PersonalMessageV2>().toList();
-    final bmList = broadcastMessageNodes(
-      broadcastMessageDoc,
-    ).map(BroadcastMessage.toV2).whereType<BroadcastMessageV2>().toList();
+    return within(
+      notices: noticeNodes(noticeDoc).map(Notice.toV2).whereType<NoticeV2>(),
+      personalMessages: personalMessagesOf(personalMessageDoc),
+      broadcastMessages: broadcastMessagesOf(broadcastMessageDoc),
+      since: since,
+      allPersonalMessages: allPersonalMessages,
+    );
+  }
 
+  /// All conversations on the private message page [document].
+  static List<PersonalMessageV2> personalMessagesOf(uh.Document document) =>
+      personalMessageNodes(document).map(PersonalMessage.toV2).whereType<PersonalMessageV2>().toList();
+
+  /// All broadcast messages on the broadcast message page [document].
+  static List<BroadcastMessageV2> broadcastMessagesOf(uh.Document document) =>
+      broadcastMessageNodes(document).map(BroadcastMessage.toV2).whereType<BroadcastMessageV2>().toList();
+
+  /// The notifications of a fetch, kept by the rules of [fromDocuments] whatever page or answer of the forum's app
+  /// API each list was read from: only those not earlier than [since] (seconds), when given, with every conversation
+  /// for [allPersonalMessages] and every unread broadcast message. The conversations are compared with
+  /// [personalMessagesSince] instead when given (a list read with another time offset).
+  // ignore: prefer_constructors_over_static_methods
+  static NotificationV2 within({
+    required Iterable<NoticeV2> notices,
+    required Iterable<PersonalMessageV2> personalMessages,
+    required Iterable<BroadcastMessageV2> broadcastMessages,
+    int? since,
+    int? personalMessagesSince,
+    bool allPersonalMessages = false,
+  }) {
+    final pmSince = personalMessagesSince ?? since;
     return NotificationV2(
       status: 0,
-      noticeList: since == null ? noticeList : noticeList.where((e) => e.timestamp >= since).toList(),
-      personalMessageList: since == null ? pmList : pmList.where((e) => e.timestamp >= since).toList(),
+      noticeList: since == null ? notices.toList() : notices.where((e) => e.timestamp >= since).toList(),
+      personalMessageList: pmSince == null || allPersonalMessages
+          ? personalMessages.toList()
+          : personalMessages.where((e) => e.timestamp >= pmSince).toList(),
       broadcastMessageList: since == null
-          ? bmList
-          : bmList.where((e) => !e.alreadyRead || e.timestamp >= since).toList(),
+          ? broadcastMessages.toList()
+          : broadcastMessages.where((e) => !e.alreadyRead || e.timestamp >= since).toList(),
     );
   }
 

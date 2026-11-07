@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:chat_bottom_container/chat_bottom_container.dart';
 import 'package:collection/collection.dart';
 import 'package:dart_bbcode_parser/dart_bbcode_parser.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bbcode_editor/flutter_bbcode_editor.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -11,20 +13,44 @@ import 'package:material_design_icons_flutter/material_design_icons_flutter.dart
 import 'package:tsdm_client/constants/constants.dart';
 import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/constants/url.dart';
+import 'package:tsdm_client/exceptions/exceptions.dart';
 import 'package:tsdm_client/extensions/bbcode_editor_controller.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
+import 'package:tsdm_client/extensions/date_time.dart';
 import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
+import 'package:tsdm_client/features/editor/utils/mention_suggestions.dart';
 import 'package:tsdm_client/features/editor/widgets/editor_frame.dart';
+import 'package:tsdm_client/features/editor/widgets/mention_suggestion_bar.dart';
 import 'package:tsdm_client/features/editor/widgets/rich_editor.dart';
 import 'package:tsdm_client/features/editor/widgets/toolbar.dart';
+import 'package:tsdm_client/features/keyboard/widgets/keyboard_shortcuts_host.dart';
+import 'package:tsdm_client/features/local_draft/models/local_draft.dart';
+import 'package:tsdm_client/features/local_draft/repository/local_draft_store.dart';
+import 'package:tsdm_client/features/local_draft/utils/draft_autosaver.dart';
+import 'package:tsdm_client/features/local_draft/widgets/draft_offer_banner.dart';
+import 'package:tsdm_client/features/multi_user/widgets/current_account_avatar.dart';
 import 'package:tsdm_client/features/post/bloc/post_edit_bloc.dart';
 import 'package:tsdm_client/features/post/models/models.dart';
 import 'package:tsdm_client/features/post/models/poll_create.dart';
+import 'package:tsdm_client/features/post/models/post_form.dart';
+import 'package:tsdm_client/features/post/models/special_thread_form.dart';
 import 'package:tsdm_client/features/post/repository/post_edit_repository.dart';
+import 'package:tsdm_client/features/post/utils/attachment_upload.dart';
+import 'package:tsdm_client/features/post/utils/discuz_text.dart';
+import 'package:tsdm_client/features/post/utils/flood_control.dart';
+import 'package:tsdm_client/features/post/widgets/activity_dialog.dart';
+import 'package:tsdm_client/features/post/widgets/cron_publish_dialog.dart';
+import 'package:tsdm_client/features/post/widgets/debate_dialog.dart';
+import 'package:tsdm_client/features/post/widgets/hongbao_dialog.dart';
 import 'package:tsdm_client/features/post/widgets/input_price_dialog.dart';
+import 'package:tsdm_client/features/post/widgets/leave_edit_dialog.dart';
+import 'package:tsdm_client/features/post/widgets/poll_settings_dialog.dart';
+import 'package:tsdm_client/features/post/widgets/reward_price_dialog.dart';
+import 'package:tsdm_client/features/post/widgets/sec_check_dialog.dart';
 import 'package:tsdm_client/features/post/widgets/select_perm_dialog.dart';
 import 'package:tsdm_client/features/settings/bloc/settings_bloc.dart';
+import 'package:tsdm_client/features/share_receive/models/shared_content.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/routes/screen_paths.dart';
@@ -116,9 +142,19 @@ class PostEditPage extends StatefulWidget {
     required this.tid,
     required this.pid,
     this.pollOffered = false,
+    this.threadKind = ThreadKind.normal,
     this.transfer,
+    this.mentionSuggestions,
+    this.sharedImages,
     super.key,
   });
+
+  /// The kind of new thread to write (the forum's form of that kind); only used for new threads.
+  final ThreadKind threadKind;
+
+  /// Images another app shared to this one, to upload as attachments of this new thread once its form is loaded
+  /// (paths of copies in this app's cache, deleted after the upload); null or empty when none.
+  final List<String>? sharedImages;
 
   /// The forum page offered a poll creation link to the current account; only used for new threads.
   ///
@@ -127,6 +163,9 @@ class PostEditPage extends StatefulWidget {
 
   /// Subject and body carried over from the poll editor.
   final ThreadModeTransfer? transfer;
+
+  /// The authors of the thread a floor is edited from, suggested for a typed `@`; null when not opened from a thread.
+  final List<MentionSuggestion>? mentionSuggestions;
 
   /// Reason to enter [PostEditPage].
   ///
@@ -210,10 +249,38 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
   /// Only used when editing thread, not other floors' posts.
   int? price;
 
+  /// The activity of a new activity thread, null until set.
+  ActivityEdits? activity;
+
+  /// The debate of a new debate thread, null until set.
+  DebateEdits? debate;
+
+  /// The poll settings of the first post of a poll edited, as served until the member changes them.
+  PollEdits? poll;
+
+  /// When the new thread is published, null for now.
+  DateTime? cronPublish;
+
+  /// The reward credits of a new reward thread, null until set; the price of an open reward thread edited, raised by
+  /// the member.
+  int? rewardPrice;
+
+  /// The red packet of a new red packet thread, null until set.
+  HongbaoEdits? hongbao;
+
   late BBCodeEditorController bbcodeController;
 
   bool initialized = false;
   bool _confirming = false;
+
+  /// The shared images were taken (uploading, or done): they are uploaded once, whatever rebuilds the page.
+  bool _sharedImagesTaken = false;
+
+  /// A shared image is on its way to the forum.
+  bool _uploadingSharedImages = false;
+
+  /// The attachments uploaded for this thread, by aid ([PostFormEdits.attachNew]).
+  final _attachNew = <int>[];
 
   /// Content switched in from the poll editor by the same account, dropped on any identity change.
   ThreadModeTransfer? _transfer;
@@ -231,8 +298,415 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
   /// * Editing thread draft.
   _UploadMethod uploadMethod = _UploadMethod.notYet;
 
+  /// The title and the post as loaded into the editor (an edit of an existing post or draft): leaving asks only when
+  /// they changed. A new thread asks whenever there is anything.
+  String? _loadedTitle;
+  String? _loadedBody;
+
+  /// The leave dialog is up.
+  bool _leaving = false;
+
+  /// The local draft of this editor, kept on this device while it is written ([LocalDraftStore]): `thread:<fid>` for a
+  /// new thread, `edit:<pid>` for an edit; null without a post to key it by.
+  late final LocalDraftKey? _draftKey = switch (widget.editType) {
+    PostEditType.newThread => LocalDraftKey.newThread(widget.fid),
+    PostEditType.editPost || PostEditType.editDraft => widget.pid == null ? null : LocalDraftKey.edit(widget.pid!),
+  };
+
+  /// The account the local draft belongs to: the one this editor opened for.
+  int? _draftUid;
+
+  /// Writes the local draft.
+  late final DraftAutosaver _drafts = DraftAutosaver(read: _draftSnapshot);
+
+  /// The kind of new thread this editor is switching to ([_switchKind]): the draft it writes last is that editor's.
+  ThreadKind? _leavingFor;
+
+  /// Nothing more is kept for the local draft: sent, discarded, or another account took over.
+  bool _draftStopped = false;
+
+  /// The stored draft was looked for, once the form loaded.
+  bool _draftLooked = false;
+
+  /// A name of the target for the list of drafts: the forum of a new thread, the title of an edited thread.
+  String? _draftTitle;
+
+  /// When the forum takes the next post after it refused one as too soon (`post_flood_ctrl`), null when it does.
+  DateTime? _retryAt;
+
+  /// Ticks while [_retryAt] is ahead.
+  Timer? _countdown;
+
+  /// The dialog asking for the captcha or the security question is up.
+  bool _verifying = false;
+
+  /// Sending failed after the request left: the local draft is marked as maybe sent.
+  bool _draftMaybeSent = false;
+
+  /// The form tells the forum's size limits of the post: its size is shown while it changes.
+  bool _bodyCounted = false;
+
+  /// What the editor holds as its local draft, nothing while the form is not loaded or nothing changed.
+  DraftSnapshot? _draftSnapshot() {
+    final uid = _draftUid;
+    final key = _draftKey;
+    if (uid == null || key == null || _draftStopped || !initialized) {
+      return null;
+    }
+    if (!_hasUnsentContent) {
+      return (uid: uid, key: key, draft: null);
+    }
+    return (
+      uid: uid,
+      key: key,
+      draft: LocalDraft(
+        key: key,
+        body: bbcodeController.toForumBBCode(),
+        delta: bbcodeController.toQuillDelta(),
+        subject: threadTitleController.text,
+        updatedAt: DateTime.now(),
+        fid: widget.fid,
+        tid: widget.tid,
+        title: _draftTitle,
+        typeId: threadType?.typeID,
+        maybeSent: _draftMaybeSent,
+        // Written for every new thread, `normal` too: a draft without it was written before the kinds were kept.
+        threadKind: widget.editType == PostEditType.newThread ? (_leavingFor ?? widget.threadKind).name : null,
+        rewardPrice: rewardPrice,
+        hongbao: hongbao?.toJson(),
+      ),
+    );
+  }
+
+  /// Offer the draft kept for this editor, once its form is in the editor.
+  Future<void> _offerDraft() async {
+    final uid = _draftUid;
+    final key = _draftKey;
+    if (_draftLooked || uid == null || key == null || !initialized) {
+      return;
+    }
+    _draftLooked = true;
+    // The editor opened with the draft restored in the editor of another kind: it is this one's.
+    if (_transfer?.restoredDraft ?? false) {
+      return;
+    }
+    await _drafts.offerStored(uid, (k) => k == key);
+  }
+
+  /// Put the offered draft into the editor: its title, its post and its thread type.
+  ///
+  /// The draft of an edit is put over the post as loaded now: asked first, with the time the draft was saved (the post
+  /// may have been edited on the forum since).
+  Future<void> _restoreDraft(BuildContext context, PostEditState state) async {
+    final offered = _drafts.offer.value?.draft;
+    if (offered == null) {
+      return;
+    }
+    if (offered.key.kind == LocalDraftKind.edit) {
+      final tr = context.t.localDraft;
+      final ok = await showQuestionDialog(
+        context: context,
+        title: tr.restoreEditTitle,
+        message: tr.restoreEditMessage(time: offered.updatedAt.yyyyMMDDHHMM()),
+      );
+      if (!(ok ?? false) || !mounted || !context.mounted) {
+        return;
+      }
+    }
+    final draft = _drafts.takeOffer();
+    if (draft == null) {
+      return;
+    }
+    // A new thread written as another kind: its editor opens with it (this one writes nothing more over it). A draft
+    // written before the kinds were kept is restored here.
+    final kind = ThreadKind.fromQuery(draft.threadKind);
+    if (widget.editType == PostEditType.newThread &&
+        draft.threadKind != null &&
+        kind != widget.threadKind &&
+        _kindsOffered(state).contains(kind) &&
+        _draftUid != null &&
+        _switchKind(
+          context,
+          kind,
+          transfer: ThreadModeTransfer(
+            uid: _draftUid!,
+            fid: widget.fid,
+            subject: draft.subject ?? '',
+            body: draft.body,
+            delta: draft.delta,
+            typeId: draft.typeId,
+            attachNew: List.of(_attachNew),
+            rewardPrice: draft.rewardPrice ?? rewardPrice,
+            hongbao: HongbaoEdits.fromJson(draft.hongbao) ?? hongbao,
+            restoredDraft: true,
+          ),
+        )) {
+      _draftStopped = true;
+      return;
+    }
+    setState(() {
+      // The settings of the kinds: the reward price of an edit only where the member may raise it.
+      if (widget.editType == PostEditType.newThread) {
+        rewardPrice = draft.rewardPrice ?? rewardPrice;
+      } else if ((state.content?.form?.reward, draft.rewardPrice) case (
+        final info?,
+        final int kept,
+      ) when info.raising) {
+        // Never below the price now: it may have been raised since the draft was kept.
+        rewardPrice = kept > info.current! ? kept : info.current;
+      }
+      if (widget.editType == PostEditType.newThread) {
+        hongbao = HongbaoEdits.fromJson(draft.hongbao) ?? hongbao;
+      }
+      if (draft.subject case final String subject) {
+        threadTitleController.text = subject;
+        threadTitleRestLength =
+            (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength) -
+            (state.content?.titleLength(subject) ?? subject.parseUtf8Length);
+      }
+      final type = state.content?.threadTypeList?.firstWhereOrNull((e) => e.typeID == draft.typeId);
+      if (draft.typeId != null && type != null) {
+        threadType = type;
+        threadTypeController.text = type.name;
+      }
+    });
+    bbcodeController.loadDraft(
+      draft.body,
+      delta: draft.delta,
+      parse: context.read<SettingsBloc>().state.settingsMap.enableEditorBBCodeParser,
+    );
+    _drafts.flush();
+  }
+
+  /// Keep nothing more for the local draft, and delete it when [delete] (sent, discarded).
+  void _stopDraft({required bool delete}) {
+    if (_draftStopped) {
+      return;
+    }
+    final uid = _draftUid;
+    final key = _draftKey;
+    if (delete && uid != null && key != null) {
+      _drafts.sent(uid, key);
+    } else {
+      _drafts.flush();
+    }
+    _draftStopped = true;
+  }
+
+  /// The post changed: written soon, its size against the forum's limits shown.
+  void _onBodyChanged() {
+    if (mounted && _bodyCounted) {
+      // The post is also set while the page builds (the form loaded): shown after that frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  /// Seconds left before the forum takes the next post, 0 when it does.
+  int get _waitingSeconds {
+    final retryAt = _retryAt;
+    if (retryAt == null) {
+      return 0;
+    }
+    final left = retryAt.difference(DateTime.now());
+    return left <= Duration.zero ? 0 : (left.inMilliseconds / 1000).ceil();
+  }
+
+  /// The forum refused the post as too soon after the previous one: the send buttons wait the time it said.
+  void _waitForFlood(int seconds) {
+    _retryAt = FloodControl.retryAt(_draftUid, seconds);
+    _countdown?.cancel();
+    _countdown = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_waitingSeconds <= 0) {
+        timer.cancel();
+        _countdown = null;
+        _retryAt = null;
+      }
+      setState(() {});
+    });
+    setState(() {});
+  }
+
+  /// Whether the editor holds content not sent yet that leaving would drop.
+  bool get _hasUnsentContent {
+    final title = threadTitleController.text;
+    final body = bbcodeController.toForumBBCode();
+    if (widget.editType == PostEditType.newThread) {
+      return title.trim().isNotEmpty || body.trim().isNotEmpty;
+    }
+    // Still loading: nothing typed yet.
+    if (_loadedTitle == null || _loadedBody == null) {
+      return false;
+    }
+    return title != _loadedTitle || body != _loadedBody;
+  }
+
+  /// Whether the poll settings were changed in their dialog: not kept in the local draft, they are lost when leaving.
+  bool get _pollChanged => poll != null && poll != context.read<PostEditBloc>().state.content?.form?.pollEdit?.served;
+
+  /// Leave the page (the back button or gesture): with content not sent yet ([_hasUnsentContent], [_pollChanged])
+  /// while it is being edited, ask first whether to discard it, save it as a draft (when the form allows it) or keep
+  /// editing. Used to drop the content right away.
+  Future<void> _onLeave(BuildContext context) async {
+    if (_leaving) {
+      return;
+    }
+    final bloc = context.read<PostEditBloc>();
+    if (_confirming) {
+      // About to send: the confirmation decides.
+      return;
+    }
+    if (bloc.state.status == PostEditStatus.uploading) {
+      // Sending: leaving now hides whether it was stored, the user decides.
+      final tr = context.t.postEditPage.leaveDialog;
+      _leaving = true;
+      final bool? leave;
+      try {
+        leave = await showQuestionDialog(context: context, title: tr.title, message: tr.sending, dangerous: true);
+      } finally {
+        _leaving = false;
+      }
+      if ((leave ?? false) && context.mounted) {
+        context.pop();
+      }
+      return;
+    }
+    final editing =
+        bloc.state.content != null &&
+        (bloc.state.status == PostEditStatus.editing || bloc.state.status == PostEditStatus.failedToUpload);
+    if (!editing || !(_hasUnsentContent || _pollChanged)) {
+      context.pop();
+      return;
+    }
+    // Not offered while shared images are still going up: saving would be refused without a word (see _onFinish).
+    final canSaveDraft =
+        widget.editType.isEditingDraft &&
+        (bloc.state.content?.canSaveDraft ?? false) &&
+        bloc.canSubmit &&
+        !_uploadingSharedImages;
+    _leaving = true;
+    final LeaveEditChoice choice;
+    try {
+      choice = await showLeaveEditDialog(
+        context,
+        canSaveDraft: canSaveDraft,
+        // Only the title and the post are kept on this device: nothing to keep when only the poll settings changed.
+        keepsLocalDraft:
+            _hasUnsentContent &&
+            _draftKey != null &&
+            _draftUid != null &&
+            !_draftStopped &&
+            LocalDraftStore.app != null,
+      );
+    } finally {
+      _leaving = false;
+    }
+    if (!context.mounted) {
+      return;
+    }
+    switch (choice) {
+      case LeaveEditChoice.discard:
+        // Discarded: the local draft goes too.
+        _stopDraft(delete: true);
+        context.pop();
+      case LeaveEditChoice.keepDraft:
+        // Written when the page goes.
+        context.pop();
+      case LeaveEditChoice.saveDraft:
+        // Leaves by itself once the draft is saved; stays with the content when saving failed.
+        await _onFinish(context, bloc.state, saveDraft: true, confirmed: true);
+      case LeaveEditChoice.keepEditing:
+        break;
+    }
+  }
+
   static String _formatDataUrl({required String fid, required String tid, required String pid}) {
     return '$baseUrl/forum.php?mod=post&action=edit&fid=$fid&tid=$tid&pid=$pid';
+  }
+
+  /// Upload the images another app shared ([PostEditPage.sharedImages]) as attachments of this thread, one after the
+  /// other, each shown in the post at the cursor as the website's image list inserts it (`[attachimg]aid[/attachimg]`)
+  /// and bound to the post when it is published ([ThreadPubPostThread.attachNew]).
+  ///
+  /// Only the form of the forum's app API offers the upload ([PostForm.attachmentUpload]); a page without it, or a
+  /// forum where the account may not upload images, is told so and the images are dropped. The shared files are
+  /// deleted either way.
+  Future<void> _uploadSharedImages(PostEditState state, List<String> paths) async {
+    final upload = state.content?.form?.attachmentUpload;
+    if (!mounted) {
+      discardSharedFiles(paths);
+      return;
+    }
+    final tr = context.t.shareReceive;
+    if (upload == null || !upload.image) {
+      discardSharedFiles(paths);
+      showSnackBar(context: context, message: tr.uploadUnavailable);
+      return;
+    }
+    final repo = context.read<PostEditRepository>();
+    setState(() => _uploadingSharedImages = true);
+    // What went wrong, told once at the end: one failure with its reason, several as their count.
+    final failures = <String>[];
+    try {
+      for (final path in paths) {
+        if (!mounted || !repo.isCurrent) {
+          break;
+        }
+        final result = await repo.uploadImage(upload, path).run();
+        if (!mounted) {
+          break;
+        }
+        result.match(
+          (e) {
+            handle(e);
+            final name = path.split(RegExp(r'[/\\]')).last;
+            failures.add(switch (e) {
+              AttachmentUploadFailedException(reason: AttachmentUploadRefusal.type) => tr.uploadRefusedType(name: name),
+              AttachmentUploadFailedException(reason: AttachmentUploadRefusal.size) => tr.uploadRefusedSize(
+                name: name,
+                limit: upload.maxKb ?? 0,
+              ),
+              AttachmentUploadFailedException(:final code?) => tr.uploadFailed(code: '$code'),
+              _ => tr.uploadFailed(code: ''),
+            });
+          },
+          (aid) {
+            _attachNew.add(aid);
+            bbcodeController.insertTextAtCursor('${attachmentImageBBCode(aid)}\n');
+          },
+        );
+      }
+    } finally {
+      discardSharedFiles(paths);
+      if (mounted) {
+        setState(() => _uploadingSharedImages = false);
+        if (failures.length == 1) {
+          showSnackBar(context: context, message: failures.single);
+        } else if (failures.length > 1) {
+          showSnackBar(
+            context: context,
+            message: tr.uploadFailedCount(count: failures.length),
+          );
+        }
+      }
+    }
+  }
+
+  /// Continue this new thread or this edit on the website.
+  Future<void> _openBrowser(BuildContext context) async {
+    final url = widget.editType == PostEditType.newThread
+        ? PostEditRepository.newThreadPageUrl(widget.fid, kind: widget.threadKind)
+        : _formatDataUrl(fid: widget.fid, tid: widget.tid!, pid: widget.pid!);
+    try {
+      await openInExternalBrowser(Uri.parse(url));
+    } on Object {
+      if (context.mounted) showSnackBar(context: context, message: context.t.general.failedToLoad);
+    }
   }
 
   EditorDocumentMetadata collectThreadMetata() {
@@ -321,13 +795,137 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
     return disabledFeatures;
   }
 
-  Future<void> _onFinish(BuildContext context, PostEditState state, {bool saveDraft = false}) async {
+  /// Why the forum would refuse the type, the title or the post of a post form of its app API as they are (plugin
+  /// 2.9.0), checked before anything is confirmed or sent: a type the forum requires, the title (escaped then
+  /// `dstrlen`: an ASCII character 1, any other 2, `&` 5) against its limits, the post in UTF-8 bytes (the minimum
+  /// without quotes). Null when nothing is wrong, and always for the web page, which tells none of this (the forum keeps
+  /// the last word).
+  String? _formIssue(BuildContext context, PostEditContent content) {
+    final form = content.form;
+    if (form == null) return null;
+    final tr = context.t.postEditPage;
+    final title = threadTitleController.text;
+    final message = bbcodeController.toForumBBCode();
+    final opening = form.action == 'newthread' || form.first;
+    // The forum requires a type of an ordinary thread when the forum says so (a new thread, its first post edited).
+    if (opening && form.typeInput != null && form.typeRequired && (int.tryParse(threadType?.typeID ?? '') ?? 0) <= 0) {
+      return tr.threadTypeShouldNotBeEmpty;
+    }
+    if (form.subject != null) {
+      if (opening && discuzTrim(title).isEmpty) return tr.titleShouldNotBeEmpty;
+      if (content.titleTooLong(title, _defaultThreadTitleMaxlength)) {
+        return tr.titleTooLongLimit(limit: form.subjectLimit);
+      }
+      if (content.titleTooShort(title)) return tr.titleTooShortLimit(limit: form.subjectMin ?? 0);
+    }
+    if (content.messageTooShort(message)) return tr.threadBodyTooShortLimit(limit: form.messageMin ?? 0);
+    if (content.messageTooLong(message)) return tr.threadBodyTooLongLimit(limit: form.messageMax ?? 0);
+    return null;
+  }
+
+  /// [confirmed]: the user already chose to save the draft (when leaving the page), not asked again.
+  ///
+  /// A new thread the forum asks a captcha or a security question for ([PostEditContent.secCheck], or [check] when it
+  /// refused the last attempt for them, [wrongAnswer] when the answers sent were not taken) is sent with the answers the
+  /// user gives first; the post is not sent when the user gives none. Asked again after such a refusal, the
+  /// confirmations of the first attempt are not asked again.
+  Future<void> _onFinish(
+    BuildContext context,
+    PostEditState state, {
+    bool saveDraft = false,
+    bool confirmed = false,
+    SecCheck? check,
+    bool wrongAnswer = false,
+  }) async {
     final bloc = context.read<PostEditBloc>();
     if (_confirming || !bloc.canSubmit || !identical(state.content, bloc.state.content)) return;
+    // Shared images still going up: sent now, the post would miss them and the rest would be uploaded for nothing.
+    if (_uploadingSharedImages) return;
     if (saveDraft && !state.content!.canSaveDraft) return;
+    if (_waitingSeconds > 0) return;
+    final issue = _formIssue(context, state.content!);
+    if (issue != null) {
+      showSnackBar(context: context, message: issue);
+      return;
+    }
+    // A reward thread needs its price (an edit only a price the forum takes: raised, within the group's range, paid).
+    if (state.content!.form?.reward case final info? when info.editable) {
+      if (info.check(rewardPrice) case final problem?) {
+        showSnackBar(
+          context: context,
+          message: rewardPrice == null
+              ? context.t.postEditPage.rewardDialog.required
+              : rewardIssueText(context, info, problem),
+        );
+        return;
+      }
+    }
+    // An activity needs its time, category and place, a debate its two points (an edit too: the forum checks them
+    // again), a red packet thread its packet: the forum refuses the post without them.
+    final form = state.content!.form;
+    if (form?.activity case final info?) {
+      final set = activity;
+      final problem = set?.check(info);
+      if (set == null || problem != null) {
+        showSnackBar(
+          context: context,
+          message: set == null
+              ? context.t.postEditPage.activityDialog.required
+              : activityIssueText(context, info, problem!),
+        );
+        return;
+      }
+    }
+    if (form?.debate != null) {
+      final set = debate;
+      final problem = set?.check(DateTime.now());
+      if (set == null || problem != null) {
+        showSnackBar(
+          context: context,
+          message: switch (problem) {
+            _ when set == null => context.t.postEditPage.debateDialog.required,
+            // The debate edited has ended (its end as it is): posted with it, the forum refuses the whole edit.
+            DebateIssue.endPassed
+                when widget.editType == PostEditType.editPost && set.end == form?.debate?.served?.end =>
+              context.t.postEditPage.debateDialog.ended,
+            _ => debateIssueText(context, problem!),
+          },
+        );
+        return;
+      }
+    }
+    if ((form?.pollEdit, poll) case (final info?, final set?)) {
+      if (set.check(info) case final problem?) {
+        showSnackBar(context: context, message: pollEditIssueText(context, info, problem));
+        return;
+      }
+    }
+    if (widget.editType == PostEditType.newThread) {
+      // A time passed meanwhile would publish the thread now.
+      if (cronPublish case final at? when !saveDraft && (form?.offersCronPublish ?? false)) {
+        if (!cronPublishAhead(at, DateTime.now())) {
+          showSnackBar(context: context, message: context.t.postEditPage.cronPublish.passed);
+          return;
+        }
+      }
+      // A draft is saved without the packet (PostForm.bodyWith): nothing to check for it.
+      if (form?.hongbao case final info? when !saveDraft) {
+        final packet = hongbao;
+        if (packet == null) {
+          showSnackBar(context: context, message: context.t.postEditPage.hongbaoDialog.required);
+          return;
+        }
+        if (packet.check(info) case final problem?) {
+          showSnackBar(context: context, message: hongbaoIssueText(context, info, packet, problem));
+          return;
+        }
+      }
+    }
+    // Asked after the forum refused the post: the confirmations were given for it already.
+    final again = check != null;
     setState(() => _confirming = true);
     try {
-      if (widget.editType.isEditingDraft) {
+      if (widget.editType.isEditingDraft && !(saveDraft && confirmed) && !again) {
         final tr = context.t.postEditPage.threadPublish;
         final ret = await showQuestionDialog(
           context: context,
@@ -358,8 +956,28 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
           return;
         }
       }
+      // The forum sends new posts of this forum to its moderators first (plugin 2.9.0, the form's `moderated`): say so
+      // before anything is sent. A draft stays private and is not reviewed.
+      if (!saveDraft && state.content!.moderated && !again) {
+        if (!context.mounted) return;
+        final tr = context.t.postEditPage.moderated;
+        final ret = await showQuestionDialog(context: context, title: tr.title, message: tr.message);
+        if (ret != true) {
+          return;
+        }
+      }
       if (!context.mounted || !bloc.canSubmit || !identical(state.content, bloc.state.content)) {
         return;
+      }
+
+      // The captcha or the security question the forum asks for a new thread (an edit is never checked).
+      SecCheckAnswer? verification;
+      final asked = check ?? state.content!.secCheck;
+      if (widget.editType == PostEditType.newThread && asked != null) {
+        verification = await _askVerification(context, asked, wrongAnswer: wrongAnswer);
+        if (verification == null || !context.mounted || !bloc.canSubmit) {
+          return;
+        }
       }
 
       final event = switch (widget.editType) {
@@ -381,6 +999,11 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
           save: saveDraft ? '1' : '',
           perm: threadPerm?.perm,
           price: price,
+          draftKey: _draftKey?.value,
+          rewardPrice: (state.content!.form?.reward?.editable ?? false) ? rewardPrice : null,
+          activity: state.content!.form?.activity == null ? null : activity,
+          debate: state.content!.form?.debate == null ? null : debate,
+          poll: state.content!.form?.pollEdit == null ? null : poll,
         ),
         PostEditType.newThread => ThreadPubPostThread(
           ThreadPublishInfo(
@@ -398,6 +1021,16 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
             save: saveDraft ? '1' : '',
             options: additionalOptionsMap?.values.toList() ?? [],
           ),
+          verification: verification,
+          draftKey: _draftKey?.value,
+          // Only the uploads the post still shows; one the member deleted from it is left unused.
+          attachNew: attachmentsInMessage(bbcodeController.toForumBBCode(), _attachNew),
+          rewardPrice: state.content!.form?.reward == null ? null : rewardPrice,
+          hongbao: state.content!.form?.hongbao == null ? null : hongbao,
+          activity: state.content!.form?.activity == null ? null : activity,
+          debate: state.content!.form?.debate == null ? null : debate,
+          // A draft saved is no publication: not scheduled.
+          cronPublish: (state.content!.form?.offersCronPublish ?? false) && !saveDraft ? cronPublish : null,
         ),
       };
       if (saveDraft) {
@@ -408,6 +1041,24 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
       context.read<PostEditBloc>().add(event);
     } finally {
       if (mounted) setState(() => _confirming = false);
+    }
+  }
+
+  /// Ask the user for the captcha and the security question of [check]; null when not answered.
+  Future<SecCheckAnswer?> _askVerification(BuildContext context, SecCheck check, {bool wrongAnswer = false}) async {
+    if (_verifying) {
+      return null;
+    }
+    _verifying = true;
+    try {
+      return await showSecCheckDialog(
+        context,
+        check,
+        wrongAnswer: wrongAnswer,
+        browserUrl: PostEditRepository.newThreadPageUrl(widget.fid, kind: widget.threadKind),
+      );
+    } finally {
+      _verifying = false;
     }
   }
 
@@ -558,11 +1209,26 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
 
     // Always add title no matter thread type presents or not.
     // All thread floors have a legal "subject" here.
+    //
+    // With the post form of the forum's app API the title counts as the forum counts it (an ASCII character 1, any
+    // other 2) against its limit, in the error color when it is outside the limits; the web page tells no limit, the
+    // bytes left of the editor's own limit are shown.
+    final form = state.content?.form;
+    final title = threadTitleController.text;
+    final titleOutOfLimits =
+        form != null &&
+        form.subject != null &&
+        title.isNotEmpty &&
+        ((state.content?.titleTooLong(title, _defaultThreadTitleMaxlength) ?? false) ||
+            (state.content?.titleTooShort(title) ?? false));
     final titleField = TextFormField(
       controller: threadTitleController,
       decoration: InputDecoration(
         labelText: tr.title,
-        suffixText: ' $threadTitleRestLength',
+        suffixText: form != null && form.subject != null
+            ? ' ${tr.titleCount(count: discuzSubjectLength(title), max: form.subjectLimit)}'
+            : ' $threadTitleRestLength',
+        suffixStyle: titleOutOfLimits ? TextStyle(color: Theme.of(context).colorScheme.error) : null,
         suffixIcon: IconButton(
           icon: const Icon(Icons.info_outline),
           onPressed: () async => showMessageSingleButtonDialog(
@@ -575,7 +1241,8 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
       onChanged: (value) {
         setState(() {
           threadTitleRestLength =
-              (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength) - value.parseUtf8Length;
+              (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength) -
+              (state.content?.titleLength(value) ?? value.parseUtf8Length);
         });
       },
       validator: (v) {
@@ -586,11 +1253,12 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
         if (v == null) {
           return tr.titleShouldNotBeEmpty;
         }
-        final titleLength = v.parseUtf8Length;
+        final titleLength = state.content?.titleLength(v) ?? v.parseUtf8Length;
         if (titleLength <= 0) {
           return tr.titleShouldNotBeEmpty;
         }
-        if (titleLength >= (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength)) {
+        if (state.content?.titleTooLong(v, _defaultThreadTitleMaxlength) ??
+            titleLength >= _defaultThreadTitleMaxlength) {
           return tr.titleTooLong;
         }
         return null;
@@ -714,7 +1382,139 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
               },
             ),
           ),
+        if (state.content?.form?.reward case final info? when info.editable)
+          Badge(
+            label: Text('${rewardPrice ?? ''}'),
+            textStyle: Theme.of(context).textTheme.labelSmall,
+            offset: const Offset(-4, 4),
+            isLabelVisible: rewardPrice != null,
+            child: IconButton(
+              icon: const Icon(Icons.emoji_events_outlined),
+              selectedIcon: const Icon(Icons.emoji_events),
+              isSelected: rewardPrice != null,
+              tooltip: context.t.postEditPage.rewardDialog.entryTooltip,
+              onPressed: () async {
+                final set = await showRewardPriceDialog(context, info, rewardPrice);
+                if (set != null && mounted) {
+                  setState(() => rewardPrice = set);
+                  _drafts.changed();
+                }
+              },
+            ),
+          ),
+        if (state.content?.form?.hongbao case final info?)
+          Badge(
+            label: Text('${hongbao?.total ?? ''}'),
+            textStyle: Theme.of(context).textTheme.labelSmall,
+            offset: const Offset(-4, 4),
+            isLabelVisible: hongbao?.total != null,
+            child: IconButton(
+              icon: const Icon(Icons.card_giftcard_outlined),
+              selectedIcon: const Icon(Icons.card_giftcard),
+              isSelected: hongbao != null,
+              tooltip: context.t.postEditPage.hongbaoDialog.entryTooltip,
+              onPressed: () async {
+                final set = await showHongbaoDialog(context, info, hongbao);
+                if (set != null && mounted) {
+                  setState(() => hongbao = set);
+                  _drafts.changed();
+                }
+              },
+            ),
+          ),
+        if (state.content?.form?.activity case final info?)
+          IconButton(
+            icon: const Icon(Icons.event_outlined),
+            selectedIcon: const Icon(Icons.event),
+            isSelected: activity != null,
+            tooltip: context.t.postEditPage.activityDialog.entryTooltip,
+            onPressed: () async {
+              final set = await showActivityDialog(context, info, activity);
+              if (set != null && mounted) {
+                setState(() => activity = set);
+              }
+            },
+          ),
+        if ((state.content?.form?.pollEdit, poll) case (final info?, final set?))
+          IconButton(
+            icon: const Icon(Icons.poll_outlined),
+            selectedIcon: const Icon(Icons.poll),
+            isSelected: set != info.served,
+            tooltip: context.t.postEditPage.pollDialog.entryTooltip,
+            onPressed: () async {
+              final changed = await showPollSettingsDialog(context, info, set);
+              if (changed != null && mounted) {
+                setState(() => poll = changed);
+              }
+            },
+          ),
+        if (state.content?.form case final form?
+            when widget.editType == PostEditType.newThread && form.offersCronPublish)
+          IconButton(
+            icon: const Icon(Icons.schedule_outlined),
+            selectedIcon: const Icon(Icons.schedule),
+            isSelected: cronPublish != null,
+            tooltip: context.t.postEditPage.cronPublish.entryTooltip,
+            onPressed: () async {
+              final set = await showCronPublishDialog(context, cronPublish);
+              if (set != null && mounted) {
+                setState(() => cronPublish = set.at);
+              }
+            },
+          ),
+        if (state.content?.form?.debate case final info?)
+          IconButton(
+            icon: const Icon(Icons.balance_outlined),
+            selectedIcon: const Icon(Icons.balance),
+            isSelected: debate != null,
+            tooltip: context.t.postEditPage.debateDialog.entryTooltip,
+            onPressed: () async {
+              final set = await showDebateDialog(context, info, debate);
+              if (set != null && mounted) {
+                setState(() => debate = set);
+              }
+            },
+          ),
       ],
+    );
+  }
+
+  /// The size of the post as the forum counts it against its limits (the post form of its app API), in the error
+  /// color outside of them; nothing for the web page, which tells no limit.
+  Widget _buildBodyLength(BuildContext context, PostEditState state, EdgeInsets horizontal) {
+    final content = state.content;
+    final limits = content?.messageLimits;
+    if (content == null || limits == null) {
+      return sizedBoxEmpty;
+    }
+    final message = bbcodeController.toForumBBCode();
+    if (message.trim().isEmpty) {
+      return sizedBoxEmpty;
+    }
+    final tr = context.t.postEditPage;
+    final count = limits.bytesOf(message);
+    final String text;
+    var invalid = true;
+    if (content.messageTooLong(message)) {
+      text = tr.threadBodyTooLongLimit(limit: limits.max ?? 0);
+    } else if (content.messageTooShort(message)) {
+      text = tr.threadBodyTooShortLimit(limit: limits.min ?? 0);
+    } else {
+      invalid = false;
+      final max = limits.max;
+      text = max == null ? tr.bodyCountNoMax(count: count) : tr.bodyCount(count: count, max: max);
+    }
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: horizontal.add(const EdgeInsets.fromLTRB(4, 0, 4, 4)),
+      child: Text(
+        text,
+        key: const ValueKey('post-edit-body-length'),
+        textAlign: TextAlign.end,
+        style: Theme.of(
+          context,
+        ).textTheme.labelSmall?.copyWith(color: invalid ? colorScheme.error : colorScheme.outline),
+      ),
     );
   }
 
@@ -722,23 +1522,33 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
     if (state.status == PostEditStatus.identityChanged) {
       return AppStateView(icon: Icons.manage_accounts_outlined, message: context.t.draftBox.accountChanged);
     }
-    if (state.status == PostEditStatus.unsupported) {
-      return AppStateView(
-        icon: Icons.web_outlined,
-        message: context.t.draftBox.unsupported,
+    if (state.status == PostEditStatus.unsupported || state.status == PostEditStatus.verificationRequired) {
+      // Switched in from the poll editor: what the member typed there stays to read and copy for the website.
+      final transfer = _transfer;
+      final transferred = transfer != null && (transfer.subject.trim().isNotEmpty || transfer.body.trim().isNotEmpty);
+      final view = AppStateView(
+        icon: state.status == PostEditStatus.verificationRequired ? Icons.verified_user_outlined : Icons.web_outlined,
+        message: state.status == PostEditStatus.verificationRequired
+            ? context.t.postEditPage.verificationRequired
+            : context.t.draftBox.unsupported,
         action: TextButton.icon(
           icon: const Icon(Icons.open_in_browser_outlined),
-          onPressed: () async {
-            final url = widget.editType == PostEditType.newThread
-                ? '$baseUrl/forum.php?mod=post&action=newthread&fid=${widget.fid}'
-                : _formatDataUrl(fid: widget.fid, tid: widget.tid!, pid: widget.pid!);
-            try {
-              await openInExternalBrowser(Uri.parse(url));
-            } on Object {
-              if (context.mounted) showSnackBar(context: context, message: context.t.general.failedToLoad);
-            }
-          },
+          onPressed: () async => _openBrowser(context),
           label: Text(context.t.draftBox.openBrowser),
+        ),
+        scrollable: !transferred,
+      );
+      if (!transferred) {
+        return view;
+      }
+      return SingleChildScrollView(
+        padding: edgeInsetsL16R16B12,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            view,
+            _TransferredContent(transfer: transfer),
+          ],
         ),
       );
     }
@@ -746,6 +1556,8 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
       return const CenteredCircularIndicator();
     }
     if (state.status == PostEditStatus.failedToLoad) {
+      // The forum's message shown instead of the form, when it told one (plugin 2.9.0: no permission, a password
+      // forum, an edit time limit…).
       return buildRetryButton(context, () {
         switch (widget.editType) {
           case PostEditType.editPost || PostEditType.editDraft:
@@ -761,14 +1573,21 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
               ),
             );
           case PostEditType.newThread:
-            context.read<PostEditBloc>().add(ThreadPubFetchInfoRequested(fid: widget.fid));
+            context.read<PostEditBloc>().add(ThreadPubFetchInfoRequested(fid: widget.fid, kind: widget.threadKind));
         }
-      });
+      }, message: state.errorText);
     }
 
     if (!initialized) {
       final data = _transfer?.body ?? state.content?.data;
-      if (data != null) {
+      if (_transfer case ThreadModeTransfer(:final body, :final String delta)) {
+        // The thread editor's own document: what BBCode does not carry comes back as well.
+        bbcodeController.loadDraft(
+          body,
+          delta: delta,
+          parse: context.read<SettingsBloc>().state.settingsMap.enableEditorBBCodeParser,
+        );
+      } else if (data != null) {
         if (context.read<SettingsBloc>().state.settingsMap.enableEditorBBCodeParser) {
           final delta = parseBBCodeTextToDelta(normalizeBlockMarkerNesting(data));
           bbcodeController.setDocumentFromDelta(delta);
@@ -776,7 +1595,13 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
           bbcodeController.setDocumentFromRawText(normalizeBlockMarkerNesting(data));
         }
       }
+      _loadedBody = bbcodeController.toForumBBCode();
       initialized = true;
+      final shared = widget.sharedImages;
+      if (!_sharedImagesTaken && shared != null && shared.isNotEmpty && widget.editType == PostEditType.newThread) {
+        _sharedImagesTaken = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _uploadSharedImages(state, shared));
+      }
     }
 
     // Title fields and the writing area stay at a readable width on wide windows; the bars under them keep the full
@@ -787,6 +1612,21 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // The draft kept on this device for this new thread or this edit.
+            ValueListenableBuilder<DraftOffer?>(
+              valueListenable: _drafts.offer,
+              builder: (context, offer, _) => offer == null
+                  ? sizedBoxEmpty
+                  : Padding(
+                      padding: horizontal.add(edgeInsetsT12),
+                      child: DraftOfferBanner(
+                        draft: offer.draft,
+                        onRestore: () async => _restoreDraft(context, state),
+                        onDiscard: _drafts.discardOffer,
+                      ),
+                    ),
+            ),
+            if (_uploadingSharedImages) const LinearProgressIndicator(minHeight: 2),
             Padding(padding: horizontal.add(edgeInsetsT12), child: _buildTitleRow(context, state)),
             // Post data editor.
             // Now we don't restrict the thread type and thread title, so it's better to focus on content area.
@@ -795,10 +1635,14 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
                 padding: horizontal.add(const EdgeInsets.symmetric(vertical: 12)),
                 child: EditorFrame(
                   focusNode: focusNode,
-                  child: RichEditor(autoFocus: true, controller: bbcodeController, editorFocusNode: focusNode),
+                  child: MentionSuggestionsScope(
+                    suggestions: widget.mentionSuggestions ?? const [],
+                    child: RichEditor(autoFocus: true, controller: bbcodeController, editorFocusNode: focusNode),
+                  ),
                 ),
               ),
             ),
+            _buildBodyLength(context, state, horizontal),
             if (isDesktop)
               ColoredBox(
                 color: Theme.of(context).colorScheme.surfaceContainerLow,
@@ -822,32 +1666,123 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
   }
 
   Future<void> _onListen(BuildContext context, PostEditState state) async {
+    _bodyCounted = state.content?.messageLimits != null;
+    final shared = widget.sharedImages;
+    if (!_sharedImagesTaken &&
+        shared != null &&
+        shared.isNotEmpty &&
+        (state.status == PostEditStatus.unsupported || state.status == PostEditStatus.verificationRequired)) {
+      // The editor never opens here: the shared images cannot be uploaded; the text stays to copy.
+      _sharedImagesTaken = true;
+      discardSharedFiles(shared);
+      showSnackBar(context: context, message: context.t.shareReceive.uploadUnavailable);
+    }
     if (state.status == PostEditStatus.identityChanged) {
+      // What was written stays the draft of the account it was written for; nothing goes to the next one.
+      _stopDraft(delete: false);
       _transfer = null;
+      _attachNew.clear();
       threadTitleController.clear();
       threadTypeController.clear();
       bbcodeController.setDocumentFromRawText('');
       additionalOptionsMap = null;
       return;
     }
+    if (state.status == PostEditStatus.failedToUpload && state.secCheck != null) {
+      // The forum asks for a captcha or a security question (or did not take the answers): asked, then sent again.
+      final check = state.secCheck!;
+      final saveDraft = uploadMethod == _UploadMethod.saveDraft;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!context.mounted) return;
+        await _onFinish(
+          context,
+          context.read<PostEditBloc>().state,
+          saveDraft: saveDraft,
+          confirmed: true,
+          check: check,
+          wrongAnswer: state.wrongAnswer,
+        );
+      });
+      return;
+    }
     if (state.status == PostEditStatus.failedToUpload) {
+      if (state.maybeSent) {
+        _draftMaybeSent = true;
+        _drafts.flush();
+      }
+      // Sent too soon after the previous post: the send buttons count down the forum's interval.
+      if (floodControlSeconds(state.errorText) case final seconds?) {
+        _waitForFlood(seconds);
+      }
       showSnackBar(
         context: context,
-        message:
-            state.errorText ??
-            (widget.editType.isEditingPost ? context.t.draftBox.editUnconfirmed : context.t.draftBox.submitUnconfirmed),
+        // The forum asked for a captcha or a security question when the post was sent: nothing was posted, the
+        // content stays to continue on the website.
+        message: state.needsBrowser
+            ? context.t.postEditPage.verificationRequired
+            : state.errorText ??
+                  (widget.editType.isEditingPost
+                      ? context.t.draftBox.editUnconfirmed
+                      : context.t.draftBox.submitUnconfirmed),
+        // Also when other plugins' fields of the form (not shown here) are what the forum asks for.
+        action: state.offersBrowser
+            ? SnackBarAction(label: context.t.draftBox.openBrowser, onPressed: () async => _openBrowser(context))
+            : null,
       );
       if (isMobile) {
         WidgetsBinding.instance.focusManager.primaryFocus?.unfocus();
       }
     } else if (state.status == PostEditStatus.draftUnconfirmed) {
+      _stopDraft(delete: true);
       await showMessageSingleButtonDialog(
         context: context,
         title: context.t.draftBox.title,
         message: context.t.draftBox.acceptedUnconfirmed,
       );
       if (context.mounted && context.read<PostEditRepository>().isCurrent) context.pop(true);
+    } else if (state.status == PostEditStatus.scheduled) {
+      _stopDraft(delete: true);
+      // Kept a draft until its time: no thread to go to yet, the drafts tell when. The time shown is the device's
+      // clock of the instant posted (the forum got its own wall clock of it, PostForm.cronPublishDate); the field is
+      // not changed while posting (the editor is locked).
+      final tr = context.t.postEditPage.cronPublish;
+      final view = await showQuestionDialog(
+        context: context,
+        title: tr.scheduled,
+        message: tr.scheduledMessage(time: cronPublish == null ? '' : discuzDateTime(cronPublish!)),
+      );
+      if (!context.mounted || !context.read<PostEditRepository>().isCurrent) return;
+      if (view ?? false) {
+        context.pushReplacementNamed(ScreenPaths.myThread, queryParameters: {'tab': 'drafts'});
+      } else {
+        context.pop(true);
+      }
+    } else if (state.status == PostEditStatus.stillDraft) {
+      _stopDraft(delete: true);
+      // Published from the app, but the forum keeps it a draft (a scheduled publication): no "go to the new thread".
+      await showMessageSingleButtonDialog(
+        context: context,
+        title: context.t.draftBox.title,
+        message: context.t.draftBox.stillDraft,
+      );
+      if (context.mounted && context.read<PostEditRepository>().isCurrent) context.pop(true);
     } else if (state.status == PostEditStatus.success) {
+      if (state.notice case final notice?) {
+        // Taken as far as the forum tells, then the plugin's notice (the red packet was not made): told, back to the
+        // forum; the local draft stays, marked as maybe sent, until the member has seen the thread.
+        _draftMaybeSent = true;
+        _stopDraft(delete: false);
+        final tr = context.t.postEditPage.postedWithNotice;
+        await showMessageSingleButtonDialog(
+          context: context,
+          title: tr.title,
+          message: tr.message(notice: notice),
+        );
+        if (context.mounted && context.read<PostEditRepository>().isCurrent) context.pop(true);
+        return;
+      }
+      // Sent: the local draft goes (the bloc deleted it already, also for a page closed meanwhile).
+      _stopDraft(delete: true);
       if (uploadMethod == _UploadMethod.saveDraft) {
         if (widget.editType == PostEditType.editDraft) {
           showSnackBar(context: context, message: context.t.draftBox.saved);
@@ -895,16 +1830,21 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
     } else if (state.status == PostEditStatus.editing && !init) {
       threadTypeController.text = state.content?.threadType?.name ?? '  ';
       threadTitleController.text = _transfer?.subject ?? state.content?.threadTitle ?? '';
+      _loadedTitle = threadTitleController.text;
       // Update the length of chars user can still input.
       // Bytes of chars for title in utf-8 encoding.
       threadTitleRestLength =
           (state.content?.threadTitleMaxLength ?? _defaultThreadTitleMaxlength) -
-          threadTitleController.text.parseUtf8Length;
+          (state.content?.titleLength(threadTitleController.text) ?? threadTitleController.text.parseUtf8Length);
       if (state.content?.options != null) {
         additionalOptionsMap = Map.fromEntries(state.content!.options!.map((e) => MapEntry(e.name, e)));
       }
 
       setState(() {
+        // The thread type chosen in the editor switched from, when this form offers it.
+        if (_transfer?.typeId case final String id) {
+          threadType ??= state.content?.threadTypeList?.firstWhereOrNull((e) => e.typeID == id);
+        }
         threadType ??= state.content?.threadType;
         // Automatically select the first thread type like the server
         // does.
@@ -915,9 +1855,24 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
         threadTypeController.text = threadType?.name ?? '';
         threadPerm = state.content?.permList?.where((e) => e.selected).lastOrNull;
         price = state.content?.price;
+        // The first post of an open reward thread: its price, which the member may raise.
+        if (state.content?.form?.reward case final info? when info.raising) {
+          rewardPrice = info.current;
+        }
+        // The first post of an activity or a debate thread: the activity or the debate as it is.
+        if (widget.editType != PostEditType.newThread) {
+          activity = state.content?.form?.activity?.served;
+          debate = state.content?.form?.debate?.served;
+          poll = state.content?.form?.pollEdit?.served;
+        }
       });
 
       init = true;
+      // The list of drafts names the target: the edited thread, the forum of a new one.
+      final loadedTitle = state.content?.threadTitle?.trim() ?? '';
+      _draftTitle = widget.editType == PostEditType.newThread || loadedTitle.isEmpty ? state.forumName : loadedTitle;
+      // Once the post is in the editor (this frame), the draft kept for it is offered.
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_offerDraft()));
     } else if (state.status == PostEditStatus.editing) {
       setState(() {
         threadPerm = state.content?.permList?.where((e) => e.selected).lastOrNull;
@@ -935,11 +1890,23 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
     );
     bbcodeController = buildBBCodeEditorController();
     fullScreen = isDesktop;
+    // The local draft: written while the title and the post change, for the account this editor opened for.
+    _draftUid = context.read<AuthenticationRepository>().effectiveCurrentUid;
+    threadTitleController.addListener(_drafts.changed);
+    bbcodeController
+      ..addListener(_drafts.changed)
+      ..addListener(_onBodyChanged);
+    _drafts.attach();
     final transfer = widget.transfer;
     if (widget.editType == PostEditType.newThread &&
         transfer != null &&
         transfer.appliesTo(uid: context.read<AuthenticationRepository>().effectiveCurrentUid, fid: widget.fid)) {
       _transfer = transfer;
+      // The attachments uploaded in the editor switched from stay bound to the post.
+      _attachNew.addAll(transfer.attachNew);
+      // The settings of the kinds the member set, posted only on the form of their kind (PostForm.bodyWith).
+      rewardPrice = transfer.rewardPrice;
+      hongbao = transfer.hongbao;
     }
   }
 
@@ -959,12 +1926,96 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
               fid: widget.fid,
               subject: threadTitleController.text,
               body: bbcodeController.toForumBBCode(),
+              rewardPrice: rewardPrice,
+              hongbao: hongbao,
+              typeId: threadType?.typeID,
             ),
     );
   }
 
+  /// The kinds of new thread the loaded form offers (`special.allowed`, the thread plugins): the ordinary thread, a
+  /// reward when the member may post one, a red packet when the forum has the plugin; only the kind of the page
+  /// when the form does not tell (the web page).
+  List<ThreadKind> _kindsOffered(PostEditState state) {
+    final form = state.content?.form;
+    if (form == null) {
+      return [widget.threadKind];
+    }
+    final allowed = form.specialAllowed;
+    return [
+      if (allowed.contains(0) || widget.threadKind == ThreadKind.normal) ThreadKind.normal,
+      if (allowed.contains(3) || widget.threadKind == ThreadKind.reward) ThreadKind.reward,
+      if (allowed.contains(4) || widget.threadKind == ThreadKind.activity) ThreadKind.activity,
+      if (allowed.contains(5) || widget.threadKind == ThreadKind.debate) ThreadKind.debate,
+      if (form.threadPlugins.any((e) => e.$1 == ThreadKind.hongbaoPlugin) || widget.threadKind == ThreadKind.hongbao)
+        ThreadKind.hongbao,
+    ];
+  }
+
+  static IconData _kindIcon(ThreadKind kind) => switch (kind) {
+    ThreadKind.normal => Icons.article_outlined,
+    ThreadKind.reward => Icons.emoji_events_outlined,
+    ThreadKind.hongbao => Icons.card_giftcard_outlined,
+    ThreadKind.activity => Icons.event_outlined,
+    ThreadKind.debate => Icons.balance_outlined,
+  };
+
+  static String _kindLabel(BuildContext context, ThreadKind kind) {
+    final tr = context.t.postEditPage.threadKind;
+    return switch (kind) {
+      ThreadKind.normal => tr.normal,
+      ThreadKind.reward => tr.reward,
+      ThreadKind.hongbao => tr.hongbao,
+      ThreadKind.activity => tr.activity,
+      ThreadKind.debate => tr.debate,
+    };
+  }
+
+  /// Intentional kind switch: subject and body go to the editor of [kind], which fetches the forum's form of that
+  /// kind; nothing is posted. The reward price and the red packet set go along: posted on the form of their kind only,
+  /// set again when the member is back there. [transfer] instead of what this editor holds (a restored local draft).
+  ///
+  /// Whether the editor of [kind] was opened.
+  bool _switchKind(BuildContext context, ThreadKind kind, {ThreadModeTransfer? transfer}) {
+    if (kind == widget.threadKind ||
+        !mounted ||
+        ModalRoute.of(context)?.isActive == false ||
+        !context.read<PostEditRepository>().isCurrent) {
+      return false;
+    }
+    final uid = context.read<AuthenticationRepository>().effectiveCurrentUid;
+    _leavingFor = kind;
+    context.pushReplacementNamed(
+      ScreenPaths.editPost,
+      pathParameters: {'editType': '${PostEditType.newThread.index}', 'fid': widget.fid},
+      queryParameters: {if (widget.pollOffered) 'poll': '1', 'kind': ?kind.query},
+      extra: uid == null || !initialized
+          ? null
+          : transfer ??
+                ThreadModeTransfer(
+                  uid: uid,
+                  fid: widget.fid,
+                  subject: threadTitleController.text,
+                  body: bbcodeController.toForumBBCode(),
+                  attachNew: List.of(_attachNew),
+                  rewardPrice: rewardPrice,
+                  hongbao: hongbao,
+                  delta: bbcodeController.toQuillDelta(),
+                  typeId: threadType?.typeID,
+                ),
+    );
+    return true;
+  }
+
   @override
   void dispose() {
+    _countdown?.cancel();
+    // Shared images never uploaded (the page was left before its form came): their copies go.
+    if (!_sharedImagesTaken && widget.sharedImages != null) {
+      discardSharedFiles(widget.sharedImages!);
+    }
+    // What is not sent is kept on this device before the editor goes.
+    _drafts.dispose();
     bbcodeController.dispose();
     focusNode.dispose();
     threadTypeController.dispose();
@@ -979,91 +2030,188 @@ class _PostEditPageState extends State<PostEditPage> with LoggerMixin {
       PostEditType.editPost || PostEditType.editDraft => context.t.postEditPage.editPostTitle,
     };
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) {
-          return;
-        }
-
-        // TODO: Control the pop back.
-        // * Return the value we need to pass the the caller route if writing
-        //   something new.
-        // * Let user confirm the pop back if editing something already existed.
-        // * If possible save the edit content into draft.
-        context.pop();
-      },
-      child: MultiBlocProvider(
-        providers: [
-          RepositoryProvider(
-            create: (context) => PostEditRepository(
-              client: getIt.get<NetClientProvider>(),
-              currentUid: () => context.read<AuthenticationRepository>().effectiveCurrentUid,
-            ),
+    return MultiBlocProvider(
+      providers: [
+        RepositoryProvider(
+          create: (context) => PostEditRepository(
+            client: getIt.get<NetClientProvider>(),
+            currentUid: () => context.read<AuthenticationRepository>().effectiveCurrentUid,
           ),
-          BlocProvider(
-            create: (context) {
-              final bloc = PostEditBloc(
-                postEditRepository: context.repo(),
-                authenticationChanges: context.read<AuthenticationRepository>().status,
-              );
+        ),
+        BlocProvider(
+          create: (context) {
+            final bloc = PostEditBloc(
+              postEditRepository: context.repo(),
+              authenticationChanges: context.read<AuthenticationRepository>().status,
+            );
 
-              final event = switch (widget.editType) {
-                PostEditType.editPost || PostEditType.editDraft => PostEditLoadDataRequested(
-                  _formatDataUrl(fid: widget.fid, tid: widget.tid!, pid: widget.pid!),
-                ),
-                PostEditType.newThread => ThreadPubFetchInfoRequested(fid: widget.fid),
-              };
-              bloc.add(event);
-              return bloc;
+            final event = switch (widget.editType) {
+              PostEditType.editPost || PostEditType.editDraft => PostEditLoadDataRequested(
+                _formatDataUrl(fid: widget.fid, tid: widget.tid!, pid: widget.pid!),
+              ),
+              PostEditType.newThread => ThreadPubFetchInfoRequested(fid: widget.fid, kind: widget.threadKind),
+            };
+            bloc.add(event);
+            return bloc;
+          },
+        ),
+      ],
+      child: BlocConsumer<PostEditBloc, PostEditState>(
+        listener: (context, state) async => _onListen(context, state),
+        builder: (context, state) {
+          bool canPublish() =>
+              !(_confirming ||
+                  _uploadingSharedImages ||
+                  _waitingSeconds > 0 ||
+                  !context.read<PostEditBloc>().canSubmit);
+          // Below the bloc: leaving asks what to do with content not sent yet, and may save it as a draft.
+          return PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (didPop, _) async {
+              if (didPop) {
+                return;
+              }
+              await _onLeave(context);
             },
-          ),
-        ],
-        child: BlocConsumer<PostEditBloc, PostEditState>(
-          listener: (context, state) async => _onListen(context, state),
-          builder: (context, state) {
-            return Scaffold(
-              // Required by chat_bottom_container in the reply bar.
-              resizeToAvoidBottomInset: false,
-              appBar: AppBar(
-                title: Text(title),
-                actions: [
-                  if (widget.editType == PostEditType.newThread &&
-                      widget.pollOffered &&
-                      state.status != PostEditStatus.uploading &&
-                      state.status != PostEditStatus.success &&
-                      state.status != PostEditStatus.draftUnconfirmed &&
-                      state.status != PostEditStatus.identityChanged)
+            child: _wrapWithSendShortcut(
+              onSend: () {
+                if (canPublish()) {
+                  unawaited(_onFinish(context, state));
+                }
+              },
+              child: Scaffold(
+                // Required by chat_bottom_container in the reply bar.
+                resizeToAvoidBottomInset: false,
+                appBar: AppBar(
+                  title: Text(title),
+                  // Under the title, not among the actions: beside three buttons a name squeezed the title away on a
+                  // phone (#184).
+                  bottom: postingAsBarOf(context),
+                  actions: [
+                    if (widget.editType == PostEditType.newThread &&
+                        state.status == PostEditStatus.editing &&
+                        _kindsOffered(state).length > 1)
+                      PopupMenuButton<ThreadKind>(
+                        tooltip: context.t.postEditPage.threadKind.tooltip,
+                        icon: Icon(_kindIcon(widget.threadKind)),
+                        enabled: !_confirming,
+                        onSelected: (kind) => _switchKind(context, kind),
+                        itemBuilder: (context) => [
+                          for (final kind in _kindsOffered(state))
+                            CheckedPopupMenuItem(
+                              value: kind,
+                              checked: kind == widget.threadKind,
+                              child: Text(_kindLabel(context, kind)),
+                            ),
+                        ],
+                      ),
+                    if (widget.editType == PostEditType.newThread &&
+                        widget.pollOffered &&
+                        state.status != PostEditStatus.uploading &&
+                        state.status != PostEditStatus.success &&
+                        state.status != PostEditStatus.draftUnconfirmed &&
+                        state.status != PostEditStatus.stillDraft &&
+                        state.status != PostEditStatus.scheduled &&
+                        state.status != PostEditStatus.identityChanged)
+                      IconButton(
+                        tooltip: context.t.pollCreate.switchToPoll,
+                        icon: const Icon(Icons.poll_outlined),
+                        onPressed: _confirming ? null : () => _switchToPoll(context),
+                      ),
+                    if (widget.editType.isEditingDraft && (state.content?.canSaveDraft ?? false)) ...[
+                      IconButton(
+                        onPressed:
+                            _confirming ||
+                                _uploadingSharedImages ||
+                                _waitingSeconds > 0 ||
+                                !context.read<PostEditBloc>().canSubmit
+                            ? null
+                            : () async => _onFinish(context, state, saveDraft: true),
+                        icon: state.status == PostEditStatus.uploading && uploadMethod == _UploadMethod.saveDraft
+                            ? sizedCircularProgressIndicator
+                            : Icon(MdiIcons.contentSaveEditOutline, color: Theme.of(context).colorScheme.secondary),
+                        tooltip: context.t.postEditPage.saveAsDraft,
+                      ),
+                    ],
                     IconButton(
-                      tooltip: context.t.pollCreate.switchToPoll,
-                      icon: const Icon(Icons.poll_outlined),
-                      onPressed: _confirming ? null : () => _switchToPoll(context),
-                    ),
-                  if (widget.editType.isEditingDraft && (state.content?.canSaveDraft ?? false)) ...[
-                    IconButton(
-                      onPressed: _confirming || !context.read<PostEditBloc>().canSubmit
-                          ? null
-                          : () async => _onFinish(context, state, saveDraft: true),
-                      icon: state.status == PostEditStatus.uploading && uploadMethod == _UploadMethod.saveDraft
+                      key: const ValueKey('post-edit-publish'),
+                      // Refused as too soon after the previous post: the seconds the forum still waits.
+                      tooltip: _waitingSeconds > 0
+                          ? context.t.replyBar.floodWait(seconds: _waitingSeconds)
+                          : context.t.postEditPage.publish,
+                      icon: state.status == PostEditStatus.uploading && uploadMethod == _UploadMethod.publish
                           ? sizedCircularProgressIndicator
-                          : Icon(MdiIcons.contentSaveEditOutline, color: Theme.of(context).colorScheme.secondary),
-                      tooltip: context.t.postEditPage.saveAsDraft,
+                          : _waitingSeconds > 0
+                          ? Text('${_waitingSeconds}s', key: const ValueKey('post-edit-countdown'))
+                          : const Icon(Icons.send),
+                      onPressed: canPublish() ? () async => _onFinish(context, state) : null,
                     ),
                   ],
-                  IconButton(
-                    tooltip: context.t.postEditPage.publish,
-                    icon: state.status == PostEditStatus.uploading && uploadMethod == _UploadMethod.publish
-                        ? sizedCircularProgressIndicator
-                        : const Icon(Icons.send),
-                    onPressed: _confirming || !context.read<PostEditBloc>().canSubmit
-                        ? null
-                        : () async => _onFinish(context, state),
-                  ),
-                ],
+                ),
+                body: SafeArea(bottom: false, child: _buildBody(context, state)),
               ),
-              body: SafeArea(bottom: false, child: _buildBody(context, state)),
-            );
-          },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Ctrl+Enter (Cmd+Enter) publishes while the title or the editor has the focus; desktop only, as on mobile the input
+  /// method owns the Enter key.
+  Widget _wrapWithSendShortcut({required VoidCallback onSend, required Widget child}) {
+    if (!keyboardShortcutsEnabled) {
+      return child;
+    }
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.enter, control: true): onSend,
+        const SingleActivator(LogicalKeyboardKey.numpadEnter, control: true): onSend,
+        const SingleActivator(LogicalKeyboardKey.enter, meta: true): onSend,
+        const SingleActivator(LogicalKeyboardKey.numpadEnter, meta: true): onSend,
+      },
+      child: child,
+    );
+  }
+}
+
+/// The title and the post the member typed in the poll editor before switching here, shown when this editor cannot
+/// take the form (the website instead): selectable, with a button copying both.
+class _TransferredContent extends StatelessWidget {
+  const _TransferredContent({required this.transfer});
+
+  final ThreadModeTransfer transfer;
+
+  @override
+  Widget build(BuildContext context) {
+    final tr = context.t.postEditPage;
+    final text = [transfer.subject, transfer.body].where((e) => e.trim().isNotEmpty).join('\n\n');
+    return Card(
+      margin: edgeInsetsT12,
+      child: Padding(
+        padding: edgeInsetsL16T16R16B16,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(tr.transferredContent, style: Theme.of(context).textTheme.titleSmall),
+            sizedBoxW8H8,
+            if (transfer.subject.trim().isNotEmpty)
+              SelectableText(transfer.subject, style: Theme.of(context).textTheme.titleMedium),
+            if (transfer.subject.trim().isNotEmpty && transfer.body.trim().isNotEmpty) sizedBoxW8H8,
+            if (transfer.body.trim().isNotEmpty) SelectableText(transfer.body),
+            sizedBoxW8H8,
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                icon: const Icon(Icons.copy_outlined),
+                label: Text(tr.copyTransferred),
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: text));
+                  if (context.mounted) showSnackBar(context: context, message: context.t.general.copiedToClipboard);
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );

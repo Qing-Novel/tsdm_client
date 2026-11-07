@@ -21,6 +21,7 @@ part 'database.g.dart';
     FastReplyTemplate,
     Image,
     Notice,
+    OfflineThread,
     PersonalMessage,
     RepliedThread,
     Settings,
@@ -33,12 +34,28 @@ final class AppDatabase extends _$AppDatabase with LoggerMixin {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async {
       await m.createAll();
+    },
+    // The eviction index of the offline thread pages: a development build at the unreleased shape of schema 15 has the
+    // table without it. Looked up on every open (a read, no lock taken when it is there) and created when missing, so
+    // no build depends on the step.
+    beforeOpen: (details) async {
+      final index = offlineThreadRecent;
+      final present = await customSelect(
+        "SELECT name FROM sqlite_master WHERE name IN ('offline_thread', ?)",
+        variables: [Variable.withString(index.entityName)],
+      ).map((row) => row.read<String>('name')).get();
+      if (!present.contains('offline_thread') || present.contains(index.entityName)) {
+        return;
+      }
+      final create = index.createStatementsByDialect[SqlDialect.sqlite]!;
+      await customStatement(create.replaceFirst('CREATE INDEX ', 'CREATE INDEX IF NOT EXISTS '));
+      info('created the missing index ${index.entityName}');
     },
     onUpgrade: stepByStep(
       from1To2: (m, schema) async {
@@ -186,6 +203,102 @@ final class AppDatabase extends _$AppDatabase with LoggerMixin {
           }
         }
         info('migrating database schema from 13 to 14... ok!');
+      },
+      from14To15: (m, schema) async {
+        info('migrating database schema from 14 to 15...');
+        // Thread pages saved for reading without network, and the index of their eviction. The step runs again safely
+        // when the background service isolate opened the file together with the app (see from13To14): drift writes
+        // `CREATE TABLE IF NOT EXISTS`, the index is created only when missing.
+        await m.create(schema.offlineThread);
+        final index = schema.offlineThreadRecent;
+        final existing = await schema.database
+            .customSelect(
+              "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+              variables: [
+                Variable.withString(index.entityName),
+              ],
+            )
+            .get();
+        if (existing.isEmpty) {
+          try {
+            await m.create(index);
+          } on Object catch (e) {
+            // Created by the other connection between the check and here.
+            if (!'$e'.contains('already exists')) {
+              rethrow;
+            }
+            info('${index.entityName} created by another connection');
+          }
+        }
+        info('migrating database schema from 14 to 15... ok!');
+      },
+      from15To16: (m, schema) async {
+        info('migrating database schema from 15 to 16...');
+        // Author name, `from_id` and `from_idtype` of the notices, for the notice cards and the system notifications.
+        // Each column is added only when missing, see from13To14.
+        final existing = (await schema.database.customSelect('PRAGMA table_info(notice)').get())
+            .map((row) => row.read<String>('name'))
+            .toSet();
+        for (final column in [schema.notice.author, schema.notice.fromId, schema.notice.fromIdType]) {
+          if (existing.contains(column.name)) {
+            continue;
+          }
+          try {
+            await m.addColumn(schema.notice, column);
+          } on Object catch (e) {
+            // Added by the other connection between the check and here.
+            if (!'$e'.contains('duplicate column name')) {
+              rethrow;
+            }
+            info('notice.${column.name} added by another connection');
+          }
+        }
+        info('migrating database schema from 15 to 16... ok!');
+      },
+      from16To17: (m, schema) async {
+        info('migrating database schema from 16 to 17...');
+        // Where the reading of each visited thread stopped, kept with its visit. Each column is added only when
+        // missing, see from13To14.
+        final existing = (await schema.database.customSelect('PRAGMA table_info(thread_visit_history)').get())
+            .map((row) => row.read<String>('name'))
+            .toSet();
+        final table = schema.threadVisitHistory;
+        for (final column in [table.lastPage, table.lastPid, table.lastFloor, table.seenReplies]) {
+          if (existing.contains(column.name)) {
+            continue;
+          }
+          try {
+            await m.addColumn(table, column);
+          } on Object catch (e) {
+            // Added by the other connection between the check and here.
+            if (!'$e'.contains('duplicate column name')) {
+              rethrow;
+            }
+            info('thread_visit_history.${column.name} added by another connection');
+          }
+        }
+        info('migrating database schema from 16 to 17... ok!');
+      },
+      from17To18: (m, schema) async {
+        info('migrating database schema from 17 to 18...');
+        // When the reading progress of a visit was written (the cross-device sync compares it). Added only when
+        // missing, see from13To14.
+        final existing = (await schema.database.customSelect('PRAGMA table_info(thread_visit_history)').get())
+            .map((row) => row.read<String>('name'))
+            .toSet();
+        final column = schema.threadVisitHistory.progressUpdated;
+        if (!existing.contains(column.name)) {
+          try {
+            await m.addColumn(schema.threadVisitHistory, column);
+          } on Object catch (e) {
+            // Added by the other connection between the check and here.
+            if (!'$e'.contains('duplicate column name')) {
+              rethrow;
+            }
+            info('thread_visit_history.${column.name} added by another connection');
+          }
+        }
+        info('migrating database schema from 17 to 18... ok!');
       },
     ),
   );

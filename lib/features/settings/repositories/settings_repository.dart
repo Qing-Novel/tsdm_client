@@ -88,6 +88,19 @@ final class SettingsRepository with LoggerMixin {
   Future<void> init() async {
     _state = await _initMap();
     _controller.add(_state);
+    if (!_state.offlineThreads) {
+      // Offline thread copies only exist while their setting is on: drop what an imported backup, an older run or any
+      // other path left behind while it is off.
+      try {
+        final dropped = await _storage.clearOfflineThreadsIfAny();
+        if (dropped > 0) {
+          info('offline threads are off: dropped $dropped saved pages');
+        }
+      } on Object catch (e, st) {
+        error('failed to drop the offline thread pages: $e');
+        handleRaw(e, st);
+      }
+    }
   }
 
   /// Load settings from storage.
@@ -124,6 +137,9 @@ final class SettingsRepository with LoggerMixin {
       threadCardHighlightRecentThread: s.extract(_SK.threadCardHighlightRecentThread),
       threadCardHighlightAuthorName: s.extract(_SK.threadCardHighlightAuthorName),
       threadCardHighlightInfoRow: s.extract(_SK.threadCardHighlightInfoRow),
+      threadCardShowExcerpt: s.extract(_SK.threadCardShowExcerpt),
+      threadCardThumbnailMode: s.extract(_SK.threadCardThumbnailMode),
+      threadCardExternalThumbnails: s.extract(_SK.threadCardExternalThumbnails),
       netClientUseProxy: s.extract(_SK.netClientUseProxy),
       netClientProxy: s.extract(_SK.netClientProxy),
       autoCheckin: s.extract(_SK.autoCheckin),
@@ -133,6 +149,16 @@ final class SettingsRepository with LoggerMixin {
       showUnreadBroadcastMessageBadge: s.extract(_SK.showUnreadBroadcastMessageBadge),
       autoSyncNoticeSeconds: s.extract(_SK.autoSyncNoticeSeconds),
       enableBackgroundMessageService: s.extract(_SK.enableBackgroundMessageService),
+      backgroundSyncAllAccounts: s.extract(_SK.backgroundSyncAllAccounts),
+      notificationHideContent: s.extract(_SK.notificationHideContent),
+      notifyReply: s.extract(_SK.notifyReply),
+      notifyMention: s.extract(_SK.notifyMention),
+      notifyRate: s.extract(_SK.notifyRate),
+      notifyPersonalMessage: s.extract(_SK.notifyPersonalMessage),
+      notifySystem: s.extract(_SK.notifySystem),
+      notifyQuietHours: s.extract(_SK.notifyQuietHours),
+      notifyQuietStart: s.extract(_SK.notifyQuietStart),
+      notifyQuietEnd: s.extract(_SK.notifyQuietEnd),
       enableDebugOperations: s.extract(_SK.enableDebugOperations),
       fontFamily: s.extract(_SK.fontFamily),
       enableEditorBBCodeParser: s.extract(_SK.enableEditorBBCodeParser),
@@ -143,8 +169,29 @@ final class SettingsRepository with LoggerMixin {
       autoClearImageCacheDuration: s.extract(_SK.autoClearImageCacheDuration),
       collapseAppBarWhenScroll: s.extract(_SK.collapseAppBarWhenScroll),
       threadFloorInteractionMode: s.extract(_SK.threadFloorInteractionMode),
+      threadOpenPosition: s.extract(_SK.threadOpenPosition),
+      threadSwipePaging: s.extract(_SK.threadSwipePaging),
+      twoPaneLayout: s.extract(_SK.twoPaneLayout),
+      crossDeviceSync: s.extract(_SK.crossDeviceSync),
+      crossDeviceSyncRateTemplates: s.extract(_SK.crossDeviceSyncRateTemplates),
+      crossDeviceSyncSettings: s.extract(_SK.crossDeviceSyncSettings),
+      crossDeviceSyncDrafts: s.extract(_SK.crossDeviceSyncDrafts),
+      themeModeScheduled: s.extract(_SK.themeModeScheduled),
+      darkScheduleStart: s.extract(_SK.darkScheduleStart),
+      darkScheduleEnd: s.extract(_SK.darkScheduleEnd),
       textScaleFactor: s.extract(_SK.textScaleFactor),
       threadContentScale: s.extract(_SK.threadContentScale),
+      threadContentLineHeight: s.extract(_SK.threadContentLineHeight),
+      threadContentParagraphSpacing: s.extract(_SK.threadContentParagraphSpacing),
+      threadContentSplitLongParagraphs: s.extract(_SK.threadContentSplitLongParagraphs),
+      highRefreshRate: s.extract(_SK.highRefreshRate),
+      offlineThreads: s.extract(_SK.offlineThreads),
+      offlineThreadsLimit: s.extract(_SK.offlineThreadsLimit),
+      enableAppPostRenderer: s.extract(_SK.enableAppPostRenderer),
+      homepagePinnedGroup: s.extract(_SK.homepagePinnedGroup),
+      notificationPermissionPrompted: s.extract(_SK.notificationPermissionPrompted),
+      postImageAutoLoad: s.extract(_SK.postImageAutoLoad),
+      editorQuickPhrases: s.extract(_SK.editorQuickPhrases),
     );
   }
 
@@ -199,8 +246,46 @@ final class SettingsRepository with LoggerMixin {
     _controller.add(_state);
   }
 
+  /// Save several values of the type `T` (each a key and its value) and publish the new settings once (see
+  /// [setValue]).
+  Future<void> setValues<T>(List<(SettingsKeys<T>, T)> values) async {
+    for (final (key, value) in values) {
+      await _save<T>(key, value);
+    }
+    _controller.add(_state);
+  }
+
+  /// Save several values of different types (each a key and its value: a bool, an int, a double, a string or a
+  /// [ThreadFloorInteractionMode]) and publish the new settings once (the cross-device sync applying the settings of
+  /// another device).
+  Future<void> setMixedValues(List<(SettingsKeys<Object>, Object)> values) async {
+    for (final (key, value) in values) {
+      switch (value) {
+        case final bool v:
+          await _save<bool>(key as SettingsKeys<bool>, v);
+        case final int v:
+          await _save<int>(key as SettingsKeys<int>, v);
+        case final double v:
+          await _save<double>(key as SettingsKeys<double>, v);
+        case final String v:
+          await _save<String>(key as SettingsKeys<String>, v);
+        case final ThreadFloorInteractionMode v:
+          await _save<ThreadFloorInteractionMode>(key as SettingsKeys<ThreadFloorInteractionMode>, v);
+        default:
+          error('failed to save settings for key $key: unsupported value $value');
+      }
+    }
+    _controller.add(_state);
+  }
+
   /// Save settings [key] with value [value].
   Future<void> setValue<T>(SettingsKeys<T> key, T value) async {
+    await _save<T>(key, value);
+    _controller.add(_state);
+  }
+
+  /// Save [value] of [key] and keep it in the settings, without publishing them.
+  Future<void> _save<T>(SettingsKeys<T> key, T value) async {
     assert(
       T == key.type,
       'Settings value type and expected extract type MUST equal\n'
@@ -236,7 +321,6 @@ final class SettingsRepository with LoggerMixin {
     }
 
     _state = _state.copyWithKey(key, value);
-    _controller.add(_state);
   }
 
   /// Build a default [Dio] instance from current settings.

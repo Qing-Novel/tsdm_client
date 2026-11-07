@@ -4,19 +4,27 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/features/draft_box/view/draft_box_panel.dart';
 import 'package:tsdm_client/features/my_thread/bloc/my_thread_bloc.dart';
+import 'package:tsdm_client/features/my_thread/models/models.dart';
 import 'package:tsdm_client/features/my_thread/repository/my_thread_repository.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
+import 'package:tsdm_client/utils/load_failure.dart';
 import 'package:tsdm_client/widgets/app_surface.dart';
 import 'package:tsdm_client/widgets/card/thread_card/thread_card.dart';
-import 'package:tsdm_client/widgets/indicator.dart';
+import 'package:tsdm_client/widgets/failure_view.dart';
+import 'package:tsdm_client/widgets/list_footer.dart';
+import 'package:tsdm_client/widgets/list_skeleton.dart';
+import 'package:tsdm_client/widgets/two_pane.dart';
 
 /// Page to show the threads and replies published by current logged user.
 class MyThreadPage extends StatefulWidget {
   /// Constructor.
-  const MyThreadPage({super.key, this.showDrafts = false});
+  const MyThreadPage({super.key, this.showDrafts = false, this.showReplies = false});
 
-  /// Enter the draft tab after saving from the editor.
+  /// Enter the draft tab after saving from the editor, or from a link to the draft box (`filter=save`).
   final bool showDrafts;
+
+  /// Enter the reply tab, from a link to the replies (`type=reply`).
+  final bool showReplies;
 
   @override
   State<MyThreadPage> createState() => _MyThreadPageState();
@@ -28,93 +36,115 @@ class _MyThreadPageState extends State<MyThreadPage> with SingleTickerProviderSt
   late final EasyRefreshController _threadRefreshController;
   late final EasyRefreshController _replyRefreshController;
 
-  Widget _buildThreadTab(BuildContext context, MyThreadState state) {
-    if (state.status == MyThreadStatus.loading || state.refreshingThread) {
-      return const CenteredCircularIndicator();
+  /// One tab: the shape of the rows while its first page loads, the failure with its retry when that failed, the
+  /// rows with the shared end of the list ([ListFooter]) otherwise. A refresh keeps the rows on screen.
+  Widget _buildTab(
+    BuildContext context, {
+    required EasyRefreshController controller,
+    required List<MyThread> items,
+    required bool loading,
+    required bool refreshing,
+    required bool failed,
+    required bool hasMore,
+    required bool loadingMore,
+    required bool loadMoreFailed,
+    required LoadFailure? failure,
+    required String emptyMessage,
+    required VoidCallback onRefresh,
+    required VoidCallback onLoadMore,
+  }) {
+    if (loading || (refreshing && items.isEmpty)) {
+      return const ThreadListSkeleton();
     }
-    _threadRefreshController
-      ..finishRefresh()
-      ..finishLoad();
-    final Widget child;
-    if (state.threadList.isEmpty) {
-      child = AppStateView(icon: Icons.article_outlined, message: context.t.general.noData);
-    } else {
-      child = AppCenteredList(
-        builder: (context, side, _) => ListView.separated(
-          padding: side.copyWith(top: 8).add(context.safePadding()),
-          itemCount: state.threadList.length,
-          itemBuilder: (context, index) {
-            return MyThreadCard(state.threadList[index]);
-          },
-          separatorBuilder: (context, index) => appListSeparator,
-        ),
-      );
+    if (!refreshing) {
+      controller.finishRefresh();
     }
-    return EasyRefresh(
-      controller: _threadRefreshController,
+    if (items.isEmpty && failed) {
+      // Failed, not empty: "no data" would be wrong.
+      return FailureView(failure: failure, onRetry: onRefresh);
+    }
+    return EasyRefresh.builder(
+      controller: controller,
       header: const MaterialHeader(),
-      footer: const MaterialFooter(),
-      onRefresh: () async {
-        context.read<MyThreadBloc>().add(MyThreadRefreshThreadRequested());
-      },
-      onLoad: () async {
-        if (state.nextThreadPageUrl == null) {
-          _threadRefreshController.finishLoad(IndicatorResult.noMore);
-          return;
-        }
-        context.read<MyThreadBloc>().add(const MyThreadLoadMoreThreadRequested());
-      },
-      child: child,
+      onRefresh: () async => onRefresh(),
+      childBuilder: (context, physics) => items.isEmpty
+          ? AppScrollableStateView(
+              physics: physics,
+              child: AppStateView(icon: Icons.article_outlined, message: emptyMessage, scrollable: false),
+            )
+          : AppCenteredList(
+              builder: (context, side, _) => ListView.separated(
+                physics: physics,
+                padding: side.copyWith(top: 8).add(context.safePadding()),
+                // The end of the list is its last item: built when it comes near, it asks the next page.
+                itemCount: items.length + 1,
+                itemBuilder: (context, index) => index < items.length
+                    ? MyThreadCard(items[index])
+                    : ListFooter(
+                        status: listFooterStatus(
+                          hasMore: hasMore,
+                          loading: loadingMore || refreshing,
+                          failed: loadMoreFailed,
+                        ),
+                        itemCount: items.length,
+                        failure: failure,
+                        onLoadMore: onLoadMore,
+                        onRetry: onLoadMore,
+                      ),
+                separatorBuilder: (context, index) => appListSeparator,
+              ),
+            ),
+    );
+  }
+
+  Widget _buildThreadTab(BuildContext context, MyThreadState state) {
+    final bloc = context.read<MyThreadBloc>();
+    return _buildTab(
+      context,
+      controller: _threadRefreshController,
+      items: state.threadList,
+      loading: state.status == MyThreadStatus.loading,
+      refreshing: state.refreshingThread,
+      failed: state.threadFailed,
+      hasMore: state.nextThreadPageUrl != null,
+      loadingMore: state.loadingMoreThread,
+      loadMoreFailed: state.threadLoadMoreFailed,
+      failure: state.threadFailure,
+      emptyMessage: context.t.myThreadPage.threadTab.empty,
+      onRefresh: () => bloc.add(MyThreadRefreshThreadRequested()),
+      onLoadMore: () => bloc.add(const MyThreadLoadMoreThreadRequested()),
     );
   }
 
   Widget _buildReplyTab(BuildContext context, MyThreadState state) {
-    if (state.status == MyThreadStatus.loading || state.refreshingReply) {
-      return const CenteredCircularIndicator();
-    }
-    _replyRefreshController
-      ..finishRefresh()
-      ..finishLoad();
-    final Widget child;
-    if (state.replyList.isEmpty) {
-      child = AppStateView(icon: Icons.article_outlined, message: context.t.general.noData);
-    } else {
-      child = AppCenteredList(
-        builder: (context, side, _) => ListView.separated(
-          padding: side.copyWith(top: 8).add(context.safePadding()),
-          itemCount: state.replyList.length,
-          itemBuilder: (context, index) {
-            return MyThreadCard(state.replyList[index]);
-          },
-          separatorBuilder: (context, index) => appListSeparator,
-        ),
-      );
-    }
-
-    return EasyRefresh(
+    final bloc = context.read<MyThreadBloc>();
+    return _buildTab(
+      context,
       controller: _replyRefreshController,
-      header: const MaterialHeader(),
-      footer: const MaterialFooter(),
-      onRefresh: () async {
-        context.read<MyThreadBloc>().add(MyThreadRefreshReplyRequested());
-      },
-      onLoad: () async {
-        if (state.nextReplyPageUrl == null) {
-          _replyRefreshController.finishLoad(IndicatorResult.noMore);
-          return;
-        }
-        context.read<MyThreadBloc>().add(const MyThreadLoadMoreReplyRequested());
-      },
-      child: child,
+      items: state.replyList,
+      loading: state.status == MyThreadStatus.loading,
+      refreshing: state.refreshingReply,
+      failed: state.replyFailed,
+      hasMore: state.nextReplyPageUrl != null,
+      loadingMore: state.loadingMoreReply,
+      loadMoreFailed: state.replyLoadMoreFailed,
+      failure: state.replyFailure,
+      emptyMessage: context.t.myThreadPage.replyTab.empty,
+      onRefresh: () => bloc.add(MyThreadRefreshReplyRequested()),
+      onLoadMore: () => bloc.add(const MyThreadLoadMoreReplyRequested()),
     );
   }
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, initialIndex: widget.showDrafts ? 2 : 0, vsync: this);
-    _threadRefreshController = EasyRefreshController(controlFinishRefresh: true, controlFinishLoad: true);
-    _replyRefreshController = EasyRefreshController(controlFinishRefresh: true, controlFinishLoad: true);
+    _tabController = TabController(
+      length: 3,
+      initialIndex: widget.showDrafts ? 2 : (widget.showReplies ? 1 : 0),
+      vsync: this,
+    );
+    _threadRefreshController = EasyRefreshController(controlFinishRefresh: true);
+    _replyRefreshController = EasyRefreshController(controlFinishRefresh: true);
   }
 
   @override
@@ -127,6 +157,12 @@ class _MyThreadPageState extends State<MyThreadPage> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
+    // A wide window shows the thread tapped on the right of the list.
+    return TwoPaneLayout(list: _buildPage(context));
+  }
+
+  /// The page, under the [TwoPaneLayout] of [build].
+  Widget _buildPage(BuildContext context) {
     return MultiBlocProvider(
       providers: [
         RepositoryProvider(create: (_) => MyThreadRepository()),
@@ -135,29 +171,66 @@ class _MyThreadPageState extends State<MyThreadPage> with SingleTickerProviderSt
               MyThreadBloc(myThreadRepository: context.repo())..add(MyThreadLoadInitialDataRequested()),
         ),
       ],
-      child: BlocBuilder<MyThreadBloc, MyThreadState>(
-        builder: (context, state) {
-          return Scaffold(
-            appBar: AppBar(
-              title: Text(context.t.myThreadPage.title),
-              bottom: TabBar(
-                controller: _tabController,
-                tabs: [
-                  Tab(child: Text(context.t.myThreadPage.threadTab.title)),
-                  Tab(child: Text(context.t.myThreadPage.replyTab.title)),
-                  Tab(child: Text(context.t.draftBox.title)),
-                ],
+      child: MultiBlocListener(
+        // A refresh that failed with the list on screen keeps the list: say it failed and why, every time it ends so.
+        listeners: [
+          BlocListener<MyThreadBloc, MyThreadState>(
+            listenWhen: (prev, curr) =>
+                prev.refreshingThread && !curr.refreshingThread && curr.threadFailed && curr.threadList.isNotEmpty,
+            listener: (context, state) {
+              final bloc = context.read<MyThreadBloc>();
+              showRefreshFailedSnackBar(
+                context,
+                state.threadFailure,
+                onRetry: () {
+                  if (!bloc.isClosed) {
+                    bloc.add(MyThreadRefreshThreadRequested());
+                  }
+                },
+              );
+            },
+          ),
+          BlocListener<MyThreadBloc, MyThreadState>(
+            listenWhen: (prev, curr) =>
+                prev.refreshingReply && !curr.refreshingReply && curr.replyFailed && curr.replyList.isNotEmpty,
+            listener: (context, state) {
+              final bloc = context.read<MyThreadBloc>();
+              showRefreshFailedSnackBar(
+                context,
+                state.replyFailure,
+                onRetry: () {
+                  if (!bloc.isClosed) {
+                    bloc.add(MyThreadRefreshReplyRequested());
+                  }
+                },
+              );
+            },
+          ),
+        ],
+        child: BlocBuilder<MyThreadBloc, MyThreadState>(
+          builder: (context, state) {
+            return Scaffold(
+              appBar: AppBar(
+                title: Text(context.t.myThreadPage.title),
+                bottom: TabBar(
+                  controller: _tabController,
+                  tabs: [
+                    Tab(child: Text(context.t.myThreadPage.threadTab.title)),
+                    Tab(child: Text(context.t.myThreadPage.replyTab.title)),
+                    Tab(child: Text(context.t.draftBox.title)),
+                  ],
+                ),
               ),
-            ),
-            body: SafeArea(
-              bottom: false,
-              child: TabBarView(
-                controller: _tabController,
-                children: [_buildThreadTab(context, state), _buildReplyTab(context, state), const DraftBoxPanel()],
+              body: SafeArea(
+                bottom: false,
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [_buildThreadTab(context, state), _buildReplyTab(context, state), const DraftBoxPanel()],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

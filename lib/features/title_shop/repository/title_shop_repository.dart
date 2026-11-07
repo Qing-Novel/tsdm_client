@@ -17,20 +17,23 @@ final class TitleShopIdentityException implements Exception {
 /// Title shop access bound to one network client's account. Never retries a purchase POST.
 class TitleShopRepository {
   /// Injected transports allow purchases to be tested without a live account.
-  TitleShopRepository({required this.getPage, required this.postForm});
+  TitleShopRepository({required this.getPage, required this.postForm, this.askApi});
 
   /// Uses the account-bound client; the purchase is a single attempt that follows no redirect.
   factory TitleShopRepository.network(NetClientProvider client) => TitleShopRepository(
     // JSON mode of the forum's app API when the forum has it (see TsdmAppApi); the web page otherwise.
-    getPage: (url) async => switch (await client.get(withTsdmAppJson(url)).run()) {
-      Right(:final value) => tsdmAppPageHtml(value.data),
-      Left(:final value) => throw value,
-    },
+    // An answer without a page (an empty body) fails the read, it is not a shop page served to a guest.
+    getPage: (url) => fetchTsdmAppPageHtml(client, url),
+    // The write result of the forum's app API (plugin 2.6.0) is read as the page it stands for (the 提示信息).
     postForm: (url, body) async => switch (await client.postForm(url, data: body, singleAttempt: true).run()) {
-      Right(:final value) => value.data as String,
+      Right(:final value) => tsdmAppWriteAnswerHtml(value.data),
       Left(:final value) => throw value,
     },
+    askApi: (query) => TsdmAppApi.askWaiting(client, 'titleshop', query),
   );
+
+  /// The forum's app API (`titleshop`), asked first when set; null answers fall back to [getPage].
+  final Future<Map<String, dynamic>?> Function(Map<String, String> query)? askApi;
 
   /// Reads shop pages only.
   final Future<String> Function(String url) getPage;
@@ -42,6 +45,18 @@ class TitleShopRepository {
   Future<TitleShopCatalog> fetchPage(String url, int uid) async {
     final safe = titleShopPageUrl(url);
     if (safe == null || uid <= 0) throw const FormatException('Title shop page refused');
+    if (askApi case final ask?) {
+      final page = Uri.parse(safe).queryParameters['page'];
+      final json = await ask({'page': ?page});
+      if (titleShopFromApi(json) case final catalog?) {
+        final served = (json!['uid'] as num?)?.toInt() ?? 0;
+        if (served != uid) throw TitleShopIdentityException(guest: served == 0);
+        return catalog;
+      }
+      if (json != null && json['ok'] == 0 && json['error'] == 'login') {
+        throw const TitleShopIdentityException(guest: true);
+      }
+    }
     final document = parseHtmlDocument(await getPage(safe));
     final served = parseLoggedUidFromDocument(document);
     if (served != uid) throw TitleShopIdentityException(guest: served == null);

@@ -8,6 +8,7 @@ import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/features/authentication/bloc/authentication_bloc.dart';
 import 'package:tsdm_client/features/authentication/repository/models/models.dart';
 import 'package:tsdm_client/features/authentication/widgets/captcha_image.dart';
+import 'package:tsdm_client/features/local_notice/notification_permission_prompt.dart';
 import 'package:tsdm_client/features/notification/bloc/auto_notification_cubit.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/utils/logger.dart';
@@ -207,6 +208,7 @@ class _LoginFormState extends State<LoginForm> with LoggerMixin {
                       descendantsAreFocusable: false,
                       child: IconButton(
                         icon: _showPassword ? const Icon(Icons.visibility) : const Icon(Icons.visibility_off),
+                        tooltip: _showPassword ? tr.hidePassword : tr.showPassword,
                         onPressed: () {
                           setState(() {
                             _showPassword = !_showPassword;
@@ -244,11 +246,15 @@ class _LoginFormState extends State<LoginForm> with LoggerMixin {
               icon: Icons.shield_outlined,
               children: [
                 InputDecorator(
-                  decoration: appFieldDecoration(label: tr.securityQuestion, icon: Icons.question_mark_outlined),
+                  // The dropdown is not dense: dense, its tap target was 24 high. Its 48 sit in the field's padding
+                  // instead, so the field stays as high as the text fields above.
+                  decoration: appFieldDecoration(
+                    label: tr.securityQuestion,
+                    icon: Icons.question_mark_outlined,
+                  ).copyWith(contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4)),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       value: _question,
-                      isDense: true,
                       // Long questions are cut with an ellipsis instead of overflowing on narrow phones.
                       isExpanded: true,
                       borderRadius: BorderRadius.circular(appInnerRadius),
@@ -352,6 +358,8 @@ class _LoginFormState extends State<LoginForm> with LoggerMixin {
           }
           // Same reason as the pause above: the auto sync resumes only when the holder that paused it resumes.
           context.read<AutoNotificationCubit>().resume('login');
+          // Now that there is an account to notify for: the card explaining the notification permission, once.
+          askNotificationPermissionAfterLogin();
         } else if (state.status == AuthenticationStatus.failure) {
           // The bloc owns form refresh; listeners must not start duplicate sessions.
           verifyCodeController.clear();

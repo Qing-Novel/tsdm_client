@@ -1,10 +1,15 @@
 package kzs.th000.tsdm_client
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -21,12 +26,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Response
+import java.io.ByteArrayOutputStream
 
 class MainActivity: FlutterActivity() {
     companion object {
         const val MAIN_CHANNEL = "kzs.th000.tsdm_client/mainChannel"
         const val EXIT_APP = "exitApp"
         const val OPEN_IN_BROWSER = "openInBrowser"
+        const val SET_HIGH_REFRESH_RATE = "setHighRefreshRate"
+        const val IS_ACTIVE_NETWORK_METERED = "isActiveNetworkMetered"
+        /** Sent to Dart with whether the default network is metered, each time it changes. */
+        const val NETWORK_METERED_CHANGED = "networkMeteredChanged"
 
         const val UPDATE_CHANNEL = "kzs.th000.tsdm_client/updateChannel"
         const val INTERACTIVE_HTML_CHANNEL = "kzs.th000.tsdm_client/interactiveHtmlChannel"
@@ -37,6 +48,12 @@ class MainActivity: FlutterActivity() {
         const val HTTP_POST_MULTIPART = "postMultipart"
         const val HTTP_POST_JSON = "postJson"
 
+        /** Called on Dart while a GET that carried a `progressId` downloads: how much of its body arrived. */
+        const val HTTP_PROGRESS = "progress"
+
+        /** Largest buffer allocated up front for a body read with its progress; a larger body grows it as it comes. */
+        const val PREALLOCATED_BODY_MAX = 8L * 1024 * 1024
+
         /** Window size events sent to Dart, see `lib/utils/window_events.dart` (GitHub #28). */
         const val WINDOW_CHANNEL = "kzs.th000.tsdm_client/windowChannel"
 
@@ -46,27 +63,59 @@ class MainActivity: FlutterActivity() {
     }
 
     private var windowChannel: MethodChannel? = null
+    private var httpChannel: MethodChannel? = null
+    private var mainChannel: MethodChannel? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var flutterViewWatched = false
     private val updateScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     private var installingUpdate = false
 
+    /** Whether Dart asked for the highest refresh rate, re-applied when the window comes back (GitHub #182). */
+    private var preferHighRefreshRate = false
+
     /** Hold the deep link when app is launched from a link (cold start). */
     private var initialDeepLink: String? = null
 
+    /** The launcher shortcuts of the app icon, see [ShortcutsHandler]. */
+    private val shortcuts = ShortcutsHandler()
+
+    /** The home screen widget's state, told by Dart, see [HomeWidgetChannel]. */
+    private val homeWidget = HomeWidgetChannel()
+    /** The share intent the app was launched with (cold start), read when Dart asks for it, see [ShareIntents]. */
+    private var initialShareIntent: Intent? = null
+    private var shareChannel: MethodChannel? = null
+
+    /** Dart asked for the initial share: its handler for pushed shares is set, a share can be pushed to it now. */
+    private var dartTakesShares = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        shortcuts.onCreate(intent, savedInstanceState)
+        // The intent the activity was created with, only when it is new: the recents replay the launch intent of the
+        // task (with FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY), and a recreated process gets it again with its saved state;
+        // a link or a share handled before must not open its page or its editor a second time.
+        val launch = intent
+        val replayed = savedInstanceState != null ||
+            launch == null ||
+            (launch.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (replayed) return
         // 冷启动时捕获深度链接
-        if (intent?.action == Intent.ACTION_VIEW) {
-            initialDeepLink = intent?.dataString
+        if (launch.action == Intent.ACTION_VIEW) {
+            initialDeepLink = launch.dataString
+        }
+        if (ShareIntents.isShare(launch)) {
+            initialShareIntent = launch
         }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MAIN_CHANNEL)
-            .setMethodCallHandler{ call, result -> handleMainChannelCall(call, result) }
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HTTP_CHANNEL)
-            .setMethodCallHandler{ call, result -> handleHttpChannelCall(call, result) }
+        mainChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MAIN_CHANNEL).also {
+            it.setMethodCallHandler { call, result -> handleMainChannelCall(call, result) }
+        }
+        watchNetwork()
+        httpChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HTTP_CHANNEL)
+            .apply { setMethodCallHandler{ call, result -> handleHttpChannelCall(call, result) } }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UPDATE_CHANNEL)
             .setMethodCallHandler { call, result -> handleUpdateChannelCall(call, result) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, INTERACTIVE_HTML_CHANNEL)
@@ -92,6 +141,8 @@ class MainActivity: FlutterActivity() {
                 }
             }
         windowChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WINDOW_CHANNEL)
+        shortcuts.attach(flutterEngine.dartExecutor.binaryMessenger)
+        homeWidget.attach(flutterEngine.dartExecutor.binaryMessenger, this)
 
         // 处理 Flutter 端对深度链接的查询
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEEP_LINK_CHANNEL)
@@ -103,16 +154,61 @@ class MainActivity: FlutterActivity() {
                     result.notImplemented()
                 }
             }
+
+        // Content other apps shared to this one: asked once at a cold start, pushed on a warm one (onNewIntent).
+        shareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ShareIntents.CHANNEL).also {
+            it.setMethodCallHandler { call, result ->
+                if (call.method != ShareIntents.GET_INITIAL_SHARE) {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                dartTakesShares = true
+                val pending = initialShareIntent
+                initialShareIntent = null // Handed over once; a configuration change must not post it twice.
+                updateScope.launch {
+                    if (pending == null) {
+                        // Copies left by a run that was killed before uploading them.
+                        withContext(Dispatchers.IO) { ShareIntents.removeStale(applicationContext) }
+                        result.success(null)
+                    } else {
+                        result.success(readShare(pending))
+                    }
+                }
+            }
+        }
+    }
+
+    /** The shared content of [intent] with its images copied into the cache (file IO off the main thread). */
+    private suspend fun readShare(intent: Intent): Map<String, Any?>? = withContext(Dispatchers.IO) {
+        try {
+            ShareIntents.read(applicationContext, intent)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** 热启动（App 在后台）时接收新的深度链接并推送给 Flutter */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        shortcuts.onNewIntent(intent)
         if (intent.action == Intent.ACTION_VIEW) {
             val link = intent.dataString
             if (link != null && flutterEngine != null) {
                 MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, DEEP_LINK_CHANNEL)
                     .invokeMethod("onDeepLink", link)
+            }
+        }
+        if (ShareIntents.isShare(intent)) {
+            val channel = shareChannel
+            if (channel == null || !dartTakesShares) {
+                // Dart is not listening yet: keep it for its getInitialShare. Only the latest is kept: a second share
+                // within the seconds before Dart asks replaces the first (its images are cleaned up a day later).
+                initialShareIntent = intent
+                return
+            }
+            updateScope.launch {
+                val payload = readShare(intent) ?: return@launch
+                channel.invokeMethod(ShareIntents.ON_SHARE, payload)
             }
         }
     }
@@ -122,8 +218,23 @@ class MainActivity: FlutterActivity() {
         watchFlutterView()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // The display can change while in background (folding, an external screen), so pick the mode again.
+        if (preferHighRefreshRate) applyRefreshRate()
+    }
+
     override fun onDestroy() {
+        networkCallback?.let {
+            try {
+                (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(it)
+            } catch (_: Exception) {
+            }
+        }
+        networkCallback = null
         updateScope.cancel()
+        shortcuts.detach()
+        homeWidget.detach()
         super.onDestroy()
     }
 
@@ -265,6 +376,29 @@ class MainActivity: FlutterActivity() {
         windowChannel?.invokeMethod(name, payload)
     }
 
+    /** Tell Dart whether the default network is metered each time it changes ("on Wi-Fi only" settings). */
+    private fun watchNetwork() {
+        if (networkCallback != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = notifyNetworkMetered()
+            override fun onLost(network: Network) = notifyNetworkMetered()
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) =
+                notifyNetworkMetered()
+        }
+        try {
+            manager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (_: Exception) {
+            // Without the callback Dart asks again on its own (foreground, a few seconds old).
+        }
+    }
+
+    private fun notifyNetworkMetered() {
+        val metered = (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.isActiveNetworkMetered ?: true
+        runOnUiThread { mainChannel?.invokeMethod(NETWORK_METERED_CHANGED, metered) }
+    }
+
     private fun handleMainChannelCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             EXIT_APP -> {
@@ -272,8 +406,48 @@ class MainActivity: FlutterActivity() {
                 result.success(true)
             }
             OPEN_IN_BROWSER -> openInBrowser(call.argument<Any>("url") as? String, result)
+            SET_HIGH_REFRESH_RATE -> {
+                preferHighRefreshRate = call.argument<Any>("enable") as? Boolean ?: false
+                result.success(applyRefreshRate())
+            }
+            // Whether large downloads should wait (the thread list thumbnails "on Wi-Fi only"): the system's own answer,
+            // true without a network. Needs ACCESS_NETWORK_STATE, which the manifest has.
+            IS_ACTIVE_NETWORK_METERED -> {
+                val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                result.success(manager?.isActiveNetworkMetered ?: true)
+            }
             else -> result.notImplemented()
         }
+    }
+
+    /**
+     * Prefer the display mode with the highest refresh rate at the current resolution, or clear the preference
+     * (GitHub #182).
+     *
+     * Some vendor systems keep apps that set no preferred mode at 60Hz on 90/120Hz screens. Only modes with the
+     * current resolution are considered so the screen never switches resolution. Returns the refresh rate of the
+     * preferred mode, 0 when nothing is preferred.
+     */
+    private fun applyRefreshRate(): Double {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return 0.0
+        @Suppress("DEPRECATION")
+        val display = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay)
+            ?: return 0.0
+        val mode = if (preferHighRefreshRate) {
+            val current = display.mode
+            display.supportedModes
+                .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+                .maxByOrNull { it.refreshRate }
+        } else {
+            null
+        }
+        val attributes = window.attributes
+        val modeId = mode?.modeId ?: 0
+        if (attributes.preferredDisplayModeId != modeId) {
+            attributes.preferredDisplayModeId = modeId
+            window.attributes = attributes
+        }
+        return mode?.refreshRate?.toDouble() ?: 0.0
     }
 
     /** Forward native launch failures to the exportable Flutter log, without including the URL or its parameters. */
@@ -291,22 +465,52 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    /**
+     * The body of [resp], read in pieces with Dart told how much of it arrived (at most every 100 ms): the GET carried
+     * a `progressId`, an image whose loading shows its progress. `total` is -1 when the server did not tell the size.
+     */
+    private fun readReportingProgress(resp: Response, id: Int): ByteArray {
+        val body = resp.body
+        val total = body.contentLength()
+        val out = ByteArrayOutputStream(if (total in 1..PREALLOCATED_BODY_MAX) total.toInt() else 256 * 1024)
+        val buffer = ByteArray(16 * 1024)
+        var received = 0L
+        var reportedAt = 0L
+        body.byteStream().use { input ->
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                out.write(buffer, 0, count)
+                received += count
+                val now = SystemClock.uptimeMillis()
+                if (now - reportedAt >= 100) {
+                    reportedAt = now
+                    val args = mapOf("id" to id, "received" to received, "total" to total)
+                    runOnUiThread { httpChannel?.invokeMethod(HTTP_PROGRESS, args) }
+                }
+            }
+        }
+        return out.toByteArray()
+    }
+
     private fun handleHttpChannelCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             HTTP_GET -> {
                 val url = call.argument<String>("url")!!
                 val headers = call.argument<HashMap<String, String>>("headers")!!
+                val singleAttempt = call.argument<Boolean>("singleAttempt") ?: false
+                val progressId = call.argument<Int>("progressId")
                 CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
                     try {
-                        val resp = HttpClient.get(url, headers)
+                        val resp = HttpClient.get(url, headers, singleAttempt = singleAttempt)
                         val statusCode = resp.code
                         val headers = HashMap(resp.headers.toMultimap())
-                        val body = resp.body.bytes()
+                        val body = if (progressId == null) resp.body.bytes() else readReportingProgress(resp, progressId)
                         val isRedirect = resp.isRedirect
                         result.success(buildResponse(statusCode, headers, body, isRedirect))
                     } catch (e: Exception) {
                         Log.e("KT_HTTP_ERROR", "failed to get: ${e.message ?: "unknown error"}")
-                        result.error("KT_HTTP_ERROR", "failed to perform http GET",e.message ?: "unknown error")
+                        result.error(HttpClient.errorCode(e), "failed to perform http GET",e.message ?: "unknown error")
                     }
                 }
             }
@@ -325,17 +529,19 @@ class MainActivity: FlutterActivity() {
                         result.success(buildResponse(statusCode, headers, body, isRedirect))
                     } catch (e: Exception) {
                         Log.e("KT_HTTP_ERROR", "failed to post form: ${e.message ?: "unknown error"}")
-                        result.error("KT_HTTP_ERROR", "failed to perform http POST form",e.message ?: "unknown error")
+                        result.error(HttpClient.errorCode(e), "failed to perform http POST form", e.message ?: "unknown error")
                     }
                 }
             }
             HTTP_POST_MULTIPART -> {
                 val url = call.argument<String>("url")!!
                 val headers = call.argument<HashMap<String, String>>("headers")!!
-                val body = call.argument<HashMap<String, String>>("body")!!
+                // Strings, and maps describing a file part (see HttpClient.postMultipart).
+                val body = call.argument<HashMap<String, Any?>>("body")!!
+                val singleAttempt = call.argument<Boolean>("singleAttempt") ?: false
                 CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
                     try {
-                        val resp = HttpClient.postMultipart(url, headers, body)
+                        val resp = HttpClient.postMultipart(url, headers, body, singleAttempt = singleAttempt)
                         val statusCode = resp.code
                         val headers = HashMap(resp.headers.toMultimap())
                         val body = resp.body.bytes()
@@ -343,7 +549,7 @@ class MainActivity: FlutterActivity() {
                         result.success(buildResponse(statusCode, headers, body, isRedirect))
                     } catch (e: Exception) {
                         Log.e("KT_HTTP_ERROR", "failed to post multipart: ${e.message ?: "unknown error"}")
-                        result.error("KT_HTTP_ERROR", "failed to perform http POST multipart",e.message ?: "unknown error")
+                        result.error(HttpClient.errorCode(e), "failed to perform http POST multipart", e.message ?: "unknown error")
                     }
                 }
 
@@ -363,7 +569,7 @@ class MainActivity: FlutterActivity() {
                         result.success(buildResponse(statusCode, headers, body, isRedirect))
                     } catch (e: Exception) {
                         Log.e("KT_HTTP_ERROR", "failed to post json: ${e.message ?: "unknown error"}")
-                        result.error("KT_HTTP_ERROR", "failed to perform http POST json", e.message ?: "unknown error")
+                        result.error(HttpClient.errorCode(e), "failed to perform http POST json", e.message ?: "unknown error")
                     }
                 }
             }

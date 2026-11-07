@@ -24,6 +24,9 @@ class ScreenPaths {
   /// Show the group specified by group id `gid`.
   static const String forumGroup = '/forumGroup/:gid';
 
+  /// Cloud of the forum's tags.
+  static const String tagCloud = '/tags';
+
   /// Homepage: "https://www.tsdm39.com/forum.php"
   ///
   /// Only the very first part of page.
@@ -89,6 +92,18 @@ class ScreenPaths {
   /// Common entry of the medal centre, the current account's titles and the title shop.
   static const String medalTitleHub = '/medalTitleHub';
 
+  /// Titles got with medals (app API).
+  static const String titleExchange = '/titleExchange';
+
+  /// The current account's medals: shown in posts or hidden, and the medal record (app API).
+  static const String myMedals = '/myMedals';
+
+  /// Sending medals to members, for the medal centre's sending list (app API).
+  static const String medalGrant = '/medalGrant';
+
+  /// Issuing titles to members, for administrators and the title plugin's list (app API).
+  static const String titleIssue = '/titleIssue';
+
   /// Community bank balances, records and current-account transactions.
   static const String bank = '/bank';
 
@@ -113,14 +128,20 @@ class ScreenPaths {
   /// Page to edit current user's profile.
   static const String editUserProfile = '/editUserProfile';
 
+  /// Page to edit current user's signature; pops the signature saved, if any.
+  static const String editSignature = '/editSignature';
+
   /// App settings page.
+  ///
+  /// A page opened above the home shell (from the "me" tab and the menus of the list pages); it was a tab of the shell
+  /// before the "me" tab took its place.
   static const settings = NestedPath._('/settings');
 
-  /// App settings page with root navigator key.
-  ///
-  /// Due to https://github.com/flutter/flutter/issues/140586 it's impossible to navigate to another page outside the
-  /// shell route, copy a root route level page as workaround.
-  static const rootSettings = '/rootSettings';
+  /// The "me" tab of the home shell: the account in use, its pages, the settings and about the app.
+  static const String me = '/me';
+
+  /// The keyboard shortcuts of the desktop app, listed.
+  static const String keyboardShortcuts = '/keyboardShortcuts';
 
   /// Settings page for thread card appearance.
   static const settingsThreadAppearance = NestedPath._('threadAppearance', settings);
@@ -148,23 +169,20 @@ class ScreenPaths {
   /// is usually specified by the original source (in url).
   static const String threadV1 = '/thread/v1';
 
-  /// V2 version of the thread page.
-  ///
-  /// # Parameters
-  ///
-  /// `id` is thread id.
-  ///
-  /// `overrideReverseOrder`: set to "false" keep the original post order in
-  /// thread, for some use case user heading to a page contains a certain post.
-  ///
-  /// `overrideWithExactOrder`: set the exact thread order type, this value
-  /// is usually specified by the original source (in url).
-  static const String threadV2 = '/thread/v2/:id';
+  /// A goods of a trade thread: its page and buying it (pushed by the goods list, no route of its own).
+  static const String tradeGoods = '/tradeGoods';
 
-  /// Notice page.
+  /// Notice page, the notifications tab of the home shell.
   ///
   /// Show all notice and private messages on current user.
   static const String notice = '/notice';
+
+  /// The notice page opened above a page on top of the home shell (a thread being read, a form): a notification tap or
+  /// the bell there pushes it, and back returns to that page. With the shell alone the [notice] tab is shown instead.
+  ///
+  /// A page of the home shell cannot be pushed (https://github.com/flutter/flutter/issues/140586): this is a copy of
+  /// the tab at the root level, the same page without the navigation bar.
+  static const String rootNotice = '/rootNotice';
 
   /// Search notice.
   static const String noticeSearch = '/noticeSearch';
@@ -219,15 +237,24 @@ class ScreenPaths {
   /// Page to show "My thread" on web side.
   ///
   /// https://tsdm39.com/home.php?mod=space&do=thread&view=me
-  /// Even when redirect to this route, query parameters contain uid, only the
-  /// page of current user is visible.
-  /// https://tsdm39.com/home.php?mod=space&uid=xxx&do=thread&view=me
+  /// The list of a member named by uid or name opens [memberThread], unless the member is the current user.
   static const String myThread = '/myThread';
+
+  /// The threads and the replies of another member ("TA的主题").
+  ///
+  /// https://tsdm39.com/home.php?mod=space&uid=xxx&do=thread&view=me[&type=reply]
+  ///
+  /// Query parameters: `uid` and/or `username` (the member, as the link named them), `tab` (`reply` to show the
+  /// replies first). The current user's own list redirects to [myThread].
+  static const String memberThread = '/memberThread';
 
   /// Page to show the favorites (收藏) of the current user.
   ///
   /// https://tsdm39.com/home.php?mod=space&do=favorite&type=thread
   static const String favorite = '/favorite';
+
+  /// Page listing the threads kept for reading without network ("離線副本"), with the update of all of them.
+  static const String offlineThreads = '/offlineThreads';
 
   /// Page to show the friends list of a user.
   ///
@@ -249,6 +276,10 @@ class ScreenPaths {
   /// Post id and thread id are required.
   static const String rateLog = '/rateLog/:tid/:pid';
 
+  /// Page rendering one floor to an image to save or share, opened from the floor's menu with the floor as its extra
+  /// (`ShareFloorImageArgs`); without one (a link to the path) it goes to the homepage.
+  static const String shareFloorImage = '/shareFloorImage';
+
   /// Page to view and edit fast rate templates.
   static const String fastRateTemplate = '/fastRateTemplate/:pick';
 
@@ -257,6 +288,9 @@ class ScreenPaths {
 
   /// Page to view and edit fast reply templates.
   static const String fastReplyTemplate = '/fastReplyTemplate/:pick';
+
+  /// Page to arrange the quick phrases of the editors.
+  static const String quickPhrases = '/quickPhrases';
 
   /// Page to edit fast reply templates.
   static const String fastReplyTemplateEdit = '/fastReplyTemplateEdit/:editType';
@@ -288,6 +322,9 @@ class ScreenPaths {
 
   /// Page to view and thread visit history.
   static const String threadVisitHistory = '/threadVisitHistory';
+
+  /// Page listing the drafts kept on this device for the current account.
+  static const String localDrafts = '/localDrafts';
 
   /// Page  to show auto checkin detail information.
   static const String autoCheckinDetail = '/autoCheckinDetail';
@@ -348,6 +385,24 @@ class DialogPaths {
   /// Dialog to let user input thread price.
   static const String inputPrice = '/dialog/inputThreadPrice';
 
+  /// Dialog to set the reward credits of a new reward thread.
+  static const String rewardPrice = '/dialog/rewardPrice';
+
+  /// Dialog to set the red packet of a new red packet thread.
+  static const String hongbao = '/dialog/hongbao';
+
+  /// Dialog to set the activity of a new activity thread.
+  static const String activity = '/dialog/activity';
+
+  /// Dialog to set the debate of a new debate thread.
+  static const String debate = '/dialog/debate';
+
+  /// Dialog to set the poll of the first post of a poll edited.
+  static const String pollSettings = '/dialog/pollSettings';
+
+  /// Dialog to set when a new thread is published.
+  static const String cronPublish = '/dialog/cronPublish';
+
   /// Dialog to let user select thread read perm.
   static const String selectPerm = '/dialog/selectPerm';
 
@@ -360,6 +415,9 @@ class DialogPaths {
   /// Dialog to let user select all pages in thread could jump to.
   static const String jumpPage = '/dialog/jumpPage';
 
+  /// Dialog to ask for a floor of the thread to go to.
+  static const String jumpToFloor = '/dialog/jumpToFloor';
+
   /// Dialog to let user picker a font.
   static const String fontPicker = '/dialog/fontPicker';
 
@@ -368,6 +426,9 @@ class DialogPaths {
 
   /// Dialog to let user pick the extra text scale of thread content.
   static const String threadContentScalePicker = '/dialog/threadContentScalePicker';
+
+  /// Dialog to let user pick the line height and the paragraph spacing of thread content.
+  static const String threadContentLayoutPicker = '/dialog/threadContentLayoutPicker';
 
   /// Dialog to let user select the duration between auto syncing notice events.
   static const String selectAutoSyncDuration = '/dialog/selectAutoSyncDuration';
@@ -393,6 +454,9 @@ class DialogPaths {
   /// Common dialog to show question.
   static const String question = '/dialog/question';
 
+  /// Dialog to fill a form of a special thread (the activity's application, its cancel).
+  static const String specialThreadForm = '/dialog/specialThreadForm';
+
   /// Dialog to let user copy contents.
   static const String copyContent = '/dialog/copyContent';
 
@@ -402,17 +466,32 @@ class DialogPaths {
   /// Bottom sheet to let user pick emoji.
   static const String emojiPicker = '/dialog/emojiPicker';
 
+  /// Dialog to answer the captcha or the security question the forum asks before taking a post.
+  static const String secCheck = '/dialog/secCheck';
+
   /// Bottom sheet provide options to clear cache.
   static const String clearCache = '/dialog/clearCache';
 
   /// Dialog to select the duration consider an image cache as outdated.
   static const String autoClearImageCacheDuration = '/dialog/autoClearImageDialogDuration';
 
+  /// Dialog to select how many threads the offline copies are kept for.
+  static const String offlineThreadsLimit = '/dialog/offlineThreadsLimit';
+
+  /// Dialog showing the progress of saving the favorites offline or updating the offline copies.
+  static const String offlineBatch = '/dialog/offlineBatch';
+
   /// Dialog to show help message of thread card.
   static const String threadCardHelp = '/dialog/threadCardHelp';
 
+  /// Dialog to select when the thread lists show the thumbnails of the threads.
+  static const String selectThreadThumbnailMode = '/dialog/selectThreadThumbnailMode';
+
   /// Dialog to let user select the interaction mode on thread floors.
   static const String selectThreadFloorInteractionMode = '/dialog/selectThreadFloorInteractionMode';
+
+  /// Dialog to select where a thread read before opens from a list.
+  static const String selectThreadOpenPosition = '/dialog/selectThreadOpenPosition';
 
   /// Dialog to edit user profile.
   static const String editUserProfile = '/dialog/editUserProfile';
@@ -428,6 +507,12 @@ class DialogPaths {
 
   /// Dialog inputting pokemon related text (rename or buy quantity).
   static const String pokemonInput = '/dialog/pokemonInput';
+
+  /// Dialog to select when the pictures of the posts load by themselves.
+  static const String selectPostImageAutoLoad = '/dialog/selectPostImageAutoLoad';
+
+  /// Dialog to set the hours of the day the app is dark.
+  static const String darkSchedule = '/dialog/darkSchedule';
 }
 
 /// Route path for a screen.

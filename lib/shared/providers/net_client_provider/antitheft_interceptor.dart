@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/exceptions/exceptions.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/utils/antitheft/antitheft_decoder.dart';
 import 'package:tsdm_client/utils/logger.dart';
 
@@ -12,6 +13,9 @@ import 'package:tsdm_client/utils/logger.dart';
 ///
 /// Signs are cached in memory: once we know the sign of a thread, later requests to
 /// the same thread carry `_dsign` directly and skip the challenge round trip.
+///
+/// A thread page asked in the JSON mode of the forum's app API ([tsdmAppJsonQuery]) cannot carry the challenge, see
+/// [hidesChallenge]: that page is asked again as the web page, where the challenge is solved as above.
 ///
 /// See [AntitheftDecoder] for details on the challenge.
 final class AntitheftInterceptor extends Interceptor with LoggerMixin {
@@ -71,15 +75,55 @@ final class AntitheftInterceptor extends Interceptor with LoggerMixin {
     handler.next(options);
   }
 
+  /// Whether [data], the answer to [options], is a thread page asked in JSON mode that may hide the challenge.
+  ///
+  /// The JSON answer of a challenged thread holds neither the thread nor a forum message, and the challenge script is
+  /// lost in it ([tsdmAppAnswerWithoutContent]). An answer without a page (the plugin failed to build it, or an empty
+  /// body) is asked again as well. An answer holding the posts is never asked again, whatever its `ok`: the thread
+  /// cache a guest is served is answered `unknown` with the whole post list, and asking again would read (and count a
+  /// view of) the thread twice. Nor is an answer that carries the thread as structured fields (`schema`) or the
+  /// forum's message with `login`, which plugin 2.3.0 answers without a `document` when asked with
+  /// [tsdmAppNodocQuery] ([tsdmAppAnswerHasStructuredPage]): the page is there, just not as blocks. Thread pages, and
+  /// the `findpost` redirect ending on one, are the only JSON mode pages the forum guards.
+  ///
+  /// Marked as public for testing.
+  static bool hidesChallenge(RequestOptions options, Object? data) {
+    final uri = options.uri;
+    final query = uri.queryParameters;
+    return const {'GET', 'HEAD'}.contains(options.method.toUpperCase()) &&
+        _isForumHost(uri) &&
+        query['tsdmapp'] == 'json' &&
+        uri.pathSegments.lastOrNull == 'forum.php' &&
+        (query['mod'] == 'viewthread' || query['mod'] == 'redirect') &&
+        tsdmAppAnswerWithoutContent(data);
+  }
+
   @override
   Future<void> onResponse(Response<dynamic> response, ResponseInterceptorHandler handler) async {
     final data = response.data;
     final options = response.requestOptions;
-    if (data is! String || !_isForumHost(options.uri) || !AntitheftDecoder.isChallenge(data)) {
+    if (response.statusCode == 404) {
+      // Only a request that takes a 404 as an answer gets here (the thread page reading the message of a deleted
+      // thread): no challenge, and the web page is never asked again for its empty or JSON body.
       handler.next(response);
       return;
     }
-    if (!const {'GET', 'HEAD'}.contains(options.method.toUpperCase())) {
+    if (hidesChallenge(options, data)) {
+      await _askWebPage(response, handler);
+      return;
+    }
+    final isRead = const {'GET', 'HEAD'}.contains(options.method.toUpperCase());
+    // The result of a write the plugin answered as JSON (plugin 2.6.0) may carry the challenge as its page: the
+    // forum never redirects such a request, so this is not expected, but a wrapped challenge is not a result either.
+    final challengeHtml = switch (data) {
+      final String html => AntitheftDecoder.isChallenge(html) ? html : null,
+      _ => isRead ? null : _wrappedChallenge(data),
+    };
+    if (challengeHtml == null || !_isForumHost(options.uri)) {
+      handler.next(response);
+      return;
+    }
+    if (!isRead) {
       // A challenge may be the final page after a successful POST redirect. Copying that request would resend its
       // form body, so mutating requests are never replayed. Report an error instead of handing the challenge html to
       // the caller as if it were the result; confirmation is left to the caller's own fresh GET (e.g. PollCubit).
@@ -102,7 +146,7 @@ final class AntitheftInterceptor extends Interceptor with LoggerMixin {
       return;
     }
 
-    final challenge = AntitheftDecoder.decode(data);
+    final challenge = AntitheftDecoder.decode(challengeHtml);
     if (challenge == null) {
       error('antitheft: failed to decode challenge from ${options.uri}');
       handler.next(response);
@@ -135,6 +179,49 @@ final class AntitheftInterceptor extends Interceptor with LoggerMixin {
         options.copyWith(
           path: target.replace(queryParameters: retryQuery).toString(),
           queryParameters: {AntitheftDecoder.dsignKey: challenge.dsign},
+          extra: {...options.extra, _retryCountKey: retryCount + 1},
+        ),
+      );
+      handler.resolve(resp);
+    } on DioException catch (e) {
+      handler.reject(e);
+    }
+  }
+
+  /// The challenge html carried as the page of a write result (plugin 2.6.0, [tsdmAppWriteResultOf]) in [data],
+  /// null when [data] is no such result or its page is not the challenge.
+  static String? _wrappedChallenge(Object? data) {
+    final result = tsdmAppWriteResultOf(data);
+    if (result == null || result.kind != TsdmAppWriteKind.page) {
+      return null;
+    }
+    return AntitheftDecoder.isChallenge(result.documentHtml) ? result.documentHtml : null;
+  }
+
+  /// Ask the page of [response] again without the JSON mode (see [hidesChallenge]), once.
+  ///
+  /// The forum then answers the challenge itself, which is solved here and its sign cached: later JSON mode requests
+  /// to the thread carry it and get the thread. Without a challenge (an answer the plugin failed to build, or an empty
+  /// body) the web page comes back, which every JSON mode caller parses as well.
+  Future<void> _askWebPage(Response<dynamic> response, ResponseInterceptorHandler handler) async {
+    final options = response.requestOptions;
+    final retryCount = (options.extra[_retryCountKey] as int?) ?? 0;
+    if (retryCount >= _maxRetry) {
+      handler.next(response);
+      return;
+    }
+    // As for the challenge retry: other interceptors add their parameters again; a sign that did not help is dropped.
+    final query = Map.of(options.uri.queryParametersAll)
+      ..remove('tsdmapp')
+      ..remove('nodoc')
+      ..remove('mobile')
+      ..remove(AntitheftDecoder.dsignKey);
+    debug('antitheft: ${options.uri} answered JSON without the thread, asking the web page');
+    try {
+      final resp = await _dio.fetch<dynamic>(
+        options.copyWith(
+          path: options.uri.replace(queryParameters: query).toString(),
+          queryParameters: <String, dynamic>{},
           extra: {...options.extra, _retryCountKey: retryCount + 1},
         ),
       );

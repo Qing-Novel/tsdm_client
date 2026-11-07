@@ -8,6 +8,7 @@ import 'package:talker_flutter/talker_flutter.dart';
 import 'package:tsdm_client/features/post_report/cubit/post_report_cubit.dart';
 import 'package:tsdm_client/features/post_report/models/post_report.dart';
 import 'package:tsdm_client/features/post_report/repository/post_report_repository.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/providers/cookie_provider/cookie_provider.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
@@ -101,7 +102,19 @@ void main() {
       expect(form.reasons, hasLength(5));
       expect(forum.posts, isEmpty);
       expect(forum.gets, hasLength(2));
-      expect(forum.gets[0].$1, reportTarget.floorUrl);
+      // The floor page is asked in the JSON mode of the forum's app API (test_215), lean (`nodoc=1`, test_217); the
+      // web page comes back without the plugin and is read as before.
+      expect(forum.gets[0].$1, Uri.parse(withTsdmAppJson(reportTarget.floorUrl.toString())));
+      expect(forum.gets[0].$1.queryParameters, containsPair('tsdmapp', 'json'));
+      expect(forum.gets[0].$1.queryParameters, containsPair('nodoc', '1'));
+      expect(
+        forum.gets[0].$1.replace(
+          queryParameters: {...forum.gets[0].$1.queryParameters}
+            ..remove('tsdmapp')
+            ..remove('nodoc'),
+        ),
+        reportTarget.floorUrl,
+      );
       expect(forum.gets[0].$2, isFalse);
       final ajax = forum.gets[1].$1;
       expect(forum.gets[1].$2, isTrue);
@@ -117,6 +130,10 @@ void main() {
         'inajax': '1',
         'infloat': 'yes',
         'handlekey': 'miscreport$reportPid',
+        // The dialog is asked as a small form of the forum's app API (plugin 3.0.0); an older plugin answers its
+        // write result (plugin 2.6.0) to the same request.
+        'tsdmapp': 'json',
+        'tsdmform': '1',
       });
     });
 

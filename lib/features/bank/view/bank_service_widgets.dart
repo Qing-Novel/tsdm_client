@@ -171,6 +171,7 @@ String _serviceActionTitle(BuildContext context, BankServiceForm form) {
     BankService.hall => '${tr.openAccount} · ${form.label}',
     BankService.interest => tr.settleInterest,
     BankService.term when form.operation == 'in' => tr.termDeposit,
+    BankService.term when form.confirmUrl != null => tr.termWithdraw,
     BankService.remittance => tr.remittance,
     BankService.loans when form.operation == 'try' => tr.loanApply,
     BankService.account when form.operation == 'cg' => tr.changePassword,
@@ -193,11 +194,20 @@ String _inputTitle(BuildContext context, BankInput input) {
 }
 
 class _BankServiceDialog extends StatefulWidget {
-  const _BankServiceDialog({required this.controller, required this.data, required this.form, required this.bankName});
+  const _BankServiceDialog({
+    required this.controller,
+    required this.data,
+    required this.form,
+    required this.bankName,
+    this.notice = '',
+  });
   final BankCubit controller;
   final BankServiceData data;
   final BankServiceForm form;
   final String bankName;
+
+  /// The confirmation page's own notice (a term withdrawal), shown with the record.
+  final String notice;
 
   @override
   State<_BankServiceDialog> createState() => _BankServiceDialogState();
@@ -294,6 +304,16 @@ class _BankServiceDialogState extends State<_BankServiceDialog> {
                         ),
                         if (widget.form.context.isNotEmpty)
                           Padding(padding: const EdgeInsets.only(top: 8), child: Text(widget.form.context)),
+                        if (widget.notice.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: AppNoticeBanner(
+                              key: const ValueKey('bank-service-notice'),
+                              message: widget.notice,
+                              tone: AppNoticeTone.warning,
+                              icon: Icons.info_outline,
+                            ),
+                          ),
                         sizedBoxW8H8,
                         if (_confirming) ...[
                           AppInsetBlock(

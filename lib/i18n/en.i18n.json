@@ -2,6 +2,7 @@
   "draftBox": {
     "editUnconfirmed": "The edit result could not be confirmed. Check the original thread or website for the updated content or moderation status before submitting again.",
     "acceptedUnconfirmed": "The forum accepted your content, but its draft status could not be verified. It may be awaiting moderation. Check My threads or the website before submitting again.",
+    "stillDraft": "The forum took your changes but keeps this thread a draft (it may be scheduled to publish later): it was not published. Check its publish time on the website.",
     "title": "Drafts",
     "empty": "No forum drafts yet. Choose Save as draft when composing a thread to continue it here.",
     "loginRequired": "Sign in to view your drafts.",
@@ -142,6 +143,8 @@
     "retry": "Retry",
     "noPermission": "No permission to view this content",
     "needLoginToSeeThisPage": "Need to login to see this page",
+    "needLogin": "Please log in first",
+    "accountChangedRetry": "The account changed meanwhile: open this page again.",
     "pleaseWait": "Please wait",
     "loadFailedAndRetry": "Load failed, retrying",
     "noData": "No Data",
@@ -161,17 +164,97 @@
     "openInBrowser": "Open in browser",
     "close": "Close"
   },
+  "loadState": {
+    "loading": "Loading…",
+    "failure": {
+      "noNetwork": {
+        "title": "Can't reach the forum",
+        "hint": "Check the network connection and try again."
+      },
+      "connectionLost": {
+        "title": "The connection dropped",
+        "hint": "The network may be unstable, try again."
+      },
+      "timeout": {
+        "title": "The forum took too long to answer",
+        "hint": "The forum or the network is slow right now, try again in a moment."
+      },
+      "rateLimited": {
+        "title": "Too many requests, the forum is holding off",
+        "hint": "Wait a moment, then try again.",
+        "hintSeconds": "Try again in ${seconds: int} seconds."
+      },
+      "server": {
+        "title": "The forum's server ran into a problem",
+        "hint": "It usually recovers soon, try again later."
+      },
+      "badStatus": {
+        "title": "The forum answered with an error",
+        "hint": "Try again later; if it keeps failing, the details below help to report it."
+      },
+      "challenge": {
+        "title": "The site asked for a browser check",
+        "hint": "Try again later, or open the forum in the browser."
+      },
+      "closed": {
+        "title": "The forum is closed or under maintenance",
+        "hint": "Come back later."
+      },
+      "needLogin": {
+        "title": "Log in to see this",
+        "hint": "The forum shows this to logged in members only."
+      },
+      "noPermission": {
+        "title": "No permission to see this",
+        "hint": "The account in use may not see this, another account might."
+      },
+      "accountChanged": {
+        "title": "The account changed meanwhile",
+        "hint": "Load the page again for the account in use."
+      },
+      "unknown": {
+        "title": "Failed to load",
+        "hint": "Try again; if it keeps failing, the details below help to report it."
+      }
+    },
+    "details": "Details",
+    "hideDetails": "Hide details",
+    "copyDetails": "Copy details",
+    "retryIn": "Retry in ${seconds: int} s",
+    "refreshFailed": "Refresh failed: ${reason}",
+    "footer": {
+      "loading": "Loading more…",
+      "failed": "Failed to load more: ${reason}"
+    }
+  },
   "navigation": {
     "homepage": "Home",
     "topics": "Forums",
     "activities": "Activities",
     "notice": "Notifications",
-    "profile": "Profile",
-    "moreSection": "More",
-    "titleShop": "Title shop",
-    "medalCenter": "Medal center",
-    "bank": "Bank",
+    "me": "Me",
     "settings": "Settings"
+  },
+  "mePage": {
+    "title": "Me",
+    "mine": "My account",
+    "services": "Forum services",
+    "app": "App",
+    "switchAccount": "Switch account",
+    "inUse": "In use",
+    "uid": "UID ${uid}",
+    "guestTitle": "Not logged in",
+    "guestDetail": "Log in to check in, keep favorites, and read your notifications and messages.",
+    "entries": {
+      "myThreads": "My threads",
+      "favorites": "Favorites",
+      "history": "History",
+      "drafts": "Forum drafts",
+      "localDrafts": "Local drafts",
+      "messages": "Messages",
+      "friends": "Friends",
+      "points": "Points"
+    }
   },
   "home": {
     "confirmExit": "Press again to exit"
@@ -196,6 +279,11 @@
       "failed": "Failed to load, tap to retry",
       "empty": "No threads yet"
     },
+    "saved": {
+      "updating": "Showing the homepage of ${time}, updating…",
+      "failed": "Could not update, showing the homepage of ${time}",
+      "retry": "Retry"
+    },
     "forumStatus": {
       "today": "Today",
       "yesterday": "Yesterday",
@@ -211,7 +299,13 @@
     "forumActivity": "Forum activity",
     "guideTitle": "Forum guide",
     "tools": "My tools",
-    "supportNote": "Entirely optional: every feature stays available without it"
+    "supportNote": "Entirely optional: every feature stays available without it",
+    "guest": {
+      "title": "Log in to see more",
+      "detail": "With an account you can check in, claim the daily red packet, keep favorites, read your notifications and messages, and enter the forums open to members only.",
+      "forums": "Forums",
+      "allForums": "All forums"
+    }
   },
   "medalTitleHub": {
     "title": "Medals & titles",
@@ -234,7 +328,13 @@
     "title": "Settings",
     "accountSection": {
       "title": "Account",
-      "mgmt": "Manage account"
+      "mgmt": "Manage account",
+      "crossDeviceSync": {
+        "title": "Sync across devices",
+        "rateTemplates": "Rate templates",
+        "settings": "Reading and display settings",
+        "drafts": "Local drafts"
+      }
     },
     "appearanceSection": {
       "title": "Appearance",
@@ -242,7 +342,13 @@
         "title": "Theme Mode",
         "light": "Light",
         "system": "Follow System",
-        "dark": "Dark"
+        "dark": "Dark",
+        "scheduled": "By time"
+      },
+      "darkSchedule": {
+        "title": "Dark hours",
+        "start": "Start",
+        "end": "End"
       },
       "colorSchemeFollowSystem": {
         "title": "Color Follow System",
@@ -257,9 +363,16 @@
         "followSystem": "Follow System",
         "selectLanguage": "Select Language"
       },
+      "highRefreshRate": {
+        "title": "High Refresh Rate",
+        "detail": "Run at the highest refresh rate the screen supports, smoother scrolling but uses a little more battery"
+      },
       "showShortcutInForumCard": {
         "title": "Forum Card Shortcut Entries",
         "detail": "Show shortcut entries towards latest thread and subreddits in forum card"
+      },
+      "twoPaneLayout": {
+        "title": "Two panes on wide windows"
       },
       "showUnreadInfoHint": {
         "title": "Unread Info Hint",
@@ -273,6 +386,27 @@
         "highlightRecentThread": "Highlight recently published thread",
         "highlightAuthorName": "Highlight thread author's username",
         "highlightInfoRow": "Highlight into row",
+        "listPreview": {
+          "title": "List previews",
+          "note": "The excerpts and the thumbnails come from the forum; until the forum offers them, the lists show the titles only. Content that needs a permission to read never shows in a preview.",
+          "showExcerpt": {
+            "title": "Show excerpts in lists",
+            "detail": "Two lines from the start of the first post under the title"
+          },
+          "thumbnail": {
+            "title": "Show thumbnails in lists",
+            "always": "Always",
+            "alwaysDetail": "Also on mobile data: then only the small thumbnails the forum made; the pictures themselves on Wi-Fi",
+            "wifiOnly": "Wi-Fi only",
+            "wifiOnlyDetail": "Only on Wi-Fi or another network that is not metered",
+            "never": "Off",
+            "neverDetail": "No pictures in the lists"
+          },
+          "externalImages": {
+            "title": "Load images of other sites in lists",
+            "detail": "Off: the thumbnails only use the forum's own attachments. An image hosted elsewhere tells its site who scrolls past the thread (on the web it only loads once the thread is opened), so it is left out unless this is on."
+          }
+        },
         "example": {
           "title": "TV Anime \"A Certain Magical Index\" 4th Season Coming Out",
           "author": "茵蒂克丝",
@@ -345,10 +479,30 @@
         "title": "Thread content scale",
         "detail": "Extra scale for post content in thread page, on top of text scale",
         "dialogTitle": "Thread content scale factor"
+      },
+      "threadContentLineHeight": {
+        "title": "Post line height",
+        "detail": "Height of each line of post content, a multiple of the font size"
+      },
+      "threadContentParagraphSpacing": {
+        "title": "Post paragraph spacing",
+        "detail": "Space between the paragraphs of post content"
+      },
+      "threadContentSplitLongParagraphs": {
+        "title": "Split long paragraphs",
+        "detail": "Show very long paragraphs broken after the end of a sentence; the text and what is copied stay unchanged"
+      },
+      "threadContentLayout": {
+        "dialogTitle": "Post layout",
+        "lineHeight": "Line height",
+        "paragraphSpacing": "Paragraph spacing",
+        "preview": "Preview",
+        "previewText": "This is sample text to preview the layout of post content. A larger line height spreads the lines further apart; paragraph spacing is the space between two paragraphs.<br />A phone screen is much narrower than the web page: a paragraph of a few lines there becomes a dozen lines here, and a little more room makes it easier to read."
       }
     },
     "windowSection": {
       "title": "Window",
+      "keyboardShortcuts": "Keyboard shortcuts",
       "disableHint": "Add cmdline args \"--no-window-configs\" will disable this settings section, which is useful when window is missing after startup.",
       "windowRememberSize": {
         "title": "Remember window size",
@@ -377,13 +531,39 @@
         "title": "Background Message Service",
         "detail": "Keeps checking for new notices and private messages at the auto sync interval and notifies you while the app is in the background or was cleared; uses some more battery (Android only)"
       },
+      "backgroundSyncAllAccounts": {
+        "title": "Background notices: all logged-in accounts",
+        "detail": "The app's auto sync (also while the desktop app is in the tray) and the Android background message service also check the other accounts logged in on this device, each with its own login; new notices are announced under the account's name, and tapping one switches to that account before opening the notice page",
+        "seenNote": "Checking the other accounts marks their notices read on the website (the red dot goes away), as opening the notice page would"
+      },
+      "noticeCategories": {
+        "title": "Notification categories",
+        "reply": "Replies",
+        "mention": "Mentions",
+        "rate": "Ratings and comments",
+        "pm": "Private messages",
+        "system": "System notices",
+        "quietHours": "Quiet hours",
+        "quietStart": "From",
+        "quietEnd": "Until"
+      },
+      "notificationHideContent": {
+        "title": "Hide notification content",
+        "detail": "System notifications only show the account and how many new items there are, not who did what nor the message text"
+      },
       "notificationPermission": {
         "title": "Notification permission",
         "detail": "Required by auto sync to show new notices, messages and broadcasts as system notifications",
         "granted": "Allowed",
         "denied": "Not allowed",
         "permanentlyDenied": "Permanently denied",
-        "openSettingsTip": "The system no longer shows the permission dialog. Open the app settings page and turn on notifications there, then come back."
+        "openSettingsTip": "The system no longer shows the permission dialog. Open the app settings page and turn on notifications there, then come back.",
+        "promptTitle": "Allow notifications?",
+        "promptMessage": "New notices, private messages and broadcast messages are then shown as system notifications. The system asks for the permission next; you can change it later in Settings → Notification permission.",
+        "promptAllow": "Continue",
+        "promptLater": "Not now",
+        "promptSettingsMessage": "Notifications are denied or switched off in the system, which will not ask again. Turn them on in the app settings page to get notifications.",
+        "promptOpenSettings": "Open settings"
       },
       "ignoreBatteryOptimizations": {
         "title": "Ignore battery optimizations",
@@ -398,15 +578,32 @@
           "detail": "BBCode parser converts plain text BBCode into WYSIWYG content when:\n\n1. Editing published thread\n2. Editing reply templates\n3. Insert reply templates\n4. Expand bottom editor in thread and chat page\n\nDisabling BBCode parser will leave plain text to edit, turn if off when you get bugs."
         }
       },
+      "threadSwipePaging": {
+        "title": "Swipe sideways to turn pages"
+      },
       "collapseAppBarWhenScroll": {
-        "title": "Hide app bar when scroll",
-        "detail": "Hide when scroll down in subreddit and thread pages"
+        "title": "Hide app bar when scrolling",
+        "detail": "Hide the app bar and the breadcrumbs when scrolling down a thread, show them again when scrolling up"
+      },
+      "postImageAutoLoad": {
+        "title": "Load images in posts automatically",
+        "detail": "Only the pictures of the floors of threads: one not loaded automatically shows a placeholder and loads when tapped; cached pictures always show",
+        "always": "Always",
+        "wifiOnly": "Wi-Fi only",
+        "never": "Never (tap to load)"
       },
       "threadFloorInteractionMode": {
         "title": "Interaction on thread floor",
         "detail": "Interaction on floors in thread page",
         "adaptiveTapOpenContextMenu": "Open context menu when long press or right click",
         "tapToReply": "Set floor as reply target when tap"
+      },
+      "threadOpenPosition": {
+        "title": "Opening a thread read before",
+        "detail": "Opened from a list, a thread you read past its first screen can go on where you stopped",
+        "fromStart": "From the start",
+        "ask": "Ask (a \"continue\" banner)",
+        "resume": "Continue where I stopped"
       }
     },
     "checkinSection": {
@@ -432,6 +629,7 @@
       "log": "Log",
       "selectOneCache": "Need to select at least one kind of cache",
       "clearSuccess": "Cleared successfully",
+      "offlineThreadsCache": "Offline threads",
       "scheduledCleaning": {
         "title": "Auto clear image",
         "details": "Clear long time not used image cache when app start",
@@ -446,11 +644,30 @@
           "15days": "15 days",
           "30days": "30 days"
         }
+      },
+      "offlineThreads": {
+        "title": "Save viewed threads offline",
+        "detail": "Keep the thread pages you open on this device to read them again without network; each account only sees its own copies. Turning it off deletes them",
+        "limit": {
+          "title": "Threads to keep",
+          "detail": "Shared by all accounts; the threads not read for the longest time are deleted first. Each thread keeps at most 20 pages",
+          "value": "${count: int} threads"
+        }
       }
     },
     "advancedSection": {
       "title": "Advanced",
       "useProxy": "Use proxy",
+      "forumApi": {
+        "title": "Forum API",
+        "detected": "Plugin ${seen} · app expects ${expected}",
+        "notDetected": "Not detected · app expects ${expected}",
+        "olderNote": "Some pages are parsed from the web page"
+      },
+      "appPostRenderer": {
+        "title": "Render posts with the app's renderer (experimental)",
+        "detail": "With the forum API plugin 2.7.0, floors whose whole content you can see are drawn from their bbcode by the app; floors it can not draw faithfully keep the forum's web content"
+      },
       "proxySettings": {
         "title": "Proxy Settings",
         "host": "Host",
@@ -473,6 +690,7 @@
       },
       "exportData": "Export data",
       "exportDataDetail": "Without cookies and passwords by default; optionally include them, encrypted with a password of your own",
+      "exportDataFailed": "Export failed; nothing was changed, try again later",
       "backupTitle": "Backup and restore",
       "exportBackup": {
         "title": "Export data",
@@ -554,12 +772,46 @@
     "featureRequestAction": "Request a feature on GitHub",
     "featureRequestOpenFailed": "Could not open the browser. Please try again, or copy the link below and open it yourself.",
     "donationTitle": "Voluntary donation",
-    "donationDescription": "This project is free and open source. Donations support the development and maintenance of the client and are received personally by Carinoasd. This is not an official forum fundraiser. All features remain available whether or not you donate.",
+    "donationDescription": "This project is free and open source. Donations support the development and maintenance of the client and are received personally by Carinoasd. They also earn the rewards of the forum announcement 「支援天使」 (Support Angel), see below. All features remain available whether or not you donate.",
     "donationInstructions": "Scan with Alipay, or take a screenshot and select it from the Alipay scanner. You can also save the original image.",
     "donationCodeLabel": "Alipay QR code for voluntary donations to Carinoasd",
     "saveDonationCode": "Save QR code",
     "donationCodeSaved": "QR code saved.",
     "donationCodeSaveFailed": "Could not save the QR code. Please try again or take a screenshot.",
+    "forumReward": {
+      "title": "Forum rewards",
+      "description": "A donation to the app's development earns the rewards of the forum announcement 「支援天使」 (Support Angel), on the same terms as the announcement.",
+      "separator": ": ",
+      "tier50": {
+        "amount": "From ¥50",
+        "reward": "the commemorative rank 「梦幻天使」, plus 300 prestige (威望), 1500 angel coins (天使币) and 50 publicity points (宣传点); other amounts count in multiples of this"
+      },
+      "tier100": {
+        "amount": "From ¥100",
+        "reward": "the permanent commemorative medal 「瓶中MIKU」"
+      },
+      "tier200": {
+        "amount": "From ¥200",
+        "reward": "the rank 「梦幻天使2」 (check-in points doubled for this user group), plus the medal 「瞌睡天使」"
+      },
+      "tierEvery100": {
+        "amount": "Every further ¥100",
+        "reward": "a permanent anniversary medal with a special meaning"
+      },
+      "tier500": {
+        "amount": "From ¥500",
+        "reward": "a choice between 「梦幻天使X」 and 「梦幻天使Y」"
+      },
+      "claimTitle": "How to claim",
+      "claim": "when paying, write your forum username (or UID) in the Alipay note, then send me a private message with the amount and your forum account; once confirmed, the rewards go to that account.",
+      "account": "Your forum account: ${username} (UID ${uid})",
+      "accountNoUid": "Your forum account: ${username}",
+      "copyUsername": "Copy username",
+      "usernameCopied": "Username copied. Paste it into the payment note.",
+      "notLoggedIn": "Write your forum username in the payment note and in the message.",
+      "messageMe": "Message me",
+      "viewAnnouncement": "View the forum announcement"
+    },
     "title": "About",
     "whatIsThis": "What's This",
     "description": "Official cross-platform client for TSDM forum",
@@ -582,6 +834,8 @@
     "usernameEmpty": "Username should not be empty",
     "password": "Password",
     "passwordEmpty": "Password should not be empty",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
     "answer": "Answer",
     "answerEmpty": "Answer should not be empty",
     "verifyCode": "Verification code",
@@ -692,6 +946,7 @@
     "online": "Online",
     "offline": "Offline",
     "searchAsThreadAuthor": "Search this member's posts",
+    "memberThreads": "Their posts",
     "medals": "Medals",
     "mangedForum": "Managed subreddits",
     "onlineTime": "Online time",
@@ -714,13 +969,15 @@
     },
     "threadTab": {
       "title": "Thread",
-      "noThread": "No Thread",
+      "noThread": "This forum has no threads yet",
       "threadType": "Types",
       "threadSpecialType": "Special type",
       "threadDateline": "Active time",
       "threadOrder": "Order",
       "threadDigested": "Digested",
-      "threadRecommended": "Recommended"
+      "threadRecommended": "Recommended",
+      "noFilteredThread": "No thread matches the filters",
+      "clearFilter": "Clear filters"
     },
     "subredditTab": {
       "title": "Subreddit",
@@ -728,6 +985,14 @@
     },
     "tooltip": {
       "fab": "Post new thread"
+    },
+    "newThread": {
+      "label": "Post",
+      "guestTitle": "Log in to post",
+      "guestMessage": "Posting a thread needs an account. Log in first, then come back to this forum.",
+      "noPermissionTitle": "Possibly no permission to post here",
+      "noPermissionMessage": "The forum shows that your user group may not post threads here. The forum and this board have their own permissions as well; you can still open the editor and let the forum decide.",
+      "openAnyway": "Open the editor anyway"
     },
     "copyFid": "Copy fid(${fid: String})",
     "favorite": {
@@ -750,11 +1015,20 @@
     "replySuccess": "Reply success",
     "replyFailed": "Failed to reply: $err",
     "replyFailedNetwork": "Failed to reply: the network is unreachable, check the connection and retry",
+    "replyMaybeSent": "The reply may have been sent: refresh to check before sending it again",
+    "refreshToCheck": "Refresh",
+    "replyCheckFiltered": "Only one author's floors are shown: your reply may not be among them",
+    "lastFloorReached": "This is the last floor",
+    "firstFloorReached": "This is the oldest floor",
+    "replyNeedsVerification": "This forum asks for a captcha or a security question to reply, which the app cannot show yet. Reply in your browser.",
+    "replyNeedsBrowser": "This reply form has fields the app cannot fill yet. Reply in your browser.",
+    "replyInBrowser": "Reply in browser",
     "draft": "Draft",
     "operationLog": {
       "title": "Operation Log"
     },
     "softCloseHint": "Thread is closed, be attention before posting",
+    "offlineBanner": "Offline copy (saved ${time: String})",
     "statistics": "${view: int} views ${reply: int} count",
     "threadInfo": {
       "title": "Thread info",
@@ -783,6 +1057,37 @@
       "message": "Sharing a thread: ${title}\n${url}",
       "sent": "Sent to ${name}",
       "failed": "Failed to send: ${err}"
+    },
+    "pageDivider": "Page ${page: int}",
+    "loadingPage": "Loading page ${page: int}…",
+    "loadPage": "Load page ${page: int}",
+    "pageLoadFailed": "Page ${page: int} failed to load",
+    "floorCount": "${count: int} floors",
+    "loadNewReplies": "Load new replies",
+    "newRepliesFailed": "New replies failed to load",
+    "newRepliesLoaded": "${count: int} new replies loaded",
+    "noNewReplies": "No new replies",
+    "jumpToFloor": {
+      "menu": "Go to floor…",
+      "title": "Go to floor",
+      "label": "Floor",
+      "hint": "1 to ${max: int}",
+      "go": "Go",
+      "invalid": "Enter a floor of 1 or more",
+      "missed": "There is no floor ${floor: int}, went to the closest one"
+    },
+    "search": {
+      "menu": "Search in thread",
+      "hint": "Keyword",
+      "count": "${n: int} / ${total: int}",
+      "loadMore": "Load more pages",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "resume": {
+      "message": "Last read: floor ${floor: int}",
+      "action": "Continue",
+      "close": "Dismiss"
     }
   },
   "topicsPage": {
@@ -790,11 +1095,14 @@
   },
   "noticePage": {
     "title": "Notifications",
+    "guestHint": "Log in to read your notices, private messages and broadcast messages.",
     "appBar": {
       "unread": "unread",
       "unreadDetail": "Only show unread",
       "backToHome": "Back to home",
-      "backToHomeStopped": "Stopped at a page that may hold unsaved input"
+      "backToHomeStopped": "Stopped at a page that may hold unsaved input",
+      "backToHomeDraftTitle": "Leave the unsent reply?",
+      "backToHomeDraftDetail": "The reply is kept as a draft on this device and offered again when the same page opens."
     },
     "noticeTab": {
       "title": "Notice",
@@ -842,10 +1150,70 @@
         "waiting": "Waiting",
         "running": "Syncing",
         "success": "New notices ${notice}, new PMs ${pm}, new broadcasts ${bm}; unread ${unreadNotice}/${unreadPm}/${unreadBm}",
+        "recent": "Synced moments ago, the stored notices are shown; unread ${unreadNotice}/${unreadPm}/${unreadBm}",
         "notAuthed": "Login expired, sign in again",
         "rateLimited": "The forum rate-limited the request (429), try again later",
-        "failed": "Failed: ${message}"
+        "failed": "Failed: ${message}",
+        "open": "Switch to this account and open its notifications"
       }
+    },
+    "kind": {
+      "reply": "Reply",
+      "quote": "Quote",
+      "mention": "Mention",
+      "rate": "Rating",
+      "comment": "Comment",
+      "friend": "Friend",
+      "friendRequest": "Friend request",
+      "poke": "Poke",
+      "wall": "Wall",
+      "moderation": "Moderation",
+      "post": "Post",
+      "reward": "Bounty",
+      "activity": "Event",
+      "medal": "Medal",
+      "magic": "Magic item",
+      "system": "System",
+      "manage": "To review",
+      "generic": "Notice"
+    },
+    "action": {
+      "reply": "${user} replied to your post",
+      "quote": "${user} quoted your post",
+      "mention": "${user} mentioned you",
+      "rate": "${user} rated your post",
+      "comment": "${user} commented on your post",
+      "friend": "${user} is now your friend",
+      "friendRequest": "${user} wants to be your friend",
+      "poke": "${user} poked you",
+      "wall": "${user} left a message on your wall"
+    },
+    "time": {
+      "justNow": "Just now",
+      "minutesAgo": "${n} min ago",
+      "hoursAgo": "${n} h ago",
+      "yesterdayAt": "Yesterday ${time}",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "earlier": "Earlier"
+    },
+    "quickReply": "Quick reply",
+    "markAllRead": "Mark all as read",
+    "markAllReadDone": "All marked as read",
+    "markAllReadFailed": "Could not mark them as read, try again later",
+    "search": {
+      "tooltip": "Search notifications",
+      "hint": "Find in the synced notifications",
+      "close": "Close search"
+    },
+    "empty": {
+      "notice": "No notices yet",
+      "personalMessage": "No private messages yet",
+      "broadcastMessage": "No public messages yet",
+      "unreadNotice": "No unread notices",
+      "unreadPersonalMessage": "No unread private messages",
+      "unreadBroadcastMessage": "No unread public messages",
+      "search": "Nothing matches \"${keyword}\""
     }
   },
   "noticeSearchPage": {
@@ -871,26 +1239,64 @@
       "keywordEmpty": "Keyword should not be empty",
       "keywordInvalid": "Keyword must not contains \"%\"",
       "author": "Author (uid or username)",
-      "authorInvalid": "Author must not contain \"%\"",
-      "fid": "Forum id (fid)",
-      "fidInvalid": "Fid must be a number not less than zero"
+      "authorInvalid": "Author must not contain \"%\""
     },
     "result": {
       "title": "Search Result",
       "totalThreadCount": "$count results",
       "pageInfo": "$total pages",
-      "noData": "No Data"
+      "noData": "No thread found",
+      "hint": "Enter a keyword or an author to search",
+      "noDataHint": "Try other keywords.",
+      "noDataFiltered": "The author, the forums or the time range limit the search, try without them."
+    },
+    "filter": {
+      "forum": "Forums",
+      "forumCount": "$count forums",
+      "forumId": "Forum $fid",
+      "clear": "Clear",
+      "time": {
+        "all": "Any time",
+        "day": "Past day",
+        "week": "Past week",
+        "month": "Past month",
+        "threeMonths": "Past 3 months",
+        "halfYear": "Past 6 months",
+        "year": "Past year"
+      },
+      "order": {
+        "lastpost": "Last reply",
+        "dateline": "Post time",
+        "replies": "Replies",
+        "views": "Views",
+        "descending": "Descending",
+        "ascending": "Ascending"
+      },
+      "titleOnly": "Titles only"
+    },
+    "history": {
+      "clear": "Clear all"
     }
   },
   "myThreadPage": {
     "title": "My Thread",
     "threadTab": {
-      "title": "Thread"
+      "title": "Thread",
+      "empty": "You have not posted a thread yet"
     },
     "replyTab": {
-      "title": "ReplyThread"
+      "title": "ReplyThread",
+      "empty": "You have not replied to a thread yet"
     },
     "forum": "Forum"
+  },
+  "memberThreadPage": {
+    "title": "${name}'s posts",
+    "titleUnknown": "Member's posts",
+    "blocked": "You blocked this user (this device), their threads and replies are not shown.",
+    "notList": "The forum did not show this member's posts.",
+    "emptyThread": "No threads from this member yet",
+    "emptyReply": "No replies from this member yet"
   },
   "favoritePage": {
     "title": "Favorites",
@@ -898,17 +1304,39 @@
     "forumTab": "Forums",
     "empty": "No favorites yet",
     "emptyForum": "No favorite forums yet",
+    "emptyHint": "Threads you add to favorites (\"Add to favorites\" in the menu of a thread) are listed here.",
+    "emptyForumHint": "Forums you add to favorites (\"Add forum to favorites\" in the menu of a forum) are listed here.",
     "remove": "Remove from favorites",
     "removeConfirm": "Remove \"${title}\" from favorites?",
     "removed": "Removed from favorites",
     "actionFailed": "Failed: $err",
     "favoritedAt": "Favorited at $time"
   },
+  "offlineBatch": {
+    "downloadTitle": "Save offline",
+    "updateTitle": "Update offline copies",
+    "progress": "${done: int} / ${total: int}",
+    "downloadSelected": "Save selected offline",
+    "downloadAll": "Save all offline",
+    "copies": "Offline copies",
+    "updateAll": "Update all",
+    "clearSelection": "Clear selection",
+    "selectedCount": "${count: int}",
+    "empty": "No offline copies",
+    "remove": "Delete offline copy",
+    "pages": "${count: int} pages",
+    "savedCount": "Saved",
+    "skippedCount": "Skipped",
+    "overLimitCount": "Over the limit",
+    "failedCount": "Failed"
+  },
   "friendPage": {
     "title": "Friends",
     "subtitle": "${name} · ${count: int} friends",
     "subtitleCountOnly": "${count: int} friends",
     "empty": "No friends yet",
+    "emptyHint": "Send a friend request with \"Add friend\" on the profile page of a member.",
+    "emptyOther": "This member's friend list is empty",
     "credits": "Credits ${count}",
     "sendMessage": "Send message",
     "addFriend": {
@@ -917,6 +1345,7 @@
       "note": "Note (optional)",
       "group": "Group",
       "send": "Send request",
+      "sent": "Friend request sent",
       "failed": "The friend request could not be sent"
     },
     "approveFriend": {
@@ -979,9 +1408,15 @@
     "title": "Latest Thread",
     "empty": "No threads yet"
   },
+  "tagPage": {
+    "title": "Tag: $name",
+    "cloudTitle": "Tags",
+    "empty": "No tags"
+  },
   "ratePostPage": {
     "title": "Rate",
     "description": "Rate $username post at floor $floor",
+    "descriptionNoFloor": "Rate $username post",
     "reason": "Reason",
     "success": "Rate success",
     "noticeAuthor": "Notice the author",
@@ -992,13 +1427,16 @@
     "onlyAllowIntegers": "Only integers are allowed",
     "failedToRate": "Rate failed",
     "scoreTodayRemaining": "Today Remaining $score",
+    "overTodayRemaining": "More than today's remaining $score",
+    "selfDeduct": "Rating takes the scores from your own credits of the same kind.",
     "fillWithTemplate": "Fill with template"
   },
   "pointsPage": {
     "title": "Points Statistics",
     "statisticsTab": {
       "title": "My Points",
-      "recentChangelog": "Recent Changelog"
+      "recentChangelog": "Recent Changelog",
+      "emptyRecent": "No recent changes"
     },
     "changelogTab": {
       "title": "Points Changelog",
@@ -1008,7 +1446,9 @@
       "dateRange": "Date Range",
       "query": "Query",
       "showFilterTip": "Show filter",
-      "hideFilterTip": "Hide filter"
+      "hideFilterTip": "Hide filter",
+      "empty": "No points records yet",
+      "emptyFiltered": "No record matches the query"
     }
   },
   "postEditPage": {
@@ -1025,8 +1465,29 @@
     "titleShouldNotBeEmpty": "Title should not be empty",
     "titleTooLong": "Title too long",
     "threadBodyTooShort": "Thread body too short",
+    "titleTooLongLimit": "Title too long: up to ${limit: int} (letters and digits count 1, other characters 2; & \" < > take more once escaped)",
+    "titleTooShortLimit": "Title too short: at least ${limit: int} (letters and digits count 1, other characters 2)",
+    "threadBodyTooShortLimit": "Post too short: at least ${limit: int} bytes, quotes not counted (an English letter is 1 byte, a Chinese character 3)",
+    "threadBodyTooLongLimit": "Post too long: up to ${limit: int} bytes (an English letter is 1 byte, a Chinese character 3)",
+    "verificationRequired": "This forum asks for a captcha or a security question to post here, which the app cannot show yet. Continue in your browser.",
+    "transferredContent": "The title and post you wrote in the poll editor (copy them for the website):",
+    "copyTransferred": "Copy title and post",
+    "moderated": {
+      "title": "Awaiting moderation",
+      "message": "New threads in this forum are reviewed by the moderators first: it will be shown after approval. Post it?"
+    },
     "editSuccess": "Edit success",
     "saveAsDraft": "Save Draft",
+    "leaveDialog": {
+      "title": "Leave the editor?",
+      "message": "The content has not been sent yet.",
+      "discard": "Discard",
+      "saveDraft": "Save draft",
+      "keepEditing": "Keep editing",
+      "sending": "Still sending: after leaving you will not know whether it was stored. Leave anyway?",
+      "messageLocal": "The content has not been sent yet. It is kept on this device as a local draft.",
+      "keepDraft": "Keep draft and leave"
+    },
     "threadPublish": {
       "title": "Post New Thread",
       "warningBeforePost": {
@@ -1063,13 +1524,130 @@
       "pasteQuillDelta": "Paste Quill Delta",
       "exportQuillDelta": "Export Quill Delta",
       "importQuillDelta": "Import Quill Delta"
+    },
+    "titleCount": "${count: int} / ${max: int}",
+    "bodyCount": "${count: int} / ${max: int} bytes",
+    "bodyCountNoMax": "${count: int} bytes",
+    "threadKind": {
+      "tooltip": "Thread kind",
+      "normal": "Ordinary thread",
+      "reward": "Reward",
+      "hongbao": "Red packet",
+      "activity": "Activity",
+      "debate": "Debate"
+    },
+    "rewardDialog": {
+      "title": "Set reward",
+      "entryTooltip": "Reward credits",
+      "price": "Reward credits",
+      "range": "$min – $max $credit",
+      "min": "At least $min $credit",
+      "balance": "You have $have $credit",
+      "afterTax": "$real $credit after tax",
+      "raiseCost": "$real $credit more to pay",
+      "required": "Set the reward credits first",
+      "issue": {
+        "empty": "Enter the reward credits",
+        "overflow": "At most 32767",
+        "belowMin": "At least $min",
+        "aboveMax": "At most $max",
+        "shortage": "Not enough credits",
+        "fall": "At least the current $current"
+      }
+    },
+    "hongbaoDialog": {
+      "title": "Red packet",
+      "entryTooltip": "Red packet",
+      "total": "Amount",
+      "balance": "Balance $balance $credit",
+      "shares": "Shares",
+      "sharesLimit": "At most $max shares, at least $min each",
+      "minShare": "At least $min each",
+      "split": "Split",
+      "lucky": "By luck",
+      "even": "Evenly",
+      "condReply": "Reply before grabbing",
+      "password": "Password",
+      "appoint": "Only for",
+      "appointHint": "Member names, separated by commas",
+      "expire": "Expires in",
+      "blessing": "Blessing",
+      "required": "Set the red packet first",
+      "issue": {
+        "totalRequired": "Enter the amount",
+        "sharesRequired": "Enter the shares",
+        "sharesAboveMax": "At most $max shares",
+        "totalBelowShares": "At least $min each: needs ≥ $need",
+        "notDivisible": "An even split needs an amount the shares divide",
+        "shortage": "Not enough credits",
+        "blessingTooLong": "Blessing at most $max characters",
+        "passwordTooLong": "Password at most $max characters"
+      }
+    },
+    "activityDialog": {
+      "title": "Set activity",
+      "entryTooltip": "Activity",
+      "category": "Category",
+      "start": "Starts",
+      "end": "Ends",
+      "place": "Place",
+      "city": "City",
+      "number": "Members needed",
+      "gender": "Gender",
+      "credit": "Credits to apply",
+      "cost": "Cost per member",
+      "expiration": "Applications close",
+      "userFields": "Applicants fill in",
+      "extFields": "Extra fields (one per line)",
+      "required": "Set the activity first",
+      "issue": {
+        "classRequired": "Enter the category",
+        "startRequired": "Pick the start",
+        "endBeforeStart": "The end cannot be before the start",
+        "placeRequired": "Enter the place",
+        "extFieldsTooMany": "At most $max extra fields"
+      }
+    },
+    "pollDialog": {
+      "title": "Poll settings",
+      "entryTooltip": "Poll",
+      "optionEmpty": "An option cannot be empty"
+    },
+    "cronPublish": {
+      "title": "Publish later",
+      "entryTooltip": "Publish later",
+      "time": "Publish at",
+      "passed": "The time must be later than now",
+      "scheduled": "Scheduled",
+      "scheduledMessage": "It will be published after $time and stays in the drafts until then. Go to My threads → Drafts?"
+    },
+    "debateDialog": {
+      "title": "Set debate",
+      "entryTooltip": "Debate",
+      "affirm": "Point for",
+      "negate": "Point against",
+      "end": "Ends",
+      "umpire": "Umpire",
+      "required": "Set the debate first",
+      "ended": "The debate has ended: set a later end in the debate settings, or clear it",
+      "issue": {
+        "pointsRequired": "Enter both points",
+        "endPassed": "The end must be in the future"
+      }
+    },
+    "postedWithNotice": {
+      "title": "Posted",
+      "message": "The thread should be posted, but the forum says:\n$notice\n\nThe local draft is kept: check it in My threads."
     }
   },
   "chatHistoryPage": {
     "title": "Chat History",
     "info": "With $user ($count messages)",
     "success": "Sent successfully",
-    "failed": "Sent failed: $message"
+    "failed": "Sent failed: $message",
+    "empty": "No messages with this member yet",
+    "loadingOlder": "Loading earlier messages…",
+    "noOlder": "No earlier messages"
   },
   "chatPage": {
     "title": "Chat",
@@ -1079,7 +1657,11 @@
     "online": "[Online]",
     "offline": "[Offline]",
     "viewUserSpaceTip": "View user space",
-    "viewChatHistoryTip": "ViewChatHistory"
+    "viewChatHistoryTip": "ViewChatHistory",
+    "failedNetwork": "Failed to send: the network is unreachable, check the connection and retry",
+    "maybeSent": "The message may have been sent: refresh to check before sending it again",
+    "refresh": "Refresh",
+    "empty": "No messages yet, send the first one below."
   },
   "imageDetailPage": {
     "title": "Image detail",
@@ -1094,9 +1676,17 @@
     "usage": "Usage",
     "fitToScreen": "Fit to screen"
   },
+  "imageGallery": {
+    "counter": "${index: int} / ${total: int}",
+    "percent": "${value: int}%",
+    "failedTapToRetry": "Failed to load, tap to retry",
+    "tapToLoad": "Tap to load image"
+  },
   "forumCard": {
     "links": "Links",
-    "subForums": "Subreddit"
+    "subForums": "Subreddit",
+    "privateForum": "Private forum",
+    "redirectForum": "Links to an external address"
   },
   "networkList": {
     "actionRefresh": "Refresh",
@@ -1124,8 +1714,8 @@
   "lockedCard": {
     "points": {
       "title": "Some content requires enough points to be visible",
-      "detail": "${requiredPoints: int} points are required, but you only have ${points: int} points",
-      "detailPassed": "${requiredPoints: int} points are required"
+      "detail": "${requiredPoints: String} points are required, but you only have ${points: String} points",
+      "detailPassed": "${requiredPoints: String} points are required"
     },
     "purchase": {
       "title": "Some content requires purchase",
@@ -1148,6 +1738,9 @@
       "title": "Only visible to the thread author",
       "detail(rich)": "This content only visible to $author",
       "detailAuthor": "author"
+    },
+    "unknown": {
+      "title": "Some content is hidden"
     },
     "blocked": {
       "title": "Blocked content",
@@ -1205,6 +1798,11 @@
     }
   },
   "postCard": {
+    "fromApp": "From the TSDM app",
+    "contentUnavailable": "This floor's content can not be shown",
+    "bbcode": {
+      "attachmentLocked": "Not available to you: to buy, no permission, or log in first"
+    },
     "interactiveHtml": {
       "open": "Interactive content",
       "description": "Open this post’s interactive layout, forms and buttons.",
@@ -1242,6 +1840,10 @@
       },
       "pmTooltip": "PM me",
       "profileTooltip": "View profile",
+      "memberThreads": "Threads",
+      "memberReplies": "Replies",
+      "myThreads": "My threads",
+      "myReplies": "My replies",
       "medals": "Medals",
       "badges": "Badges",
       "pokemon": "Pokemon",
@@ -1273,9 +1875,39 @@
       }
     },
     "share": "Copy share link",
+    "shareAsImage": "Share as image",
     "openInBrowser": "Open in browser",
     "copyText": "Copy Text",
-    "copyPid": "Copy pid (${pid: String})"
+    "copyPid": "Copy pid (${pid: String})",
+    "avatarBlocked": "Avatar hidden",
+    "hotReply": "Recommended",
+    "jumpToHotFloor": "Go to the floor"
+  },
+  "threadExport": {
+    "copyPlain": "Copy as plain text",
+    "copyMarkdown": "Copy as Markdown",
+    "menu": "Export thread",
+    "plain": "Plain text",
+    "markdown": "Markdown",
+    "loaded": "Loaded floors",
+    "all": "All pages",
+    "save": "Save",
+    "share": "Share",
+    "cancel": "Cancel",
+    "progress": "Loading page ${page: int} / ${total: int}",
+    "failed": "Export failed",
+    "saved": "Saved to ${filePath: String}",
+    "labelFold": "[Fold]",
+    "labelHidden": "[Hidden]",
+    "labelImage": "[Image]",
+    "labelMedia": "[Media]",
+    "labelSmiley": "emoji"
+  },
+  "shareFloorImage": {
+    "title": "Share as image",
+    "save": "Save",
+    "share": "Share",
+    "siteName": "天使动漫"
   },
   "postReport": {
     "menu": "Report",
@@ -1313,6 +1945,40 @@
       "unsupported": "The app does not support this report form. Nothing was sent; continue in the browser."
     }
   },
+  "moderate": {
+    "menu": "Moderate",
+    "stick": "Stick",
+    "digest": "Digest",
+    "close": "Close thread",
+    "open": "Open thread",
+    "move": "Move",
+    "delete": "Delete thread",
+    "expiration": "Until",
+    "noExpiration": "No end",
+    "reason": "Reason",
+    "notifyAuthor": "Notify the author",
+    "moveTo": "Move to",
+    "moveNormal": "Move",
+    "moveRedirect": "Leave a redirect",
+    "done": "Done",
+    "failed": "Failed",
+    "warn": "Warn",
+    "unwarn": "Remove warning",
+    "ban": "Hide",
+    "unban": "Unhide",
+    "deletePost": "Delete reply",
+    "queue": "Moderation queue",
+    "queueThreads": "Threads",
+    "queueReplies": "Replies",
+    "validate": "Approve",
+    "ignore": "Ignore",
+    "queueDelete": "Delete",
+    "queueEmpty": "Nothing waiting",
+    "panelLogin": "Moderator panel",
+    "password": "Password",
+    "wrongPassword": "Wrong password",
+    "nextPage": "Next page"
+  },
   "packetCard": {
     "title": "Packet",
     "detail": "You found a packet!",
@@ -1342,7 +2008,9 @@
     "emoji": {
       "title": "Emoji",
       "downloading": "Downloading emoji (10MB), this may take a while...",
-      "loadingAssets": "Loading bundled emoji from assets..."
+      "loadingAssets": "Loading bundled emoji from assets...",
+      "recent": "Recent",
+      "noRecent": "Emojis you use show up here"
     },
     "url": {
       "title": "Insert Url",
@@ -1394,6 +2062,16 @@
       "siteSearch": "Search the site",
       "noSearchResult": "No user named \"${name}\" on the site"
     },
+    "quickPhrases": {
+      "title": "Quick phrases",
+      "manage": "Manage",
+      "empty": "No quick phrases yet",
+      "add": "Add phrase",
+      "edit": "Edit phrase",
+      "full": "At most ${count: int}",
+      "deleted": "Deleted",
+      "undo": "Undo"
+    },
     "customImage": {
       "tab": "My images",
       "add": "Add image",
@@ -1416,7 +2094,16 @@
     "saveImage": "Save image",
     "imageSaved": "Image saved at ${filePath: String}",
     "failedToSaveImage": "Failed to save image",
-    "saveAsSticker": "Save to my images"
+    "saveAsSticker": "Save to my images",
+    "shareImage": "Share image",
+    "failedToShareImage": "Failed to share image",
+    "openInBrowser": "Open in browser",
+    "saveAllImages": "Save all images",
+    "saveScopeFloor": "This floor",
+    "saveScopePage": "This page",
+    "saveAllDone": "Saved ${saved: int}, failed ${failed: int}",
+    "saveAllCancelled": "Cancelled, saved ${saved: int}",
+    "failedToOpenInBrowser": "Failed to open the browser"
   },
   "init": {
     "v1DeleteLegacyData": {
@@ -1427,7 +2114,16 @@
   "html": {
     "newcomerReportCard": {
       "title": "Detail Info"
+    },
+    "table": {
+      "title": "Table",
+      "fullscreen": "Full screen"
     }
+  },
+  "mediaCard": {
+    "title": "Media",
+    "titleOf": "Media: $site",
+    "open": "Tap to open in browser"
   },
   "musicCard": {
     "title": "Music",
@@ -1440,9 +2136,12 @@
     "accountWithUid": "$username (UID $uid)",
     "empty": "No browsing history yet",
     "emptyForAccount": "No browsing history for this account",
+    "emptyHint": "The threads you open are recorded here, on this device only.",
+    "showAllAccounts": "Show all accounts",
     "entryTooltip": "Thread browsing history",
     "title": "Thread browsing history",
-    "localOnlyTip": "Only local browsing history was recorded, may be different on web side or other machines"
+    "localOnlyTip": "Only local browsing history was recorded, may be different on web side or other machines",
+    "readTo": "Read to floor ${floor: int}"
   },
   "openInAppPage": {
     "title": "Open in app",
@@ -1483,6 +2182,14 @@
     "invalidBrowserLink": "Enter a web link starting with http:// or https://",
     "browserLaunchFailed": "Could not open the link in the browser"
   },
+  "shareReceive": {
+    "pickForum": "Post to which forum",
+    "uploadUnavailable": "Images cannot be uploaded to this forum",
+    "uploadFailed": "Image upload failed $code",
+    "uploadRefusedType": "Image type not accepted: $name",
+    "uploadRefusedSize": "Image over ${limit: int} KB: $name",
+    "uploadFailedCount": "${count: int} images failed to upload"
+  },
   "globalStatePage": {
     "autoCheckinRunning": "Running auto checkin...",
     "autoCheckinFinished": "Auto checkin finished",
@@ -1506,16 +2213,34 @@
     }
   },
   "localNotification": {
+    "channels": {
+      "reply": "Replies",
+      "mention": "Mentions",
+      "rate": "Ratings and comments",
+      "pm": "Private messages",
+      "system": "System notices"
+    },
     "channelName": "New auto sync notice",
     "channelDesc": "Received new notice when auto sync",
     "ticker": "New notice",
+    "accountGone": "The account of this notice is no longer on this device",
     "notice": {
       "title": "New notice",
+      "titleOf": "[${username}] New notice",
       "detail": {
         "notice": "You received ${noticeCount: int} notice, ${pmCount: int} PMs, ${bmCount: int} BMs\n[Notice]${msg: String}",
         "pm": "You received ${noticeCount: int} notice, ${pmCount: int} PMs, ${bmCount: int} BMs\n[PM]${user: String}: ${msg: String}",
         "bm": "You received ${noticeCount: int} notice, ${pmCount: int} PMs, ${bmCount: int} BMs\n[BM]${msg: String}"
-      }
+      },
+      "noticeTitle": "New notice",
+      "pmFrom": "Message from ${user}",
+      "bmTitle": "Public message",
+      "noticeCount": "${n} notice(s)",
+      "pmCount": "${n} PM(s)",
+      "bmCount": "${n} public message(s)",
+      "pmLine": "${user}: ${msg}",
+      "bmLine": "[Public] ${msg}",
+      "more": "${n} more"
     }
   },
   "backgroundService": {
@@ -1558,7 +2283,6 @@
     "title": "Manage account",
     "switchAccount": {
       "title": "Switch account",
-      "success": "Switch success",
       "dialog": {
         "switchAccount": "Switch to this account",
         "deleteAccount": {
@@ -1623,7 +2347,11 @@
     "submit": "Submit",
     "clearAvatarTip": "Submit an empty url to remove the avatar",
     "avatarUpdated": "Avatar updated",
-    "viewSharedAvatars": "Want beautiful avatars? Check shared avatars here"
+    "viewSharedAvatars": "Want beautiful avatars? Check shared avatars here",
+    "uploadImage": "Upload image",
+    "cropTitle": "Crop avatar",
+    "uploadFailed": "Upload failed",
+    "imageUnreadable": "Can not read this image"
   },
   "updatePage": {
     "title": "Get updates",
@@ -1757,17 +2485,34 @@
       "original": "Original"
     },
     "total": "Total rates",
-    "showTotalRatePointsTip": "Show total rate points"
+    "showTotalRatePointsTip": "Show total rate points",
+    "empty": "Nobody rated this floor yet"
   },
   "replyBar": {
     "notReplyToFloorTip": "Not reply to this floor",
     "expandToolbarTip": "Expand toolbar",
-    "collapseToolbarTip": "Collapse toolbar"
+    "collapseToolbarTip": "Collapse toolbar",
+    "emojiTip": "Emoji",
+    "keyboardTip": "Keyboard",
+    "maximizeTip": "Write on the whole page",
+    "restoreSizeTip": "Back to the small editor",
+    "quoteLoading": "Quoting this floor",
+    "quoteOf": "Quote: $header",
+    "quoteRemove": "No quote",
+    "quoteRemoved": "Not quoting the floor (its author is still notified)",
+    "quoteAdd": "Quote",
+    "lengthCount": "${count: int} / ${max: int} bytes",
+    "lengthCountNoMax": "${count: int} bytes",
+    "tooShort": "Too short: at least ${min: int} bytes, quotes not counted (now ${count: int})",
+    "tooLong": "Too long: up to ${max: int} bytes (now ${count: int})",
+    "floodWait": "The forum takes the next post in ${seconds: int} s"
   },
   "workaroundRedirect": "View conversation",
   "threadCard": {
+    "previewImages": "${count: int} image(s)",
     "viewInfo": "View thread info",
-    "replied": "Replied"
+    "replied": "Replied",
+    "newReplies": "${count: int} new replies since your last visit"
   },
   "medalCenter": {
     "title": "Medal centre",
@@ -2016,6 +2761,9 @@
     "save": "Save profile",
     "saveSuccess": "Save success",
     "saveFailed": "Save failed",
+    "saveFailedReason": "Failed to save: $reason",
+    "fieldRefused": "The forum did not accept “$field”",
+    "fieldNotOffered": "“$field” is not one of the forum's choices",
     "visibility": {
       "title": "Privacy",
       "public": "Public",
@@ -2061,7 +2809,8 @@
       "aboutMe": "About me",
       "forum": "On the forum"
     },
-    "uploadHint": "Changes stay on this page until you tap the upload button at the top right."
+    "uploadHint": "Changes stay on this page until you tap the upload button at the top right.",
+    "signatureUnavailable": "Your user group can not have a signature"
   },
   "urlInfoBottomSheet": {
     "title": "Url info",
@@ -2131,6 +2880,11 @@
     "exchange": "Credit exchange",
     "openAccount": "Open bank account",
     "termDeposit": "Make term deposit",
+    "termWithdraw": "Withdraw term deposit",
+    "confirmLoadFailed": "Could not load the forum's withdrawal confirmation page. Check your connection and try again.",
+    "serviceChanged": "The page changed before sending, so nothing was sent. Check the current details below and try again.",
+    "loanWebOnly": "Loan repayment and cancellation run as soon as their link is opened on the forum, so the app leaves them to the website.",
+    "forumReply": "Forum reply: ${message}",
     "loanApply": "Apply for loan",
     "changePassword": "Change bank password",
     "closeAccount": "Close bank account",
@@ -2285,6 +3039,409 @@
         "ruleNotFound": "This setting is not there any more, please reload",
         "unknownAfterSubmit": "Sent, but the result could not be confirmed, please reload to check"
       }
+    }
+  },
+  "medalTitleTools": {
+    "unsupported": "The forum's plugin is not the new version yet; please use the website.",
+    "noPermission": "You are not allowed to use this.",
+    "previous": "Previous",
+    "next": "Next",
+    "page": "Page ${page} of ${pages}",
+    "search": "Search name or ID",
+    "permanent": "Permanent",
+    "expiresOn": "Expires ${date}",
+    "days": "${n} days",
+    "done": "Done",
+    "unconfirmed": "Sent, but the result could not be confirmed; refresh to check.",
+    "hubExchange": "Get titles with medals",
+    "hubMyMedals": "Show or hide medals, medal record",
+    "hubGrant": "Send medals to members, take them back",
+    "hubIssue": "Give titles to members or take them back",
+    "exchangeTitle": "Title exchange",
+    "exchangeFilterAll": "All",
+    "exchangeFilterReady": "Ready",
+    "exchangeFilterShort": "Medals missing",
+    "exchangeFilterOwned": "Owned",
+    "exchangeProgress": "${have} of ${need} medals",
+    "exchangeConsume": "The medals are taken when exchanged",
+    "exchangeButton": "Exchange",
+    "exchangeOwned": "Owned",
+    "exchangeConfirmTitle": "Exchange title",
+    "exchangeConfirm": "Get \"${name}\" with your medals?",
+    "exchangeConsumeConfirm": "These medals will be taken: ${medals}",
+    "exchangeNotEquipped": "Wear it in My titles to show it.",
+    "exchangeEmpty": "No titles match.",
+    "myMedalsTitle": "My medals",
+    "myMedalsPreview": "Posts show up to ${n} medals, 5 a row; hidden ones do not count.",
+    "myMedalsPreviewAll": "Posts show every medal that is not hidden.",
+    "myMedalsCounts": "${shown} shown, ${hidden} hidden",
+    "myMedalsShown": "Shown",
+    "myMedalsHidden": "Hidden",
+    "myMedalsSave": "Save",
+    "myMedalsHideConfirmTitle": "Hide medals",
+    "myMedalsHideConfirm": "These will be hidden: ${names}",
+    "myMedalsEmpty": "You have no medals yet.",
+    "myMedalsRecord": "Medal record",
+    "myMedalsRecordEmpty": "No records yet.",
+    "kindGrant": "Given",
+    "kindClaim": "Claimed",
+    "kindPending": "Applied",
+    "kindDenied": "Denied",
+    "kindExchanged": "Exchanged",
+    "kindBought": "Bought",
+    "kindSign": "Check-in",
+    "kindRevoked": "Taken back",
+    "kindOther": "Changed",
+    "grantTitle": "Send medals",
+    "grantLimits": "Up to ${users} members and ${medals} medals, ${pairs} in all. Each medal lasts as set; members who have it are skipped.",
+    "grantMembers": "Member UIDs",
+    "grantMembersHint": "One a line, or separated by commas",
+    "grantImport": "Import repliers of a thread",
+    "grantImportTid": "Thread ID or URL",
+    "grantImportFrom": "From floor",
+    "grantImportTo": "To floor",
+    "grantImportNoOwner": "Without the thread author",
+    "grantImportHint": "Anonymous and hidden replies are left out; each member once. Leave floors empty for all.",
+    "grantImportButton": "Import",
+    "grantImported": "\"${subject}\": ${total} members, ${added} added",
+    "grantImportFull": "The list takes ${max} at most; the rest were not added",
+    "grantImportBadTid": "Enter a thread ID or URL",
+    "grantMedals": "Medals (${n} chosen)",
+    "grantMedalSearch": "Search medal name or ID",
+    "grantReason": "Reason (optional)",
+    "grantReasonHint": "Kept in the record and added to the members' notice",
+    "grantNext": "Next: check",
+    "grantNeedMembers": "Enter member UIDs first",
+    "grantNeedMedals": "Choose medals first",
+    "grantTooMany": "Over the limit: ${users} members, ${medals} medals, ${pairs} in all",
+    "grantConfirmTitle": "Confirm sending",
+    "grantSummary": "${users} members × ${medals} medals: ${give} to send, ${skip} skipped (already owned).",
+    "grantMissing": "UIDs not found (skipped): ${list}",
+    "grantBad": "Not UIDs (skipped): ${list}",
+    "grantNoReason": "No reason given.",
+    "grantSend": "Send ${n}",
+    "grantNothing": "Everyone listed has these medals already.",
+    "grantRecords": "Sendings",
+    "grantRecordsAll": "All sendings",
+    "grantRevokeHint": "A sending can be taken back: the medal is removed and the member told. Only your own, within 72 hours.",
+    "grantRevokeHintAdmin": "A sending can be taken back: the medal is removed and the member told. Administrators may take back any.",
+    "grantBatchSummary": "${users} members × ${medals} medals, ${count} in all",
+    "grantSentBy": "Sent by ${name}",
+    "grantReasonLine": "Reason: ${reason}",
+    "grantRevokedAll": "All taken back",
+    "grantRevokedSome": "${n} taken back",
+    "grantRevoked": "Taken back",
+    "grantSent": "Sent",
+    "grantRevoke": "Take back",
+    "grantRevokeBatch": "Take back all (${n})",
+    "grantRevokeConfirmTitle": "Take back the sending",
+    "grantRevokeConfirm": "Take back \"${medal}\" from ${user}? They will be told.",
+    "grantRevokeBatchConfirm": "Take back this sending? ${n} records not taken back yet will be removed and the members told.",
+    "grantRecordsEmpty": "No sendings yet.",
+    "grantDetails": "${n} records",
+    "issueTitle": "Issue titles",
+    "issueGrant": "Give",
+    "issueRevoke": "Take back",
+    "issueMembers": "Members (UID or name)",
+    "issueMembersHint": "One a line or separated by commas, ${n} at most",
+    "issueTitles": "Titles (${n} chosen, ${max} at most)",
+    "issueDisabled": "Disabled",
+    "issueDays": "Days (0 for permanent)",
+    "issueNote": "Note (optional)",
+    "issueSubmit": "${op}",
+    "issueConfirmTitle": "Confirm: ${op}",
+    "issueConfirm": "${op} ${titles} titles for ${users} members (${duration}).",
+    "issueConfirmRevoke": "Take ${titles} titles back from ${users} members.",
+    "issueNeedMembers": "Enter members first",
+    "issueNeedTitles": "Choose titles first",
+    "issueRecords": "Latest issues",
+    "issueRecordsEmpty": "No issues yet.",
+    "issueLogLine": "${by} → ${to}"
+  },
+  "currentAccount": {
+    "tooltip": "Current account: ${username}",
+    "replyAs": "Reply as ${username}...",
+    "postingAs": "Posting as ${username}",
+    "switched": "Switched to ${username}",
+    "switchBusy": "Notifications are syncing, try again in a moment",
+    "moreAccounts": "${count} more account(s)",
+    "replyBusy": "A reply is being sent, switch accounts once it is done",
+    "unread": "${count} unread"
+  },
+  "specialThread": {
+    "refused": "The forum did not accept it.",
+    "done": "Done.",
+    "unknown": "Could not tell whether it went through. The thread is reloaded to show the forum's state.",
+    "accountChanged": "The account changed since this page was loaded. Refresh the thread first.",
+    "openInBrowser": "Open in browser",
+    "submit": "Submit",
+    "hongbao": {
+      "title": "Red packet",
+      "status": {
+        "active": "Open",
+        "done": "All taken",
+        "withdrawn": "Withdrawn",
+        "expired": "Expired",
+        "closed": "Closed"
+      },
+      "lucky": "Random split",
+      "even": "Even split",
+      "shares": "$claimed/$shares taken",
+      "needReply": "Reply first",
+      "password": "Password",
+      "appoint": "Named members",
+      "expireAt": "Expires $time",
+      "noExpire": "No expiry",
+      "mine": "You got $amount$credit",
+      "best": "Luckiest",
+      "why": {
+        "disabled": "Red packets are turned off",
+        "login": "Log in to grab",
+        "self": "You cannot grab your own red packet",
+        "claimed": "Grabbed",
+        "appoint": "Not among the named members",
+        "needreply": "Reply to grab"
+      },
+      "grab": "Grab",
+      "passwordTitle": "Password",
+      "records": "Records",
+      "recordsEmpty": "Nobody has grabbed it yet",
+      "recordsFailed": "Failed to load",
+      "withdraw": "Withdraw",
+      "withdrawConfirmTitle": "Withdraw red packet",
+      "withdrawConfirm": "The $credit left goes back to you",
+      "grabbed": "You got $amount $unit",
+      "already": "Already grabbed: $amount $unit",
+      "withdrawn": "Withdrawn, $amount $unit refunded"
+    },
+    "poll": {
+      "single": "Single choice",
+      "multiple": "Multiple choice, up to $max",
+      "voters": "$count voters",
+      "afterResult": "Results show after you vote",
+      "separator": ", ",
+      "ended": "The poll has ended",
+      "deadline": "Ends at $time",
+      "overt": "Others can see what you vote for.",
+      "viewVoters": "View voters"
+    },
+    "reward": {
+      "title": "Bounty",
+      "price": "$price $credit",
+      "resolved": "Resolved",
+      "unresolved": "Open",
+      "bestAnswer": "Best answer",
+      "anonymous": "Anonymous",
+      "hiddenContent": "Hidden content",
+      "hiddenLocked": "Replies in this thread are shown to their authors only.",
+      "hiddenOther": "The answer's content is not shown; read it on its floor.",
+      "jumpToFloor": "Go to the floor",
+      "setBestHint": "Accept an answer with “Set as best answer” on its floor.",
+      "setBest": "Set as best answer",
+      "setBestConfirmTitle": "Set as best answer",
+      "setBestConfirm": "Accept this floor as the best answer? The bounty goes to its author and the choice cannot be changed.",
+      "badge": "Best answer",
+      "hiddenHide": "The answer has hidden content; read it on its floor.",
+      "hiddenPassword": "The answer is password protected; read it on its floor.",
+      "hiddenBanned": "The answer's author is banned; its content is not shown.",
+      "hiddenModerate": "The answer is waiting for moderation.",
+      "hiddenFormat": "The app cannot quote this answer; read it on its floor.",
+      "hiddenSpoofed": "The answer's floor cannot be shown."
+    },
+    "activity": {
+      "title": "Activity",
+      "type": "Type",
+      "time": "Time",
+      "timeRange": "$from to $to",
+      "place": "Place",
+      "gender": "Gender",
+      "genderAny": "Anyone",
+      "genderMale": "Male",
+      "genderFemale": "Female",
+      "cost": "Cost per person",
+      "costValue": "$cost yuan",
+      "places": "Places",
+      "placesUnlimited": "Unlimited",
+      "applied": "Applied",
+      "appliedValue": "$count ($verified accepted, $pending waiting)",
+      "remaining": "Places left",
+      "deadline": "Applications close",
+      "credit": "Credit taken",
+      "creditValue": "$amount $credit",
+      "creditNotEnough": "You do not have enough $credit to apply.",
+      "closed": "Applications are closed.",
+      "statusWaiting": "You applied; the organizer has not accepted it yet.",
+      "statusAccepted": "Your application was accepted.",
+      "statusComplete": "The organizer asks you to complete your application.",
+      "join": "Join",
+      "complete": "Complete my application",
+      "cancel": "Cancel my application",
+      "cancelTitle": "Cancel the application",
+      "cancelReason": "Reason (optional)",
+      "manage": "Manage applications",
+      "accepted": "Accepted ($count)",
+      "waiting": "Waiting ($count)",
+      "more": "More applicants",
+      "selfPay": "Pays own way",
+      "pays": "Pays $amount yuan",
+      "applyTitle": "Apply",
+      "required": "Required",
+      "payValue": "Amount (yuan)",
+      "needsWeb": "This application asks for fields the app cannot fill. Apply on the web page.",
+      "fillRequired": "Fill in the required fields first.",
+      "applyOnWeb": "Apply in the browser"
+    },
+    "debate": {
+      "title": "Debate",
+      "affirm": "Affirmative",
+      "nega": "Negative",
+      "neutral": "Neutral",
+      "votes": "$count votes",
+      "debaters": "$count debaters",
+      "voteFor": "Support $side",
+      "voted": "Your vote",
+      "voteConfirmTitle": "Vote",
+      "voteConfirm": "Support the $side side? A vote cannot be changed.",
+      "endTime": "Ends at $time",
+      "ended": "The debate has ended",
+      "umpire": "Umpire: $name",
+      "winnerAffirm": "The affirmative side wins",
+      "winnerNega": "The negative side wins",
+      "winnerDraw": "A draw",
+      "umpirePoint": "Umpire's view",
+      "bestDebater": "Best debater: $name",
+      "umpireAction": "Umpire",
+      "standVotes": "$count supporters",
+      "join": "Join the $side side",
+      "joinHint": "Replying on the $side side",
+      "replySide": "Your side",
+      "fixedSide": "You reply on the $side side, as with your first reply",
+      "support": "Support",
+      "supportConfirmTitle": "Support this floor",
+      "supportConfirm": "Support this floor's side? A floor can only be supported once.",
+      "sideKeptNote": "If you already replied on a side, the forum keeps that side."
+    },
+    "trade": {
+      "title": "Goods",
+      "count": "$count goods",
+      "noGoods": "There are no goods on this counter.",
+      "removed": "This goods has been deleted.",
+      "recommended": "Recommended",
+      "qualityNew": "New",
+      "qualityUsed": "Second hand",
+      "remain": "$days d $hours h left",
+      "ended": "Trading ended",
+      "price": "$price yuan",
+      "credit": "$credit $unit",
+      "manage": "Sort goods",
+      "add": "Add goods",
+      "buy": "Buy",
+      "buyInBrowser": "Buy in browser",
+      "soldOut": "Sold out",
+      "seller": "Seller",
+      "quantity": "Quantity",
+      "message": "Message",
+      "next": "Next",
+      "confirmTitle": "Confirm purchase",
+      "pay": "Pay",
+      "cost": "Pay",
+      "balance": "Balance",
+      "after": "After",
+      "insufficient": "Not enough credit",
+      "password": "Login password",
+      "bought": "Purchased.",
+      "notPaid": "The order was created but is not paid yet.",
+      "payAgain": "Pay again",
+      "openOrder": "View order",
+      "unknown": "Could not confirm the result; check the order page.",
+      "verification": "The forum asks for a verification; finish it in the browser.",
+      "openOrders": "View trade records",
+      "unknownOrder": "Could not confirm whether the order was placed; check the trade records."
+    },
+    "already": "Done already."
+  },
+  "localDraft": {
+    "title": "Local drafts",
+    "details": "Replies, messages, threads and edits not sent yet, kept on this device",
+    "offer": "Unsent draft (${time})",
+    "restore": "Restore",
+    "discard": "Discard",
+    "emoji": "[emoji]",
+    "empty": "No local draft. What you write is kept here until it is sent.",
+    "needLogin": "Log in to see the drafts of your account.",
+    "deleteAll": "Delete all",
+    "deleteAllConfirm": "Delete every local draft of this account? This cannot be undone.",
+    "delete": "Delete",
+    "deleted": "Draft deleted",
+    "copy": "Copy text",
+    "open": "Open",
+    "older": "Earlier version",
+    "kind": {
+      "threadReply": "Reply",
+      "floorReply": "Reply to a floor",
+      "message": "Private message",
+      "newThread": "New thread",
+      "edit": "Edit"
+    },
+    "thread": "Thread ${tid}",
+    "forum": "Forum ${fid}",
+    "member": "Member ${uid}",
+    "post": "Post ${pid}",
+    "savedAt": "Saved ${time}",
+    "offerMaybeSent": "May have been sent, check first (${time})",
+    "maybeSent": "May have been sent, check first",
+    "restoreEditTitle": "Restore this draft?",
+    "restoreEditMessage": "The draft was saved ${time}. Restoring puts it in place of the post as loaded now: anything edited on the forum since then would be overwritten when you send."
+  },
+  "secCheck": {
+    "title": "Verification",
+    "message": "The forum asks for this before it takes the post.",
+    "captcha": "Captcha",
+    "captchaHint": "The characters in the image",
+    "refresh": "Another one",
+    "question": "Question",
+    "answer": "Answer",
+    "loadFailed": "Could not load, tap to retry",
+    "unsupported": "The app cannot show this kind of check. Continue in your browser.",
+    "wrongAnswer": "The forum did not accept the answer, try again.",
+    "invalidCaptcha": "Wrong captcha, here is a new one",
+    "invalidAnswer": "Wrong answer",
+    "empty": "Required",
+    "confirm": "Send",
+    "openBrowser": "Open in browser",
+    "cancelled": "Not sent: the forum asks for a captcha or a security question"
+  },
+  "appShortcuts": {
+    "checkinNotVerified": "The login is not verified yet, check in later"
+  },
+  "keyboardShortcutsPage": {
+    "title": "Keyboard shortcuts",
+    "groups": {
+      "global": "Everywhere",
+      "thread": "Thread",
+      "list": "Lists",
+      "editor": "Editor"
+    },
+    "commands": {
+      "search": "Search",
+      "settings": "Settings",
+      "back": "Close dialog, go back",
+      "refresh": "Refresh",
+      "nextFloor": "Next floor",
+      "previousFloor": "Previous floor",
+      "nextPage": "Next page",
+      "previousPage": "Previous page",
+      "reply": "Reply",
+      "top": "Go to top",
+      "bottom": "Go to bottom",
+      "copyLink": "Copy thread link",
+      "nextItem": "Next item",
+      "previousItem": "Previous item",
+      "openItem": "Open selected item",
+      "send": "Send",
+      "bold": "Bold",
+      "italic": "Italic",
+      "underline": "Underline"
     }
   }
 }

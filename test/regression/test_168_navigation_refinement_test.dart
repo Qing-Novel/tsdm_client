@@ -21,6 +21,7 @@ import 'package:tsdm_client/features/profile/bloc/current_title_cubit.dart';
 import 'package:tsdm_client/features/profile/models/secondary_title.dart';
 import 'package:tsdm_client/features/profile/widgets/secondary_title_badge.dart';
 import 'package:tsdm_client/features/red_packet/models/models.dart';
+import 'package:tsdm_client/features/red_packet/utils/daily_red_packet_record.dart';
 import 'package:tsdm_client/features/red_packet/widgets/daily_red_packet_button.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
@@ -32,9 +33,9 @@ import 'package:tsdm_client/shared/providers/storage_provider/storage_provider.d
 
 /// Navigation refinement of 2026-09-27:
 ///
-/// * the side navigation (drawer on large windows, rail on medium ones) has nine real entries in two groups; the tabs
-///   keep their shell state and double tap, the other entries open their page above the shell and the back button
-///   returns to the selected tab; the phone bar keeps its three tabs;
+/// * the side navigation (drawer on large windows, rail on medium ones) has the same four tabs as the phone bar since
+///   the navigation rework of 2026-10-23 (it had nine entries in two groups before; the pages it opened are entries of
+///   the "me" tab now);
 /// * the notifications entry shows the real unread count by the rules of the app bar notice icon;
 /// * the homepage greeting always shows a daily red packet entry with an honest state and submits at most once;
 /// * the title badge of the greeting is its natural 184px on wide layouts and 160 to 184px on phones.
@@ -44,18 +45,8 @@ Translations get tr => LocaleSettings.instance.currentTranslations;
 
 const _alice = UserLoginInfo(username: 'Alice', uid: 1000);
 
-/// Pages opened above the shell by the side navigation, and the login page.
-const _pushedPaths = [
-  ScreenPaths.activities,
-  ScreenPaths.notice,
-  ScreenPaths.loggedUserProfile,
-  ScreenPaths.titleShop,
-  ScreenPaths.medalCenter,
-  ScreenPaths.bank,
-  ScreenPaths.login,
-];
-
-const _tabPaths = [ScreenPaths.homepage, ScreenPaths.topic, '/settings'];
+/// The four tabs of every navigation since the navigation rework of 2026-10-23.
+const _tabPaths = <String>[ScreenPaths.homepage, ScreenPaths.topic, ScreenPaths.notice, ScreenPaths.me];
 
 enum _Layout { phone, tablet, desktop }
 
@@ -121,15 +112,6 @@ void main() {
                 ),
             ],
           ),
-          for (final path in _pushedPaths)
-            GoRoute(
-              path: path,
-              name: path,
-              builder: (context, state) => Scaffold(
-                appBar: AppBar(),
-                body: Text('pushed $path'),
-              ),
-            ),
         ],
       );
       addTearDown(router.dispose);
@@ -148,23 +130,18 @@ void main() {
       await tester.pump();
     }
 
-    /// Labels of the nine entries in display order.
+    /// Labels of the four entries in display order.
     List<String> labels() => [
       tr.navigation.homepage,
       tr.navigation.topics,
-      tr.navigation.activities,
       tr.navigation.notice,
-      tr.navigation.profile,
-      tr.navigation.titleShop,
-      tr.navigation.medalCenter,
-      tr.navigation.bank,
-      tr.navigation.settings,
+      tr.navigation.me,
     ];
 
     int drawerSelected(WidgetTester tester) =>
         tester.widget<NavigationDrawer>(find.byType(NavigationDrawer)).selectedIndex!;
 
-    testWidgets('drawer: nine entries in two groups, in the order of the reference', (tester) async {
+    testWidgets('drawer: the four tabs in order, no "more" group', (tester) async {
       tester.view
         ..physicalSize = const Size(1280, 800)
         ..devicePixelRatio = 1;
@@ -181,15 +158,13 @@ void main() {
         expect(y, greaterThan(previous), reason: '$label comes after the previous entry');
         previous = y;
       }
-      final header = find.descendant(of: drawer, matching: find.text(tr.navigation.moreSection));
-      expect(header, findsOneWidget);
-      expect(tester.getTopLeft(header).dy, greaterThan(tester.getTopLeft(find.text(tr.navigation.profile)).dy));
-      expect(tester.getTopLeft(header).dy, lessThan(tester.getTopLeft(find.text(tr.navigation.titleShop)).dy));
+      expect(find.descendant(of: drawer, matching: find.byType(NavigationDrawerDestination)), findsNWidgets(4));
+      expect(find.descendant(of: drawer, matching: find.text(tr.navigation.settings)), findsNothing);
       expect(drawerSelected(tester), 0);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('drawer: every page entry opens its real route, back returns to the selected tab', (tester) async {
+    testWidgets('drawer: every entry is a tab, selected at its index, the tab of the cubit follows', (tester) async {
       tester.view
         ..physicalSize = const Size(1280, 800)
         ..devicePixelRatio = 1;
@@ -198,64 +173,19 @@ void main() {
       addTearDown(auth.dispose);
       await pumpHome(tester, _Layout.desktop, auth: auth);
 
-      // Start on the forums tab so going back has to restore a tab other than the first one.
-      await tester.tap(find.text(tr.navigation.topics));
-      await tester.pumpAndSettle();
-      expect(location(), ScreenPaths.topic);
-      expect(drawerSelected(tester), 1);
-
-      final pages = {
-        tr.navigation.activities: ScreenPaths.activities,
-        tr.navigation.notice: ScreenPaths.notice,
-        tr.navigation.profile: ScreenPaths.loggedUserProfile,
-        tr.navigation.titleShop: ScreenPaths.titleShop,
-        tr.navigation.medalCenter: ScreenPaths.medalCenter,
-        tr.navigation.bank: ScreenPaths.bank,
-      };
-      for (final MapEntry(key: label, value: path) in pages.entries) {
+      for (final (i, tab) in HomeTab.values.indexed.toList().reversed) {
         now = now.add(const Duration(seconds: 1));
-        await tester.tap(find.text(label));
+        await tester.tap(find.text(labels()[i]));
         await tester.pumpAndSettle();
-        expect(location(), path, reason: label);
-        expect(find.text('pushed $path'), findsOneWidget, reason: label);
-        expect(cubit.state.tab, HomeTab.topic, reason: 'a page entry is not a tab');
-
-        await tester.tap(find.byType(BackButton));
-        await tester.pumpAndSettle();
-        expect(location(), ScreenPaths.topic, reason: 'back from $label');
-        expect(find.text('tab ${ScreenPaths.topic}'), findsOneWidget);
-        expect(drawerSelected(tester), 1, reason: 'the forums tab stays selected after $label');
+        expect(location(), _tabPaths[i], reason: tab.name);
+        expect(find.text('tab ${_tabPaths[i]}'), findsOneWidget);
+        expect(cubit.state.tab, tab);
+        expect(drawerSelected(tester), i);
       }
-
-      // Settings is a tab of the "more" group: selected at its own index, the tab of the cubit follows.
-      now = now.add(const Duration(seconds: 1));
-      await tester.tap(find.text(tr.navigation.settings));
-      await tester.pumpAndSettle();
-      expect(location(), '/settings');
-      expect(cubit.state.tab, HomeTab.settings);
-      expect(drawerSelected(tester), 8);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('drawer: a quick double tap on a page entry opens one page', (tester) async {
-      tester.view
-        ..physicalSize = const Size(1280, 800)
-        ..devicePixelRatio = 1;
-      addTearDown(tester.view.reset);
-      await pumpHome(tester, _Layout.desktop);
-
-      await tester.tap(find.byIcon(Icons.account_balance_outlined));
-      now = now.add(const Duration(milliseconds: 100));
-      await tester.tap(find.byIcon(Icons.account_balance_outlined), warnIfMissed: false);
-      await tester.pumpAndSettle();
-      expect(find.text('pushed ${ScreenPaths.bank}'), findsOneWidget);
-      await tester.tap(find.byType(BackButton));
-      await tester.pumpAndSettle();
-      expect(location(), ScreenPaths.homepage, reason: 'only one page was on top of the shell');
-      expect(find.byType(BackButton), findsNothing);
-    });
-
-    testWidgets('notifications without an account open the login page', (tester) async {
+    testWidgets('notifications without an account: the tab, which asks for a login itself', (tester) async {
       tester.view
         ..physicalSize = const Size(1280, 800)
         ..devicePixelRatio = 1;
@@ -266,10 +196,11 @@ void main() {
 
       await tester.tap(find.text(tr.navigation.notice));
       await tester.pumpAndSettle();
-      expect(location(), ScreenPaths.login);
+      expect(location(), ScreenPaths.notice);
+      expect(cubit.state.tab, HomeTab.notice);
     });
 
-    testWidgets('rail: nine entries, scrolls in a short window with 2x text, the bank entry opens the bank', (
+    testWidgets('rail: four entries, no overflow in a short window with 2x text, the "me" entry switches', (
       tester,
     ) async {
       tester.view
@@ -282,23 +213,20 @@ void main() {
 
       expect(tester.takeException(), isNull, reason: 'no vertical overflow');
       final rail = tester.widget<NavigationRail>(find.byType(NavigationRail));
-      expect(rail.destinations, hasLength(9));
+      expect(rail.destinations, hasLength(4));
       expect(rail.selectedIndex, 0);
 
-      final bank = find.byIcon(Icons.account_balance_outlined);
-      await tester.dragUntilVisible(bank, find.byType(HomeNavigationRail), const Offset(0, -80));
+      final me = find.byIcon(Icons.person_outline);
+      await tester.dragUntilVisible(me, find.byType(HomeNavigationRail), const Offset(0, -80));
       await tester.pumpAndSettle();
-      await tester.tap(bank);
+      await tester.tap(me);
       await tester.pumpAndSettle();
-      expect(location(), ScreenPaths.bank);
-      await tester.tap(find.byType(BackButton));
-      await tester.pumpAndSettle();
-      expect(location(), ScreenPaths.homepage);
-      expect(tester.widget<NavigationRail>(find.byType(NavigationRail)).selectedIndex, 0);
+      expect(location(), ScreenPaths.me);
+      expect(tester.widget<NavigationRail>(find.byType(NavigationRail)).selectedIndex, 3);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('phone: the bottom bar keeps its three tabs and still switches them', (tester) async {
+    testWidgets('phone: the bottom bar has the four tabs and switches them', (tester) async {
       tester.view
         ..physicalSize = const Size(390, 800)
         ..devicePixelRatio = 1;
@@ -306,19 +234,18 @@ void main() {
       await pumpHome(tester, _Layout.phone);
 
       final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-      expect(bar.destinations, hasLength(3));
-      expect(find.text(tr.navigation.bank), findsNothing);
-      expect(find.text(tr.navigation.activities), findsNothing);
+      expect(bar.destinations, hasLength(4));
+      expect(find.text(tr.navigation.settings), findsNothing);
 
       await tester.tap(find.text(tr.navigation.topics));
       await tester.pumpAndSettle();
       expect(location(), ScreenPaths.topic);
       expect(tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex, 1);
       now = now.add(const Duration(seconds: 1));
-      await tester.tap(find.text(tr.navigation.settings));
+      await tester.tap(find.text(tr.navigation.me));
       await tester.pumpAndSettle();
-      expect(location(), '/settings');
-      expect(tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex, 2);
+      expect(location(), ScreenPaths.me);
+      expect(tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex, 3);
       expect(tester.takeException(), isNull);
     });
 
@@ -559,17 +486,20 @@ void main() {
       await dispose(tester);
     });
 
-    testWidgets('a reloaded page without a packet after a confirmed claim: none to claim, no date guessed', (
-      tester,
+    /// Claims [packet] on the entry, then shows the entry as the homepage does after a reload, which no longer offers
+    /// the claimed packet. [onCheck] is the packet check of the "none now" button.
+    Future<void> claimThenReloadWithoutPacket(
+      WidgetTester tester,
+      DailyRedPacketConfig packet,
+      VoidCallback onCheck,
     ) async {
-      var refreshes = 0;
       await pumpEntry(
         tester,
         DailyRedPacketEntry(
           uid: 1000,
-          config: _config,
+          config: packet,
           formHash: 'hash',
-          onCheck: () => refreshes++,
+          onCheck: onCheck,
           claim: (_) => TaskEither.right(const DailyRedPacketResult(ok: true, amount: '5', unit: 'coins')),
         ),
       );
@@ -578,18 +508,53 @@ void main() {
       await tester.pump();
       expect(find.text(tr.redPacket.daily.claimedToday), findsOneWidget);
 
-      // The app knows no clock of the forum: without a packet on the page it cannot tell which day it is there, so it
-      // does not say "claimed today"; the hint says it may be claimed already.
-      await pumpEntry(
-        tester,
-        DailyRedPacketEntry(uid: 1000, config: null, formHash: null, onCheck: () => refreshes++),
-      );
+      await pumpEntry(tester, DailyRedPacketEntry(uid: 1000, config: null, formHash: null, onCheck: onCheck));
+    }
+
+    // The claim record is the packet's `dateflag`, compared with the real calendar day (the entry has no clock to
+    // inject), so both days are spelled out here instead of leaning on whatever day the suite happens to run: a fixed
+    // "claimed" day would silently flip the expectation on the day the calendar reaches it.
+    testWidgets('a reloaded page without a packet after a claim of an earlier day: none to claim, never "claimed"', (
+      tester,
+    ) async {
+      // An explicit past day, not "yesterday": the test reads the same whenever it runs.
+      var refreshes = 0;
+      const earlier = DailyRedPacketConfig(entry: 2, dateFlag: '20200101', from: 'System', bless: 'Hi', unit: 'coins');
+      await claimThenReloadWithoutPacket(tester, earlier, () => refreshes++);
+
+      // That claim is not today's: the record says nothing about the packet of today, so the hint says it may be
+      // claimed already and a tap checks the packet again.
       expect(find.text(tr.redPacket.daily.claimedToday), findsNothing);
+      expect(find.byKey(const ValueKey('dailyRedPacket-recorded')), findsNothing);
       expect(find.text(tr.redPacket.daily.unavailable), findsOneWidget);
       expect(find.byTooltip(tr.redPacket.daily.unavailableHint), findsOneWidget);
       await tester.tap(find.text(tr.redPacket.daily.unavailable));
       await tester.pump();
       expect(refreshes, 1);
+      await dispose(tester);
+    });
+
+    testWidgets('a reloaded page without a packet after a claim of today: "claimed", from the app\'s record', (
+      tester,
+    ) async {
+      // Today's day is worked out here from the real clock, the one the entry compares with.
+      var refreshes = 0;
+      final today = DailyRedPacketConfig(
+        entry: 2,
+        dateFlag: dailyRedPacketDateFlag(DateTime.now()),
+        from: 'System',
+        bless: 'Hi',
+        unit: 'coins',
+      );
+      await claimThenReloadWithoutPacket(tester, today, () => refreshes++);
+
+      // Once claimed the page looks like a day without a packet; the app's own record keeps saying "claimed" for the
+      // rest of that day, and says it is the record (the website is not asked).
+      expect(find.byKey(const ValueKey('dailyRedPacket-recorded')), findsOneWidget);
+      expect(find.text(tr.redPacket.daily.claimedToday), findsOneWidget);
+      expect(find.byTooltip(tr.redPacket.daily.claimedRecordedHint), findsOneWidget);
+      expect(find.text(tr.redPacket.daily.unavailable), findsNothing);
+      expect(refreshes, 0);
       await dispose(tester);
     });
 

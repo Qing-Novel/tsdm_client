@@ -44,7 +44,24 @@ final class PostEditCompleteEditRequested extends PostEditEvent with PostEditCom
     required this.save,
     required this.perm,
     required this.price,
+    this.draftKey,
+    this.rewardPrice,
+    this.activity,
+    this.debate,
+    this.poll,
   }) : super();
+
+  /// The poll settings of the first post of a poll ([PostFormEdits.poll]), null to post them as served.
+  final PollEdits? poll;
+
+  /// The reward price of the first post of an open reward thread ([PostFormEdits.rewardPrice]), null to keep it.
+  final int? rewardPrice;
+
+  /// The activity of the first post of an activity thread ([PostFormEdits.activity]), null to post it as served.
+  final ActivityEdits? activity;
+
+  /// The debate of the first post of a debate thread ([PostFormEdits.debate]), null to post it as served.
+  final DebateEdits? debate;
 
   /// Form hash.
   final String formHash;
@@ -100,24 +117,64 @@ final class PostEditCompleteEditRequested extends PostEditEvent with PostEditCom
 
   /// Optional thread price.
   final int? price;
+
+  /// The key of the local draft of the editor (`LocalDraftKey.value`), deleted once the edit was taken.
+  final String? draftKey;
 }
 
 /// Fetch required info for publishing, including form hash, post time and more.
 @MappableClass()
 final class ThreadPubFetchInfoRequested extends PostEditEvent with ThreadPubFetchInfoRequestedMappable {
   /// Constructor.
-  const ThreadPubFetchInfoRequested({required this.fid});
+  const ThreadPubFetchInfoRequested({required this.fid, this.kind = ThreadKind.normal});
 
   /// Forum id.
   final String fid;
+
+  /// The kind of thread to write: the forum's form of that kind.
+  final ThreadKind kind;
 }
 
 /// Post a new thread to forum.
 @MappableClass()
 final class ThreadPubPostThread extends PostEditEvent with ThreadPubPostThreadMappable {
   /// Constructor.
-  const ThreadPubPostThread(this.info);
+  const ThreadPubPostThread(
+    this.info, {
+    this.verification,
+    this.draftKey,
+    this.attachNew = const [],
+    this.rewardPrice,
+    this.hongbao,
+    this.activity,
+    this.debate,
+    this.cronPublish,
+  });
+
+  /// When the thread is published ([PostFormEdits.cronPublish]), null for now.
+  final DateTime? cronPublish;
+
+  /// The activity of an activity thread ([PostFormEdits.activity]), null for any other thread.
+  final ActivityEdits? activity;
+
+  /// The debate of a debate thread ([PostFormEdits.debate]), null for any other thread.
+  final DebateEdits? debate;
 
   /// All info to post in body.
   final ThreadPublishInfo info;
+
+  /// The reward price of a reward thread ([PostFormEdits.rewardPrice]), null for any other thread.
+  final int? rewardPrice;
+
+  /// The red packet of a red packet thread ([PostFormEdits.hongbao]), null for any other thread.
+  final HongbaoEdits? hongbao;
+
+  /// The attachments uploaded while the thread was written, by `aid` ([PostFormEdits.attachNew]).
+  final List<int> attachNew;
+
+  /// The answers to the captcha or the security question the forum asks, null when none is asked (yet).
+  final SecCheckAnswer? verification;
+
+  /// The key of the local draft of the editor (`LocalDraftKey.value`), deleted once the thread was taken.
+  final String? draftKey;
 }

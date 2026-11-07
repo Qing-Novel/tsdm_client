@@ -2,6 +2,7 @@
   "draftBox": {
     "editUnconfirmed": "無法確認修改結果。請先查看原帖或網頁，確認內容是否已更新或等待審核，再決定是否重新送出。",
     "acceptedUnconfirmed": "論壇已接受內容，但尚未確認為草稿，可能正等待審核。請到「我的帖子」或網頁確認，避免重複送出。",
+    "stillDraft": "論壇已收下修改，但這篇仍是草稿（可能設了定時發布），沒有公開發表。請到網頁確認發布時間。",
     "title": "草稿箱",
     "empty": "目前沒有論壇草稿。發帖時選擇「儲存草稿」後，就能在這裡繼續編輯。",
     "loginRequired": "請先登入，再查看這個帳號的草稿。",
@@ -142,6 +143,8 @@
     "retry": "重試",
     "noPermission": "沒有權限查看該內容",
     "needLoginToSeeThisPage": "登入後才能存取此頁面",
+    "needLogin": "請先登入",
+    "accountChangedRetry": "帳號已切換，請重新開啟此頁。",
     "pleaseWait": "請稍候",
     "loadFailedAndRetry": "載入失敗，正在重試",
     "noData": "沒有資料",
@@ -161,17 +164,97 @@
     "openInBrowser": "在瀏覽器中開啟",
     "close": "關閉"
   },
+  "loadState": {
+    "loading": "正在載入…",
+    "failure": {
+      "noNetwork": {
+        "title": "連不上論壇",
+        "hint": "請檢查網路連線後再試一次。"
+      },
+      "connectionLost": {
+        "title": "連線中斷了",
+        "hint": "網路可能不穩定，請再試一次。"
+      },
+      "timeout": {
+        "title": "論壇回應逾時",
+        "hint": "論壇或網路比較慢，請稍後再試。"
+      },
+      "rateLimited": {
+        "title": "操作太頻繁，論壇暫時不接受",
+        "hint": "請稍等一下再試。",
+        "hintSeconds": "請在 ${seconds: int} 秒後再試。"
+      },
+      "server": {
+        "title": "論壇伺服器出了問題",
+        "hint": "通常過一會兒就會恢復，請稍後再試。"
+      },
+      "badStatus": {
+        "title": "論壇回應了錯誤",
+        "hint": "請稍後再試；一直失敗的話，可以展開下方的詳細資訊回報。"
+      },
+      "challenge": {
+        "title": "網站要求瀏覽器驗證",
+        "hint": "請稍後再試，或在瀏覽器中開啟論壇。"
+      },
+      "closed": {
+        "title": "論壇維護中或暫時關閉",
+        "hint": "請稍後再來。"
+      },
+      "needLogin": {
+        "title": "登入後才能查看",
+        "hint": "論壇只對已登入的會員顯示這裡的內容。"
+      },
+      "noPermission": {
+        "title": "沒有權限查看",
+        "hint": "目前的帳號沒有權限，可以換個帳號試試。"
+      },
+      "accountChanged": {
+        "title": "帳號已切換",
+        "hint": "請為目前的帳號重新載入此頁。"
+      },
+      "unknown": {
+        "title": "載入失敗",
+        "hint": "請再試一次；一直失敗的話，可以展開下方的詳細資訊回報。"
+      }
+    },
+    "details": "詳細資訊",
+    "hideDetails": "收起詳細資訊",
+    "copyDetails": "複製詳細資訊",
+    "retryIn": "${seconds: int} 秒後再試",
+    "refreshFailed": "重新整理失敗：${reason}",
+    "footer": {
+      "loading": "正在載入更多…",
+      "failed": "載入更多失敗：${reason}"
+    }
+  },
   "navigation": {
     "homepage": "首頁",
     "topics": "版塊",
     "activities": "活動",
     "notice": "通知",
-    "profile": "我的",
-    "moreSection": "更多功能",
-    "titleShop": "稱號商店",
-    "medalCenter": "勳章中心",
-    "bank": "銀行",
+    "me": "我的",
     "settings": "設定"
+  },
+  "mePage": {
+    "title": "我的",
+    "mine": "我的帳號",
+    "services": "論壇服務",
+    "app": "應用程式",
+    "switchAccount": "切換帳號",
+    "inUse": "使用中",
+    "uid": "UID ${uid}",
+    "guestTitle": "尚未登入",
+    "guestDetail": "登入後可以簽到、收藏貼文、查看通知與私訊。",
+    "entries": {
+      "myThreads": "我的貼文",
+      "favorites": "收藏",
+      "history": "瀏覽紀錄",
+      "drafts": "論壇草稿",
+      "localDrafts": "本機草稿",
+      "messages": "私訊",
+      "friends": "好友",
+      "points": "積分"
+    }
   },
   "home": {
     "confirmExit": "再按一次以退出"
@@ -196,6 +279,11 @@
       "failed": "載入失敗，點一下重試",
       "empty": "目前還沒有貼文"
     },
+    "saved": {
+      "updating": "顯示 ${time} 的首頁，正在更新…",
+      "failed": "更新失敗，顯示的是 ${time} 的首頁",
+      "retry": "重試"
+    },
     "forumStatus": {
       "today": "今日",
       "yesterday": "昨日",
@@ -211,7 +299,13 @@
     "forumActivity": "論壇動態",
     "guideTitle": "論壇導讀",
     "tools": "我的工具",
-    "supportNote": "完全自願，不支持也能使用全部功能"
+    "supportNote": "完全自願，不支持也能使用全部功能",
+    "guest": {
+      "title": "登入看更多",
+      "detail": "登入後可以簽到、領取每日紅包、收藏貼文，查看通知與私訊，也能進入只對會員開放的版塊。",
+      "forums": "版塊入口",
+      "allForums": "全部版塊"
+    }
   },
   "medalTitleHub": {
     "title": "勳章與稱號",
@@ -234,7 +328,13 @@
     "title": "設定",
     "accountSection": {
       "title": "帳號",
-      "mgmt": "管理帳戶"
+      "mgmt": "管理帳戶",
+      "crossDeviceSync": {
+        "title": "跨裝置同步",
+        "rateTemplates": "評分範本",
+        "settings": "閱讀與顯示設定",
+        "drafts": "本機草稿"
+      }
     },
     "appearanceSection": {
       "title": "外觀",
@@ -242,7 +342,13 @@
         "title": "主題模式",
         "light": "淺色",
         "system": "跟隨系統",
-        "dark": "深色"
+        "dark": "深色",
+        "scheduled": "按時間"
+      },
+      "darkSchedule": {
+        "title": "深色時段",
+        "start": "開始",
+        "end": "結束"
       },
       "colorSchemeFollowSystem": {
         "title": "色調跟隨系統顏色",
@@ -257,9 +363,16 @@
         "followSystem": "跟隨系統",
         "selectLanguage": "選擇語言"
       },
+      "highRefreshRate": {
+        "title": "高刷新率",
+        "detail": "使用螢幕支援的最高刷新率，捲動更流暢，但會稍微多耗電"
+      },
       "showShortcutInForumCard": {
-        "title": "論壇卡可跳轉",
-        "detail": "論壇卡上顯示可跳到最新貼文和子板塊的零件"
+        "title": "版塊卡片顯示捷徑",
+        "detail": "在版塊卡片上顯示跳到最新貼文和子版塊的按鈕"
+      },
+      "twoPaneLayout": {
+        "title": "寬螢幕雙欄"
       },
       "showUnreadInfoHint": {
         "title": "未讀取訊息提示",
@@ -270,9 +383,30 @@
         "detail": "設定貼文卡的外觀",
         "infoRowAlignCenter": "訊息居中排列",
         "showLastReplyAuthor": "顯示最後回覆的使用者的名字",
-        "highlightRecentThread": "突出顯示顯示近期發佈的貼文",
+        "highlightRecentThread": "突出顯示近期發佈的貼文",
         "highlightAuthorName": "突出顯示貼文作者的使用者名稱",
         "highlightInfoRow": "高亮顯示貼文資訊",
+        "listPreview": {
+          "title": "列表預覽",
+          "note": "摘要與縮圖由論壇提供；論壇尚未支援時，列表只顯示標題。需要權限才能看的內容不會出現在預覽裡。",
+          "showExcerpt": {
+            "title": "列表顯示摘要",
+            "detail": "在標題下方顯示首樓開頭的兩行文字"
+          },
+          "thumbnail": {
+            "title": "列表顯示縮圖",
+            "always": "總是",
+            "alwaysDetail": "使用行動數據時也顯示，但只載入論壇做好的小縮圖；原圖只在 Wi-Fi 下載入",
+            "wifiOnly": "僅 Wi-Fi",
+            "wifiOnlyDetail": "連上 Wi-Fi 或其他不計流量的網路時才顯示",
+            "never": "關閉",
+            "neverDetail": "列表不顯示圖片"
+          },
+          "externalImages": {
+            "title": "列表也載入外站圖片",
+            "detail": "關閉時縮圖只用論壇自己的附件。外站圖片一載入，圖片所在的網站就會知道誰滑過了這則貼文（網頁上要點進貼文才會載入），所以預設不在列表載入。"
+          }
+        },
         "example": {
           "title": "TV動畫《魔法禁書目錄》第四季製作決定！",
           "author": "茵蒂克絲",
@@ -345,10 +479,30 @@
         "title": "貼文內容縮放",
         "detail": "在文字縮放之上，額外放大貼文頁面中的樓層內容",
         "dialogTitle": "貼文內容縮放係數"
+      },
+      "threadContentLineHeight": {
+        "title": "貼文行高",
+        "detail": "樓層內文每一行的高度，是字級的倍數"
+      },
+      "threadContentParagraphSpacing": {
+        "title": "貼文段落間距",
+        "detail": "樓層內文段落之間的空白"
+      },
+      "threadContentSplitLongParagraphs": {
+        "title": "長段落自動分段",
+        "detail": "很長的段落在句尾斷開顯示，原文與複製的文字不變"
+      },
+      "threadContentLayout": {
+        "dialogTitle": "貼文排版",
+        "lineHeight": "行高",
+        "paragraphSpacing": "段落間距",
+        "preview": "預覽",
+        "previewText": "這是一段範例文字，用來預覽貼文內文的排版。行高越大，行與行之間越寬鬆；段落間距是兩個段落之間的空白。<br />手機螢幕比網頁窄得多，網頁上幾行的段落在手機上會變成十幾行，適度加大行高與段距會更容易閱讀。"
       }
     },
     "windowSection": {
       "title": "視窗",
+      "keyboardShortcuts": "鍵盤快捷鍵",
       "disableHint": "在啟動時增加參數\"--no-window-configs\"將會停用該部分設置，如果軟體開啟後看不到窗口，可以嘗試增加此參數",
       "windowRememberSize": {
         "title": "記住視窗大小",
@@ -360,7 +514,7 @@
       },
       "windowInCenter": {
         "title": "視窗居中",
-        "detail": "強制視窗劇中，並在每次啟動時套用"
+        "detail": "強制視窗居中，並在每次啟動時套用"
       }
     },
     "behaviorSection": {
@@ -377,13 +531,39 @@
         "title": "後台訊息接收",
         "detail": "開啟後 App 退到後台或被清掉時，仍按「自動同步訊息」的間隔檢查新提醒與私訊並發出通知；會多耗一些電（僅安卓）"
       },
+      "backgroundSyncAllAccounts": {
+        "title": "背景通知：所有已登入帳號",
+        "detail": "App 的自動同步（電腦版縮到系統匣時也算）與安卓的後台訊息接收也檢查這台裝置上其他已登入的帳號，各自用自己的登入；通知會標出帳號，點通知時先切換到該帳號再開啟通知頁",
+        "seenNote": "檢查其他帳號時，論壇會把它們的提醒標成已讀（網頁上的紅點會消失），和打開通知頁一樣"
+      },
+      "noticeCategories": {
+        "title": "通知類別",
+        "reply": "回覆",
+        "mention": "@提到我",
+        "rate": "評分／點評",
+        "pm": "私訊",
+        "system": "系統通知",
+        "quietHours": "靜音時段",
+        "quietStart": "開始",
+        "quietEnd": "結束"
+      },
+      "notificationHideContent": {
+        "title": "通知不顯示內容",
+        "detail": "系統通知只顯示帳號與新訊息數量，不顯示是誰、做了什麼和訊息內容"
+      },
       "notificationPermission": {
         "title": "通知權限",
         "detail": "自動同步需要此權限才能把新提醒、訊息和公共訊息顯示為系統通知",
         "granted": "已允許",
         "denied": "未允許",
         "permanentlyDenied": "已永久拒絕",
-        "openSettingsTip": "系統不再彈出權限對話框。請打開應用程式設定頁，在那裡開啟通知後再回來。"
+        "openSettingsTip": "系統不再彈出權限對話框。請打開應用程式設定頁，在那裡開啟通知後再回來。",
+        "promptTitle": "允許通知？",
+        "promptMessage": "開啟後，新的提醒、私信和公共訊息會顯示為系統通知。接下來系統會詢問是否允許通知；之後也可以在「設定 → 通知權限」更改。",
+        "promptAllow": "繼續",
+        "promptLater": "以後再說",
+        "promptSettingsMessage": "通知權限已被拒絕或在系統裡關閉，系統不會再詢問。要收到通知，請到 App 設定頁開啟。",
+        "promptOpenSettings": "開啟設定"
       },
       "ignoreBatteryOptimizations": {
         "title": "忽略電池最佳化",
@@ -392,21 +572,38 @@
         "denied": "未忽略"
       },
       "editorBBCodeParser": {
-        "title": "啟用BBCode parser",
+        "title": "啟用 BBCode 解析器",
         "tip": {
-          "title": "BBCode parser是什麼",
-          "detail": "以下場景中BBCode parser會將純文字的BBCode轉換為所見即所得的內容以供編輯:\n\n1. 編輯已發布的帖子\n2. 編輯回复模板\n3. 插入回复模板\n4. 展開帖子和聊天頁面底部的編輯框\n\n關閉BBCode parse後在編輯時將使用純文本，遇到問題時可將其關閉"
+          "title": "BBCode 解析器是什麼",
+          "detail": "以下場景中，BBCode 解析器會把純文字的 BBCode 轉成所見即所得的內容以供編輯：\n\n1. 編輯已發佈的貼文\n2. 編輯回覆範本\n3. 插入回覆範本\n4. 展開貼文和聊天頁面底部的編輯框\n\n關閉 BBCode 解析器後，編輯時會使用純文字；遇到問題時可以把它關閉"
         }
       },
+      "threadSwipePaging": {
+        "title": "左右滑動翻頁"
+      },
       "collapseAppBarWhenScroll": {
-        "title": "滑動時收起AppBar",
-        "detail": "分割區與貼文頁面中收起"
+        "title": "捲動時收起頂欄",
+        "detail": "在貼文頁往下捲時收起頂欄與導覽路徑，往上捲時再出現"
+      },
+      "postImageAutoLoad": {
+        "title": "貼文圖片自動載入",
+        "detail": "只影響貼文樓層裡的圖片：不自動載入的圖片顯示佔位，點擊才載入；已快取的圖片照常顯示",
+        "always": "總是",
+        "wifiOnly": "僅 Wi-Fi",
+        "never": "不自動（點擊載入）"
       },
       "threadFloorInteractionMode": {
         "title": "貼文樓層互動方式",
         "detail": "點擊貼文頁面中的樓層時如何回應",
         "adaptiveTapOpenContextMenu": "長按或右鍵時開啟選單",
         "tapToReply": "點擊樓層時將目前樓層設為回覆目標"
+      },
+      "threadOpenPosition": {
+        "title": "打開看過的貼文時",
+        "detail": "從列表打開讀過第一個畫面以後的貼文時，是否回到上次看到的地方",
+        "fromStart": "從頭開始",
+        "ask": "詢問（顯示「繼續」）",
+        "resume": "自動續讀"
       }
     },
     "checkinSection": {
@@ -432,6 +629,7 @@
       "log": "日誌",
       "selectOneCache": "需要至少選擇一項快取",
       "clearSuccess": "清除成功",
+      "offlineThreadsCache": "離線帖子",
       "scheduledCleaning": {
         "title": "自動清理圖片",
         "details": "應用程式啟動時刪除太久未使用的圖片快取",
@@ -446,11 +644,30 @@
           "15days": "15天",
           "30days": "30天"
         }
+      },
+      "offlineThreads": {
+        "title": "離線保存看過的帖子",
+        "detail": "把看過的帖子頁面存在本機，沒有網路時可以再看；每個帳號只看得到自己保存的內容。關閉時會刪除已保存的內容",
+        "limit": {
+          "title": "最多保存的帖子數",
+          "detail": "所有帳號共用這個上限，超過時先刪除最久沒看的帖子；每個帖子最多保存 20 頁",
+          "value": "${count: int} 個帖子"
+        }
       }
     },
     "advancedSection": {
       "title": "高級",
       "useProxy": "啟用代理",
+      "forumApi": {
+        "title": "論壇 API",
+        "detected": "外掛 ${seen} · 應用預期 ${expected}",
+        "notDetected": "未偵測到 · 應用預期 ${expected}",
+        "olderNote": "部分頁面將按網頁解析"
+      },
+      "appPostRenderer": {
+        "title": "用 App 渲染器顯示帖子（實驗）",
+        "detail": "論壇接口外掛 2.7.0 起，看得到完整內容的樓層改用帖子原文（bbcode）由 App 自己顯示；App 畫不準的樓層照舊顯示論壇的網頁內容"
+      },
       "proxySettings": {
         "title": "代理設定",
         "host": "位址",
@@ -461,7 +678,7 @@
         "invalidPort": "無效的連接埠",
         "testConnection": {
           "waiting": "測試連線",
-          "testing": "測試中。。。",
+          "testing": "測試中…",
           "connected": "代理正在運行",
           "disconnected": "代理程式可能未執行"
         },
@@ -473,6 +690,7 @@
       },
       "exportData": "匯出資料",
       "exportDataDetail": "預設不含任何帳號的 Cookie 與密碼；可選擇用自設密碼加密後一併匯出",
+      "exportDataFailed": "匯出失敗，現有資料未變更，請稍後再試",
       "backupTitle": "備份與還原",
       "exportBackup": {
         "title": "匯出資料",
@@ -485,7 +703,7 @@
         "export": "匯出"
       },
       "importData": {
-        "title": "導入資料",
+        "title": "匯入資料",
         "invalidData": "無效的資料",
         "tip": "所有現有資料都會被覆蓋。未輸入備份密碼時各帳號需要重新登入；匯入完成後應用程式會自動關閉，重新開啟即生效。\n是否繼續匯入？",
         "invalidDetail": "無法匯入這個檔案：${reason}。現有資料未變更。",
@@ -554,12 +772,46 @@
     "featureRequestAction": "到 GitHub 提出功能需求",
     "featureRequestOpenFailed": "無法開啟瀏覽器，請重試，或複製下方連結自行開啟。",
     "donationTitle": "自願贊助",
-    "donationDescription": "本專案免費開源，歡迎自願贊助，支持客戶端的開發與維護。贊助由維護者 Carinoasd 個人收取，非論壇官方募款；是否贊助不影響功能使用。",
+    "donationDescription": "本專案免費開源，歡迎自願贊助，支持客戶端的開發與維護。贊助由維護者 Carinoasd 個人收取，同樣可以領取論壇「支援天使」公告的獎勵（見下方）；是否贊助不影響功能使用。",
     "donationInstructions": "使用支付寶掃碼，或截圖後在支付寶掃一掃中選擇圖片。也可以儲存原圖。",
     "donationCodeLabel": "支付寶自願贊助 QR Code，收款人為 Carinoasd",
     "saveDonationCode": "儲存贊助碼",
     "donationCodeSaved": "贊助碼已儲存。",
     "donationCodeSaveFailed": "無法儲存贊助碼，請重試或使用截圖。",
+    "forumReward": {
+      "title": "論壇獎勵",
+      "description": "贊助 App 開發同樣可以獲得論壇「支援天使」公告的獎勵，標準與公告相同。",
+      "separator": "：",
+      "tier50": {
+        "amount": "滿 50 元",
+        "reward": "紀念等級「夢幻天使」，以及 300 威望、1500 天使幣、50 宣傳點（其他金額按此標準的倍數計算）"
+      },
+      "tier100": {
+        "amount": "滿 100 元",
+        "reward": "永久紀念勳章「瓶中MIKU」"
+      },
+      "tier200": {
+        "amount": "滿 200 元",
+        "reward": "「夢幻天使2」等級（該使用者群組簽到積分加倍），並額外獲得「瞌睡天使」勳章"
+      },
+      "tierEvery100": {
+        "amount": "之後每滿 100 元",
+        "reward": "一枚有特殊意義的永久週年紀念勳章"
+      },
+      "tier500": {
+        "amount": "滿 500 元",
+        "reward": "可在「夢幻天使X」與「夢幻天使Y」之間選擇"
+      },
+      "claimTitle": "領取方式",
+      "claim": "付款時在支付寶的備註裡寫上你的論壇使用者名稱（或 UID），付款後再私訊我一聲，附上金額和你的論壇帳號，我確認後把獎勵發到這個帳號。",
+      "account": "你的論壇帳號：${username}（UID ${uid}）",
+      "accountNoUid": "你的論壇帳號：${username}",
+      "copyUsername": "複製使用者名稱",
+      "usernameCopied": "已複製使用者名稱，付款時貼到備註裡即可。",
+      "notLoggedIn": "請在備註和私訊裡寫上你的論壇使用者名稱。",
+      "messageMe": "私訊我",
+      "viewAnnouncement": "查看論壇公告"
+    },
     "title": "關於",
     "whatIsThis": "這是？",
     "description": "天使動畫論壇官方跨平台客戶端",
@@ -582,6 +834,8 @@
     "usernameEmpty": "使用者名稱不能為空",
     "password": "密碼",
     "passwordEmpty": "密碼不能為空",
+    "showPassword": "顯示密碼",
+    "hidePassword": "隱藏密碼",
     "answer": "安全問題的答案",
     "answerEmpty": "安全問題的答案不能為空",
     "verifyCode": "驗證碼",
@@ -692,6 +946,7 @@
     "online": "線上",
     "offline": "離線",
     "searchAsThreadAuthor": "搜尋此人的帖子",
+    "memberThreads": "此人的貼文",
     "medals": "勳章",
     "mangedForum": "管理的版塊",
     "onlineTime": "線上時間",
@@ -714,13 +969,15 @@
     },
     "threadTab": {
       "title": "貼文",
-      "noThread": "沒有貼文",
+      "noThread": "這個版塊還沒有貼文",
       "threadType": "分類",
       "threadSpecialType": "特殊分類",
       "threadDateline": "活躍時間",
       "threadOrder": "排序",
       "threadDigested": "加精",
-      "threadRecommended": "推薦"
+      "threadRecommended": "推薦",
+      "noFilteredThread": "沒有符合篩選條件的貼文",
+      "clearFilter": "清除篩選"
     },
     "subredditTab": {
       "title": "子版塊",
@@ -728,6 +985,14 @@
     },
     "tooltip": {
       "fab": "發佈新帖"
+    },
+    "newThread": {
+      "label": "發帖",
+      "guestTitle": "登入後才能發帖",
+      "guestMessage": "發表主題需要帳號。請先登入，再回到這個版塊發帖。",
+      "noPermissionTitle": "可能無法在此版塊發帖",
+      "noPermissionMessage": "論壇顯示你目前的使用者群組可能沒有發帖權限。版塊與會員也有各自的權限設定，你仍可以開啟編輯器，由論壇判斷能否發表。",
+      "openAnyway": "仍要開啟編輯器"
     },
     "copyFid": "複製fid（${fid: String}）",
     "favorite": {
@@ -750,11 +1015,20 @@
     "replySuccess": "回覆成功",
     "replyFailed": "回覆失敗：$err",
     "replyFailedNetwork": "回覆失敗：網路不可用，請檢查網路後重試",
+    "replyMaybeSent": "回覆結果不明：可能已送出，請重新整理確認後再決定是否重送",
+    "refreshToCheck": "重新整理",
+    "replyCheckFiltered": "目前只看某位作者的樓層，你的回覆可能不在列表裡",
+    "lastFloorReached": "已到最後一樓",
+    "firstFloorReached": "已到最早一樓",
+    "replyNeedsVerification": "這個版塊回覆需要填寫驗證碼或回答安全提問，App 暫不支援，請在瀏覽器中回覆。",
+    "replyNeedsBrowser": "這個回覆表單有 App 暫不支援的欄位，請在瀏覽器中回覆。",
+    "replyInBrowser": "在瀏覽器中回覆",
     "draft": "草稿",
     "operationLog": {
       "title": "操作記錄"
     },
-    "softCloseHint": "帖子已关闭，回复前请注意",
+    "softCloseHint": "貼文已關閉，回覆前請注意",
+    "offlineBanner": "離線內容（${time: String} 保存）",
     "statistics": "${view: int} 查看 ${reply: int} 回覆",
     "threadInfo": {
       "title": "貼文訊息",
@@ -783,6 +1057,37 @@
       "message": "分享帖子：${title}\n${url}",
       "sent": "已發送給 ${name}",
       "failed": "發送失敗：${err}"
+    },
+    "pageDivider": "第 ${page: int} 頁",
+    "loadingPage": "正在載入第 ${page: int} 頁…",
+    "loadPage": "載入第 ${page: int} 頁",
+    "pageLoadFailed": "第 ${page: int} 頁載入失敗",
+    "floorCount": "共 ${count: int} 樓",
+    "loadNewReplies": "載入新回覆",
+    "newRepliesFailed": "新回覆載入失敗",
+    "newRepliesLoaded": "已載入 ${count: int} 則新回覆",
+    "noNewReplies": "沒有新的回覆",
+    "jumpToFloor": {
+      "menu": "跳到樓層…",
+      "title": "跳到樓層",
+      "label": "樓層",
+      "hint": "1 至 ${max: int}",
+      "go": "跳轉",
+      "invalid": "請輸入 1 以上的樓層",
+      "missed": "沒有第 ${floor: int} 樓，已跳到最接近的樓層"
+    },
+    "search": {
+      "menu": "搜尋本帖",
+      "hint": "關鍵字",
+      "count": "${n: int} / ${total: int}",
+      "loadMore": "載入更多頁",
+      "previous": "上一個",
+      "next": "下一個"
+    },
+    "resume": {
+      "message": "上次看到第 ${floor: int} 樓",
+      "action": "繼續",
+      "close": "關閉"
     }
   },
   "topicsPage": {
@@ -790,11 +1095,14 @@
   },
   "noticePage": {
     "title": "通知",
+    "guestHint": "登入後可以查看提醒、私人訊息與公共訊息。",
     "appBar": {
       "unread": "未讀",
       "unreadDetail": "只顯示未讀",
       "backToHome": "回到首頁",
-      "backToHomeStopped": "已停在可能有未儲存內容的頁面"
+      "backToHomeStopped": "已停在可能有未儲存內容的頁面",
+      "backToHomeDraftTitle": "離開未送出的回覆？",
+      "backToHomeDraftDetail": "回覆會作為草稿保留在本機，下次開啟同一頁時可以還原。"
     },
     "noticeTab": {
       "title": "提醒",
@@ -842,10 +1150,70 @@
         "waiting": "等待中",
         "running": "同步中",
         "success": "新提醒 ${notice}，新私訊 ${pm}，新公用訊息 ${bm}；未讀 ${unreadNotice}/${unreadPm}/${unreadBm}",
+        "recent": "剛同步過，沿用已存的結果；未讀 ${unreadNotice}/${unreadPm}/${unreadBm}",
         "notAuthed": "登入已失效，請重新登入",
         "rateLimited": "論壇限制了請求頻率（429），請稍後再試",
-        "failed": "失敗：${message}"
+        "failed": "失敗：${message}",
+        "open": "切換到這個帳號並查看通知"
       }
+    },
+    "kind": {
+      "reply": "回覆",
+      "quote": "引用",
+      "mention": "提到了你",
+      "rate": "評分",
+      "comment": "點評",
+      "friend": "好友",
+      "friendRequest": "好友請求",
+      "poke": "打招呼",
+      "wall": "留言",
+      "moderation": "管理操作",
+      "post": "帖子",
+      "reward": "懸賞",
+      "activity": "活動",
+      "medal": "勳章",
+      "magic": "道具",
+      "system": "系統",
+      "manage": "待處理",
+      "generic": "提醒"
+    },
+    "action": {
+      "reply": "${user} 回覆了你的帖子",
+      "quote": "${user} 引用了你的帖子",
+      "mention": "${user} 提到了你",
+      "rate": "${user} 給你的帖子評分",
+      "comment": "${user} 點評了你的帖子",
+      "friend": "${user} 和你成為了好友",
+      "friendRequest": "${user} 請求加你為好友",
+      "poke": "${user} 向你打招呼",
+      "wall": "${user} 在留言板給你留言"
+    },
+    "time": {
+      "justNow": "剛剛",
+      "minutesAgo": "${n} 分鐘前",
+      "hoursAgo": "${n} 小時前",
+      "yesterdayAt": "昨天 ${time}",
+      "today": "今天",
+      "yesterday": "昨天",
+      "earlier": "更早"
+    },
+    "quickReply": "快速回覆",
+    "markAllRead": "全部已讀",
+    "markAllReadDone": "已全部標為已讀",
+    "markAllReadFailed": "標為已讀失敗，請稍後再試",
+    "search": {
+      "tooltip": "搜尋通知",
+      "hint": "在已同步的通知中尋找",
+      "close": "關閉搜尋"
+    },
+    "empty": {
+      "notice": "還沒有提醒",
+      "personalMessage": "還沒有私人訊息",
+      "broadcastMessage": "還沒有公用訊息",
+      "unreadNotice": "沒有未讀提醒",
+      "unreadPersonalMessage": "沒有未讀私人訊息",
+      "unreadBroadcastMessage": "沒有未讀公用訊息",
+      "search": "沒有符合「${keyword}」的內容"
     }
   },
   "noticeSearchPage": {
@@ -871,26 +1239,64 @@
       "keywordEmpty": "關鍵字不能為空",
       "keywordInvalid": "關鍵字不能包含\"%\"",
       "author": "作者（uid 或使用者名稱）",
-      "authorInvalid": "作者不能包含\"%\"",
-      "fid": "論壇id（fid）",
-      "fidInvalid": "論壇id必須是不小於0的數字"
+      "authorInvalid": "作者不能包含\"%\""
     },
     "result": {
       "title": "搜尋結果",
       "totalThreadCount": "$count 條結果",
       "pageInfo": "$total 頁",
-      "noData": "沒有資料"
+      "noData": "沒有找到相關貼文",
+      "hint": "輸入關鍵字或作者後搜尋",
+      "noDataHint": "換個關鍵字試試。",
+      "noDataFiltered": "限定了作者、版塊或時間，試試放寬限制。"
+    },
+    "filter": {
+      "forum": "版塊",
+      "forumCount": "$count 個版塊",
+      "forumId": "版塊 $fid",
+      "clear": "清除",
+      "time": {
+        "all": "不限時間",
+        "day": "一天內",
+        "week": "一週內",
+        "month": "一個月內",
+        "threeMonths": "三個月內",
+        "halfYear": "半年內",
+        "year": "一年內"
+      },
+      "order": {
+        "lastpost": "最後回覆",
+        "dateline": "發表時間",
+        "replies": "回覆數",
+        "views": "查看數",
+        "descending": "降序",
+        "ascending": "升序"
+      },
+      "titleOnly": "只搜標題"
+    },
+    "history": {
+      "clear": "清除全部"
     }
   },
   "myThreadPage": {
     "title": "我的貼文",
     "threadTab": {
-      "title": "主題"
+      "title": "主題",
+      "empty": "你還沒有發表過主題"
     },
     "replyTab": {
-      "title": "回覆"
+      "title": "回覆",
+      "empty": "你還沒有回覆過貼文"
     },
     "forum": "分區"
+  },
+  "memberThreadPage": {
+    "title": "${name} 的貼文",
+    "titleUnknown": "此會員的貼文",
+    "blocked": "你已屏蔽此用戶（本機），其主題與回覆不顯示。",
+    "notList": "論壇沒有顯示此會員的貼文列表。",
+    "emptyThread": "此會員還沒有發表主題",
+    "emptyReply": "此會員還沒有回覆"
   },
   "favoritePage": {
     "title": "收藏",
@@ -898,17 +1304,39 @@
     "forumTab": "版塊",
     "empty": "還沒有收藏",
     "emptyForum": "還沒有收藏的版塊",
+    "emptyHint": "在貼文頁的選單選擇「收藏」，貼文就會出現在這裡。",
+    "emptyForumHint": "在版塊頁的選單選擇「收藏本版」，版塊就會出現在這裡。",
     "remove": "取消收藏",
     "removeConfirm": "確定要取消收藏「${title}」嗎？",
     "removed": "已取消收藏",
     "actionFailed": "操作失敗：$err",
     "favoritedAt": "收藏於 $time"
   },
+  "offlineBatch": {
+    "downloadTitle": "離線下載",
+    "updateTitle": "更新離線副本",
+    "progress": "${done: int}／${total: int}",
+    "downloadSelected": "離線下載所選",
+    "downloadAll": "全部離線下載",
+    "copies": "離線副本",
+    "updateAll": "全部更新",
+    "clearSelection": "取消選取",
+    "selectedCount": "${count: int}",
+    "empty": "沒有離線副本",
+    "remove": "刪除離線副本",
+    "pages": "${count: int} 頁",
+    "savedCount": "已保存",
+    "skippedCount": "已略過",
+    "overLimitCount": "超出保存上限",
+    "failedCount": "失敗"
+  },
   "friendPage": {
     "title": "好友",
     "subtitle": "${name} · ${count: int} 位好友",
     "subtitleCountOnly": "${count: int} 位好友",
     "empty": "還沒有好友",
+    "emptyHint": "在會員的個人資料頁點「加好友」就能送出好友請求。",
+    "emptyOther": "此會員的好友列表是空的",
     "credits": "積分 ${count}",
     "sendMessage": "傳送訊息",
     "addFriend": {
@@ -917,6 +1345,7 @@
       "note": "附言（可選）",
       "group": "分組",
       "send": "送出請求",
+      "sent": "好友請求已送出",
       "failed": "好友請求送出失敗"
     },
     "approveFriend": {
@@ -979,9 +1408,15 @@
     "title": "最新主題",
     "empty": "目前還沒有貼文"
   },
+  "tagPage": {
+    "title": "標籤：$name",
+    "cloudTitle": "標籤",
+    "empty": "暫無標籤"
+  },
   "ratePostPage": {
     "title": "評分",
     "description": "給 $username 在 $floor 樓的貼文評分",
+    "descriptionNoFloor": "給 $username 的貼文評分",
     "reason": "理由",
     "success": "評分成功",
     "noticeAuthor": "通知作者",
@@ -992,13 +1427,16 @@
     "onlyAllowIntegers": "只允許整數",
     "failedToRate": "評分失敗",
     "scoreTodayRemaining": "今日剩餘 $score",
+    "overTodayRemaining": "超過今日剩餘 $score",
+    "selfDeduct": "評分將扣除您的同類積分",
     "fillWithTemplate": "使用模板填滿"
   },
   "pointsPage": {
     "title": "積分統計",
     "statisticsTab": {
       "title": "我的點數",
-      "recentChangelog": "近期積分記錄"
+      "recentChangelog": "近期積分記錄",
+      "emptyRecent": "近期沒有積分變動"
     },
     "changelogTab": {
       "title": "積分記錄",
@@ -1008,7 +1446,9 @@
       "dateRange": "日期範圍",
       "query": "查詢",
       "showFilterTip": "顯示篩選條件",
-      "hideFilterTip": "隱藏篩選條件"
+      "hideFilterTip": "隱藏篩選條件",
+      "empty": "還沒有積分記錄",
+      "emptyFiltered": "沒有符合查詢條件的記錄"
     }
   },
   "postEditPage": {
@@ -1025,8 +1465,29 @@
     "titleShouldNotBeEmpty": "標題不能為空",
     "titleTooLong": "標題太長",
     "threadBodyTooShort": "正文太短",
+    "titleTooLongLimit": "標題過長，上限為 ${limit: int}（英數字元計 1，其他字元計 2；& \" < > 會轉義而佔用更多）",
+    "titleTooShortLimit": "標題太短，至少 ${limit: int}（英數字元計 1，其他字元計 2）",
+    "threadBodyTooShortLimit": "正文太短，至少 ${limit: int} 位元組，引用不計（英文字母 1 位元組，中文字 3 位元組）",
+    "threadBodyTooLongLimit": "正文太長，上限為 ${limit: int} 位元組（英文字母 1 位元組，中文字 3 位元組）",
+    "verificationRequired": "這個版塊發帖需要填寫驗證碼或回答安全提問，App 暫不支援，請在瀏覽器中繼續。",
+    "transferredContent": "在投票編輯器寫的標題與正文（可複製後到網頁貼上）：",
+    "copyTransferred": "複製標題與正文",
+    "moderated": {
+      "title": "需要審核",
+      "message": "這個版塊的新帖要先經版主審核，通過後才會公開顯示。要發布嗎？"
+    },
     "editSuccess": "編輯成功",
     "saveAsDraft": "儲存草稿",
+    "leaveDialog": {
+      "title": "要離開編輯嗎？",
+      "message": "目前的內容還沒有送出。",
+      "discard": "捨棄",
+      "saveDraft": "存草稿",
+      "keepEditing": "繼續編輯",
+      "sending": "仍在送出，離開後無法得知結果，確定離開？",
+      "messageLocal": "目前的內容還沒有送出，已保存為本機草稿。",
+      "keepDraft": "保留草稿並離開"
+    },
     "threadPublish": {
       "title": "發布新帖",
       "warningBeforePost": {
@@ -1057,19 +1518,136 @@
       "typesTip": "BBCode格式只保存正文；Quill Delta既保存正文也保存帖子的設定",
       "copyBBCode": "複製BBCode",
       "pasteBBCode": "貼上BBCode",
-      "exportBBCode": "匯出BBCode",
-      "importBBCode": "導入BBCode",
+      "exportBBCode": "匯出 BBCode",
+      "importBBCode": "匯入 BBCode",
       "copyQuilllDelta": "複製Quill Delta",
       "pasteQuillDelta": "貼上Quill Delta",
-      "exportQuillDelta": "導出Quill Delta",
-      "importQuillDelta": "導入Quill Delta"
+      "exportQuillDelta": "匯出 Quill Delta",
+      "importQuillDelta": "匯入 Quill Delta"
+    },
+    "titleCount": "${count: int} / ${max: int}",
+    "bodyCount": "正文 ${count: int} / ${max: int} 位元組",
+    "bodyCountNoMax": "正文 ${count: int} 位元組",
+    "threadKind": {
+      "tooltip": "帖子類型",
+      "normal": "普通帖子",
+      "reward": "懸賞",
+      "hongbao": "紅包",
+      "activity": "活動",
+      "debate": "辯論"
+    },
+    "rewardDialog": {
+      "title": "設定懸賞",
+      "entryTooltip": "懸賞積分",
+      "price": "懸賞積分",
+      "range": "$min – $max $credit",
+      "min": "最低 $min $credit",
+      "balance": "你有 $have $credit",
+      "afterTax": "稅後支付 $real $credit",
+      "raiseCost": "追加支付 $real $credit",
+      "required": "請先設定懸賞積分",
+      "issue": {
+        "empty": "請填寫懸賞積分",
+        "overflow": "不能高於 32767",
+        "belowMin": "不能低於 $min",
+        "aboveMax": "不能高於 $max",
+        "shortage": "積分餘額不足",
+        "fall": "不能低於目前的 $current"
+      }
+    },
+    "hongbaoDialog": {
+      "title": "塞入紅包",
+      "entryTooltip": "紅包",
+      "total": "總金額",
+      "balance": "餘額 $balance $credit",
+      "shares": "份數",
+      "sharesLimit": "最多 $max 份，每份至少 $min",
+      "minShare": "每份至少 $min",
+      "split": "拆分方式",
+      "lucky": "拼手氣",
+      "even": "均分",
+      "condReply": "必須回帖後才能搶",
+      "password": "口令",
+      "appoint": "指定領取人",
+      "appointHint": "會員名，多個用逗號分隔",
+      "expire": "有效期",
+      "blessing": "祝福語",
+      "required": "請先設定紅包",
+      "issue": {
+        "totalRequired": "請填寫總金額",
+        "sharesRequired": "請填寫份數",
+        "sharesAboveMax": "最多 $max 份",
+        "totalBelowShares": "每份至少 $min，需 ≥ $need",
+        "notDivisible": "均分時總金額須能被份數整除",
+        "shortage": "餘額不足",
+        "blessingTooLong": "祝福語最多 $max 字",
+        "passwordTooLong": "口令最多 $max 字"
+      }
+    },
+    "activityDialog": {
+      "title": "活動設定",
+      "entryTooltip": "活動",
+      "category": "活動類別",
+      "start": "開始時間",
+      "end": "結束時間",
+      "place": "活動地點",
+      "city": "所在城市",
+      "number": "需要人數",
+      "gender": "性別",
+      "credit": "消耗積分",
+      "cost": "每人花費",
+      "expiration": "報名截止",
+      "userFields": "報名需要填寫",
+      "extFields": "擴充資料項（每行一項）",
+      "required": "請先設定活動",
+      "issue": {
+        "classRequired": "請填寫活動類別",
+        "startRequired": "請選擇開始時間",
+        "endBeforeStart": "結束時間不能早於開始時間",
+        "placeRequired": "請填寫活動地點",
+        "extFieldsTooMany": "擴充資料項最多 $max 項"
+      }
+    },
+    "pollDialog": {
+      "title": "投票設定",
+      "entryTooltip": "投票",
+      "optionEmpty": "選項不能為空白"
+    },
+    "cronPublish": {
+      "title": "定時發布",
+      "entryTooltip": "定時發布",
+      "time": "發布時間",
+      "passed": "發布時間必須晚於現在",
+      "scheduled": "已排程",
+      "scheduledMessage": "將於 $time 後發布，在此之前留在草稿箱。要前往「我的帖子 → 草稿箱」查看嗎？"
+    },
+    "debateDialog": {
+      "title": "辯論設定",
+      "entryTooltip": "辯論",
+      "affirm": "正方觀點",
+      "negate": "反方觀點",
+      "end": "結束時間",
+      "umpire": "裁判",
+      "required": "請先設定辯論",
+      "ended": "辯論已結束：請在辯論設定中改期或清空結束時間",
+      "issue": {
+        "pointsRequired": "請填寫正方和反方觀點",
+        "endPassed": "結束時間必須晚於現在"
+      }
+    },
+    "postedWithNotice": {
+      "title": "已發表",
+      "message": "帖子應已發表，但論壇說：\n$notice\n\n本機草稿保留，請到「我的主題」確認。"
     }
   },
   "chatHistoryPage": {
     "title": "交談記錄",
     "info": "和 $user ($count 條)",
     "success": "發送成功",
-    "failed": "發送失敗：$message"
+    "failed": "發送失敗：$message",
+    "empty": "還沒有和此會員的交談記錄",
+    "loadingOlder": "正在載入更早的訊息…",
+    "noOlder": "沒有更早的訊息了"
   },
   "chatPage": {
     "title": "聊天",
@@ -1079,7 +1657,11 @@
     "online": "[線上]",
     "offline": "[離線]",
     "viewUserSpaceTip": "查看使用者資料",
-    "viewChatHistoryTip": "查看歷史聊天"
+    "viewChatHistoryTip": "查看歷史聊天",
+    "failedNetwork": "發送失敗：網路不可用，請檢查網路後重試",
+    "maybeSent": "發送結果不明：可能已送出，請重新整理確認後再決定是否重送",
+    "refresh": "重新整理",
+    "empty": "還沒有訊息，在下方傳送第一則吧。"
   },
   "imageDetailPage": {
     "title": "圖片詳情",
@@ -1094,9 +1676,17 @@
     "usage": "用途",
     "fitToScreen": "適應螢幕"
   },
+  "imageGallery": {
+    "counter": "${index: int} / ${total: int}",
+    "percent": "${value: int}%",
+    "failedTapToRetry": "載入失敗，點擊重試",
+    "tapToLoad": "點擊載入圖片"
+  },
   "forumCard": {
     "links": "連結",
-    "subForums": "子版塊"
+    "subForums": "子版塊",
+    "privateForum": "私密版塊",
+    "redirectForum": "連結到外部地址"
   },
   "networkList": {
     "actionRefresh": "刷新",
@@ -1124,8 +1714,8 @@
   "lockedCard": {
     "points": {
       "title": "部分內容要求積分足夠才可見",
-      "detail": "需要 ${requiredPoints: int} 積分，但你只有 ${points: int} 積分",
-      "detailPassed": "需要 ${requiredPoints: int} 積分"
+      "detail": "需要 ${requiredPoints: String} 積分，但你只有 ${points: String} 積分",
+      "detailPassed": "需要 ${requiredPoints: String} 積分"
     },
     "purchase": {
       "title": "部分內容需要購買才可瀏覽",
@@ -1148,6 +1738,9 @@
       "title": "僅對作者可見",
       "detail(rich)": "該部分內容僅對$author可見",
       "detailAuthor": "作者"
+    },
+    "unknown": {
+      "title": "部分內容已隱藏"
     },
     "blocked": {
       "title": "內容被屏蔽",
@@ -1205,6 +1798,11 @@
     }
   },
   "postCard": {
+    "fromApp": "來自天使動漫App",
+    "contentUnavailable": "此樓內容無法顯示",
+    "bbcode": {
+      "attachmentLocked": "無法查看：需要購買、權限不足或要先登入"
+    },
     "interactiveHtml": {
       "open": "互動內容",
       "description": "開啟此樓層的互動排版、表單與按鈕。",
@@ -1242,6 +1840,10 @@
       },
       "pmTooltip": "私訊我",
       "profileTooltip": "查看資料",
+      "memberThreads": "TA的主題",
+      "memberReplies": "TA的回覆",
+      "myThreads": "我的主題",
+      "myReplies": "我的回覆",
       "medals": "勳章",
       "badges": "牌子",
       "pokemon": "寵物",
@@ -1273,9 +1875,39 @@
       }
     },
     "share": "複製分享連結",
+    "shareAsImage": "分享為圖片",
     "openInBrowser": "在瀏覽器中開啟",
     "copyText": "複製文字",
-    "copyPid": "複製pid（${pid: String}）"
+    "copyPid": "複製pid（${pid: String}）",
+    "avatarBlocked": "頭像被屏蔽",
+    "hotReply": "推薦",
+    "jumpToHotFloor": "跳到該樓"
+  },
+  "threadExport": {
+    "copyPlain": "複製為純文字",
+    "copyMarkdown": "複製為 Markdown",
+    "menu": "匯出整帖",
+    "plain": "純文字",
+    "markdown": "Markdown",
+    "loaded": "已載入的樓層",
+    "all": "全部頁",
+    "save": "儲存",
+    "share": "分享",
+    "cancel": "取消",
+    "progress": "正在讀取第 ${page: int} / ${total: int} 頁",
+    "failed": "匯出失敗",
+    "saved": "已儲存至 ${filePath: String}",
+    "labelFold": "[折疊]",
+    "labelHidden": "[隱藏]",
+    "labelImage": "[圖片]",
+    "labelMedia": "[媒體]",
+    "labelSmiley": "表情"
+  },
+  "shareFloorImage": {
+    "title": "分享為圖片",
+    "save": "儲存",
+    "share": "分享",
+    "siteName": "天使动漫"
   },
   "postReport": {
     "menu": "檢舉",
@@ -1313,6 +1945,40 @@
       "unsupported": "App 不支援此檢舉表單，未送出；請改用瀏覽器。"
     }
   },
+  "moderate": {
+    "menu": "管理",
+    "stick": "置頂",
+    "digest": "精華",
+    "close": "關閉主題",
+    "open": "打開主題",
+    "move": "移動",
+    "delete": "刪除主題",
+    "expiration": "有效期",
+    "noExpiration": "永久",
+    "reason": "操作原因",
+    "notifyAuthor": "通知作者",
+    "moveTo": "目標版塊",
+    "moveNormal": "移動主題",
+    "moveRedirect": "保留轉向",
+    "done": "管理操作成功",
+    "failed": "操作失敗",
+    "warn": "警告",
+    "unwarn": "解除警告",
+    "ban": "屏蔽",
+    "unban": "解除屏蔽",
+    "deletePost": "刪除回覆",
+    "queue": "審核",
+    "queueThreads": "主題",
+    "queueReplies": "回覆",
+    "validate": "通過",
+    "ignore": "忽略",
+    "queueDelete": "刪除",
+    "queueEmpty": "沒有待審核的內容",
+    "panelLogin": "管理面板",
+    "password": "密碼",
+    "wrongPassword": "密碼錯誤",
+    "nextPage": "下一頁"
+  },
   "packetCard": {
     "title": "紅包",
     "detail": "你找到一個紅包了！",
@@ -1342,7 +2008,9 @@
     "emoji": {
       "title": "表情",
       "downloading": "正在下載表情（大約10MB內容），這可能需要一些時間。。",
-      "loadingAssets": "正在載入已打包的表情。。。"
+      "loadingAssets": "正在載入已打包的表情…",
+      "recent": "最近使用",
+      "noRecent": "用過的表情會出現在這裡"
     },
     "url": {
       "title": "插入連結",
@@ -1394,6 +2062,16 @@
       "siteSearch": "全站搜尋",
       "noSearchResult": "全站沒有找到「${name}」"
     },
+    "quickPhrases": {
+      "title": "常用語",
+      "manage": "管理",
+      "empty": "還沒有常用語",
+      "add": "新增常用語",
+      "edit": "編輯常用語",
+      "full": "最多 ${count: int} 條",
+      "deleted": "已刪除",
+      "undo": "復原"
+    },
     "customImage": {
       "tab": "我的圖片",
       "add": "新增圖片",
@@ -1416,7 +2094,16 @@
     "saveImage": "儲存圖片",
     "imageSaved": "圖片已儲存至 ${filePath: String}",
     "failedToSaveImage": "無法儲存圖片",
-    "saveAsSticker": "存到我的圖片"
+    "saveAsSticker": "存到我的圖片",
+    "shareImage": "分享圖片",
+    "failedToShareImage": "無法分享圖片",
+    "openInBrowser": "用瀏覽器開啟",
+    "saveAllImages": "儲存全部圖片",
+    "saveScopeFloor": "這一樓",
+    "saveScopePage": "這一頁",
+    "saveAllDone": "已儲存 ${saved: int} 張，失敗 ${failed: int} 張",
+    "saveAllCancelled": "已取消，已儲存 ${saved: int} 張",
+    "failedToOpenInBrowser": "無法開啟瀏覽器"
   },
   "init": {
     "v1DeleteLegacyData": {
@@ -1427,7 +2114,16 @@
   "html": {
     "newcomerReportCard": {
       "title": "詳細資料"
+    },
+    "table": {
+      "title": "表格",
+      "fullscreen": "全螢幕檢視"
     }
+  },
+  "mediaCard": {
+    "title": "影音",
+    "titleOf": "影音：$site",
+    "open": "點擊在瀏覽器中開啟"
   },
   "musicCard": {
     "title": "音樂",
@@ -1440,9 +2136,12 @@
     "accountWithUid": "$username（UID $uid）",
     "empty": "還沒有瀏覽紀錄",
     "emptyForAccount": "這個帳號沒有瀏覽紀錄",
+    "emptyHint": "開啟過的貼文會記錄在這裡，只保存在這台裝置上。",
+    "showAllAccounts": "顯示全部帳號",
     "entryTooltip": "貼文瀏覽紀錄",
     "title": "貼文瀏覽紀錄",
-    "localOnlyTip": "僅記錄本機的瀏覽記錄，在網頁端或其他機器上可能會有所不同"
+    "localOnlyTip": "僅記錄本機的瀏覽記錄，在網頁端或其他機器上可能會有所不同",
+    "readTo": "看到第 ${floor: int} 樓"
   },
   "openInAppPage": {
     "title": "開啟頁面",
@@ -1483,6 +2182,14 @@
     "invalidBrowserLink": "請輸入以 http:// 或 https:// 開頭的網頁連結",
     "browserLaunchFailed": "無法在瀏覽器中開啟此連結"
   },
+  "shareReceive": {
+    "pickForum": "要發到哪個版塊",
+    "uploadUnavailable": "這個版塊不能上傳圖片",
+    "uploadFailed": "圖片上傳失敗 $code",
+    "uploadRefusedType": "不支援的圖片格式：$name",
+    "uploadRefusedSize": "圖片超過 ${limit: int} KB：$name",
+    "uploadFailedCount": "${count: int} 張圖片上傳失敗"
+  },
   "globalStatePage": {
     "autoCheckinRunning": "正在自動簽到",
     "autoCheckinFinished": "自動簽到已完成",
@@ -1496,7 +2203,7 @@
   "autoCheckinPage": {
     "title": "自動簽到",
     "detail": "為所有已登記的使用者自動簽到",
-    "running": "進行中。。。",
+    "running": "進行中…",
     "user": {
       "waiting": "等待中",
       "running": "進行中",
@@ -1506,16 +2213,34 @@
     }
   },
   "localNotification": {
+    "channels": {
+      "reply": "回覆",
+      "mention": "@提到我",
+      "rate": "評分／點評",
+      "pm": "私訊",
+      "system": "系統通知"
+    },
     "channelName": "新提醒",
     "channelDesc": "自動同步訊息時收到新提醒",
     "ticker": "新提醒",
+    "accountGone": "這則通知的帳號已不在這台裝置上",
     "notice": {
       "title": "新訊息",
+      "titleOf": "[${username}] 新訊息",
       "detail": {
         "notice": "收到了${noticeCount: int}條提醒，${pmCount: int}條私信，${bmCount: int}條公用訊息\n[提醒]${msg: String}",
         "pm": "收到了${noticeCount: int}條提醒，${pmCount: int}條私信，${bmCount: int}條公用訊息\n[私訊]${user: String}：${msg: String}",
         "bm": "收到了${noticeCount: int}條提醒，${pmCount: int}條私信，${bmCount: int}條公用訊息\n[公用訊息]${msg: String}"
-      }
+      },
+      "noticeTitle": "新提醒",
+      "pmFrom": "${user} 傳來私訊",
+      "bmTitle": "公用訊息",
+      "noticeCount": "${n} 則提醒",
+      "pmCount": "${n} 則私訊",
+      "bmCount": "${n} 則公用訊息",
+      "pmLine": "${user}：${msg}",
+      "bmLine": "[公用訊息] ${msg}",
+      "more": "還有 ${n} 則"
     }
   },
   "backgroundService": {
@@ -1558,7 +2283,6 @@
     "title": "管理帳戶",
     "switchAccount": {
       "title": "切換帳戶",
-      "success": "切換成功",
       "dialog": {
         "switchAccount": "切換到這個帳號",
         "deleteAccount": {
@@ -1623,7 +2347,11 @@
     "submit": "提交",
     "clearAvatarTip": "提交一個空連結可以清除目前使用的頭像",
     "avatarUpdated": "頭像已更新",
-    "viewSharedAvatars": "在找好看頭像？點我看公共頭像"
+    "viewSharedAvatars": "在找好看頭像？點我看公共頭像",
+    "uploadImage": "上傳圖片",
+    "cropTitle": "裁剪頭像",
+    "uploadFailed": "上傳失敗",
+    "imageUnreadable": "無法讀取這張圖片"
   },
   "updatePage": {
     "title": "取得更新",
@@ -1757,17 +2485,34 @@
       "original": "原資料"
     },
     "total": "總分",
-    "showTotalRatePointsTip": "顯示總分"
+    "showTotalRatePointsTip": "顯示總分",
+    "empty": "這一樓還沒有人評分"
   },
   "replyBar": {
     "notReplyToFloorTip": "不回覆該樓層（改為回覆樓主）",
     "expandToolbarTip": "展開工具列",
-    "collapseToolbarTip": "收起工具列"
+    "collapseToolbarTip": "收起工具列",
+    "emojiTip": "表情",
+    "keyboardTip": "鍵盤",
+    "maximizeTip": "展開成全頁編輯",
+    "restoreSizeTip": "縮回小編輯框",
+    "quoteLoading": "引用這一樓",
+    "quoteOf": "引用：$header",
+    "quoteRemove": "不引用",
+    "quoteRemoved": "不引用原文（仍會通知該樓作者）",
+    "quoteAdd": "引用",
+    "lengthCount": "${count: int} / ${max: int} 位元組",
+    "lengthCountNoMax": "${count: int} 位元組",
+    "tooShort": "太短：至少 ${min: int} 位元組，引用不計（目前 ${count: int}）",
+    "tooLong": "太長：最多 ${max: int} 位元組（目前 ${count: int}）",
+    "floodWait": "論壇要再等 ${seconds: int} 秒才接受下一次發表"
   },
   "workaroundRedirect": "查看對話",
   "threadCard": {
+    "previewImages": "${count: int} 張圖片",
     "viewInfo": "查看貼文資訊",
-    "replied": "已回覆"
+    "replied": "已回覆",
+    "newReplies": "上次看過之後有 ${count: int} 則新回覆"
   },
   "medalCenter": {
     "title": "勳章中心",
@@ -2016,6 +2761,9 @@
     "save": "儲存資料",
     "saveSuccess": "保存成功",
     "saveFailed": "儲存失敗",
+    "saveFailedReason": "儲存失敗：$reason",
+    "fieldRefused": "論壇不接受「$field」的內容",
+    "fieldNotOffered": "「$field」的值不在論壇的選項裡",
     "visibility": {
       "title": "隱私",
       "public": "公開",
@@ -2061,7 +2809,8 @@
       "aboutMe": "關於我",
       "forum": "論壇顯示"
     },
-    "uploadHint": "修改只保留在本頁，按右上角的上傳按鈕才會送到論壇。"
+    "uploadHint": "修改只保留在本頁，按右上角的上傳按鈕才會送到論壇。",
+    "signatureUnavailable": "目前使用者組不能使用個人簽名"
   },
   "urlInfoBottomSheet": {
     "title": "連結訊息",
@@ -2131,6 +2880,11 @@
     "exchange": "積分買賣",
     "openAccount": "開立銀行帳戶",
     "termDeposit": "存入定期",
+    "termWithdraw": "支取定期",
+    "confirmLoadFailed": "無法讀取論壇的支取確認頁，請檢查網路後再試一次。",
+    "serviceChanged": "送出前頁面內容已變更，這次沒有送出。請核對下面的最新內容後再操作。",
+    "loanWebOnly": "還貸與取消申請在論壇是點連結就直接執行，App 不代為操作，請到論壇網頁辦理。",
+    "forumReply": "論壇回覆：${message}",
     "loanApply": "申請貸款",
     "changePassword": "修改銀行密碼",
     "closeAccount": "註銷銀行帳戶",
@@ -2285,6 +3039,409 @@
         "ruleNotFound": "這條設定已不存在，請重新載入",
         "unknownAfterSubmit": "已送出但無法確認結果，請重新載入確認"
       }
+    }
+  },
+  "medalTitleTools": {
+    "unsupported": "論壇的插件還不是新版，請在網頁上操作。",
+    "noPermission": "你沒有使用這個功能的權限。",
+    "previous": "上一頁",
+    "next": "下一頁",
+    "page": "第 ${page} / ${pages} 頁",
+    "search": "搜尋名稱或 ID",
+    "permanent": "永久",
+    "expiresOn": "${date} 到期",
+    "days": "${n} 天",
+    "done": "完成",
+    "unconfirmed": "已送出，但無法確認結果，請重新整理查看。",
+    "hubExchange": "用勳章兌換頭銜",
+    "hubMyMedals": "顯示或隱藏勳章、獲取紀錄",
+    "hubGrant": "發勳章給會員、撤回",
+    "hubIssue": "發放或回收會員的頭銜",
+    "exchangeTitle": "頭銜兌換",
+    "exchangeFilterAll": "全部",
+    "exchangeFilterReady": "可兌換",
+    "exchangeFilterShort": "還差勳章",
+    "exchangeFilterOwned": "已擁有",
+    "exchangeProgress": "已有 ${have} / ${need} 枚勳章",
+    "exchangeConsume": "兌換後會收走所需勳章",
+    "exchangeButton": "兌換",
+    "exchangeOwned": "已擁有",
+    "exchangeConfirmTitle": "兌換頭銜",
+    "exchangeConfirm": "確定用勳章兌換「${name}」嗎？",
+    "exchangeConsumeConfirm": "兌換後會收走這些勳章：${medals}",
+    "exchangeNotEquipped": "兌換的頭銜要到「我的頭銜」裡使用才會顯示。",
+    "exchangeEmpty": "沒有符合的頭銜。",
+    "myMedalsTitle": "我的勳章",
+    "myMedalsPreview": "帖子裡最多顯示 ${n} 枚勳章，一行 5 枚；隱藏的不算。",
+    "myMedalsPreviewAll": "帖子裡會顯示全部沒隱藏的勳章。",
+    "myMedalsCounts": "顯示 ${shown} 枚，隱藏 ${hidden} 枚",
+    "myMedalsShown": "顯示",
+    "myMedalsHidden": "隱藏",
+    "myMedalsSave": "儲存",
+    "myMedalsHideConfirmTitle": "隱藏勳章",
+    "myMedalsHideConfirm": "這次會隱藏：${names}",
+    "myMedalsEmpty": "你還沒有勳章。",
+    "myMedalsRecord": "獲取紀錄",
+    "myMedalsRecordEmpty": "還沒有紀錄。",
+    "kindGrant": "獲得",
+    "kindClaim": "領取",
+    "kindPending": "申請中",
+    "kindDenied": "被駁回",
+    "kindExchanged": "兌換",
+    "kindBought": "購買",
+    "kindSign": "簽到領取",
+    "kindRevoked": "收回",
+    "kindOther": "變動",
+    "grantTitle": "發送勳章",
+    "grantLimits": "會員最多 ${users} 位、勳章最多 ${medals} 枚，合計不超過 ${pairs} 筆。有效期照勳章本身的設定；已經有的會員會略過。",
+    "grantMembers": "會員 UID",
+    "grantMembersHint": "一行一個或用逗號分隔",
+    "grantImport": "從帖子匯入回帖者",
+    "grantImportTid": "帖子 TID 或網址",
+    "grantImportFrom": "從第幾樓",
+    "grantImportTo": "到第幾樓",
+    "grantImportNoOwner": "不含樓主",
+    "grantImportHint": "不含匿名、被遮蔽的回帖；同一人只算一次。樓層留空表示全部。",
+    "grantImportButton": "匯入",
+    "grantImported": "「${subject}」符合 ${total} 人，加入 ${added} 人",
+    "grantImportFull": "名單最多 ${max} 位，其餘沒有加入",
+    "grantImportBadTid": "請填帖子 TID 或帖子網址",
+    "grantMedals": "勳章（已選 ${n} 枚）",
+    "grantMedalSearch": "搜尋勳章名稱或 ID",
+    "grantReason": "發放理由（選填）",
+    "grantReasonHint": "會寫進紀錄，並附在給會員的提醒裡",
+    "grantNext": "下一步：核對",
+    "grantNeedMembers": "請先填會員 UID",
+    "grantNeedMedals": "請先選勳章",
+    "grantTooMany": "超過上限：會員 ${users} 位、勳章 ${medals} 枚、合計 ${pairs} 筆",
+    "grantConfirmTitle": "確認發送",
+    "grantSummary": "會員 ${users} 位 × 勳章 ${medals} 枚：將發出 ${give} 筆，已經有、略過 ${skip} 筆。",
+    "grantMissing": "找不到的 UID（不會處理）：${list}",
+    "grantBad": "不是 UID（不會處理）：${list}",
+    "grantNoReason": "沒有填發放理由。",
+    "grantSend": "確認發出 ${n} 筆",
+    "grantNothing": "名單上的會員都已經有這些勳章，沒有要發的。",
+    "grantRecords": "發送紀錄",
+    "grantRecordsAll": "前台發送紀錄（全部）",
+    "grantRevokeHint": "發錯了可以撤回：會收回勳章並通知對方。只能撤回自己 72 小時內發出的。",
+    "grantRevokeHintAdmin": "發錯了可以撤回：會收回勳章並通知對方。管理員可以撤回任何一筆。",
+    "grantBatchSummary": "${users} 位會員 × ${medals} 枚勳章，共 ${count} 筆",
+    "grantSentBy": "${name} 發出",
+    "grantReasonLine": "理由：${reason}",
+    "grantRevokedAll": "已全部撤回",
+    "grantRevokedSome": "已撤回 ${n} 筆",
+    "grantRevoked": "已撤回",
+    "grantSent": "已發出",
+    "grantRevoke": "撤回",
+    "grantRevokeBatch": "撤回整批（${n} 筆）",
+    "grantRevokeConfirmTitle": "撤回發送",
+    "grantRevokeConfirm": "確定撤回嗎？會收回 ${user} 的「${medal}」，並通知對方。",
+    "grantRevokeBatchConfirm": "確定撤回這一批嗎？會收回其中還沒撤回的 ${n} 筆，並通知對方。",
+    "grantRecordsEmpty": "還沒有發送紀錄。",
+    "grantDetails": "明細 ${n} 筆",
+    "issueTitle": "頭銜頒發",
+    "issueGrant": "發放",
+    "issueRevoke": "回收",
+    "issueMembers": "會員（UID 或用戶名）",
+    "issueMembersHint": "一行一個或用逗號分隔，最多 ${n} 位",
+    "issueTitles": "頭銜（已選 ${n} 個，最多 ${max} 個）",
+    "issueDisabled": "停用",
+    "issueDays": "有效天數（0 為永久）",
+    "issueNote": "備註（選填）",
+    "issueSubmit": "${op}",
+    "issueConfirmTitle": "確認${op}",
+    "issueConfirm": "${op} ${titles} 個頭銜給 ${users} 位會員（${duration}）。",
+    "issueConfirmRevoke": "從 ${users} 位會員身上回收 ${titles} 個頭銜。",
+    "issueNeedMembers": "請先填會員",
+    "issueNeedTitles": "請先選頭銜",
+    "issueRecords": "最近頒發紀錄",
+    "issueRecordsEmpty": "還沒有頒發紀錄。",
+    "issueLogLine": "${by} → ${to}"
+  },
+  "currentAccount": {
+    "tooltip": "目前帳號：${username}",
+    "replyAs": "以 ${username} 回覆",
+    "postingAs": "以 ${username} 發表",
+    "switched": "已切換到 ${username}",
+    "switchBusy": "正在同步通知，請稍後再試",
+    "moreAccounts": "另外 ${count} 個帳號",
+    "replyBusy": "正在送出回覆，送出完成後再切換帳號",
+    "unread": "${count} 則未讀"
+  },
+  "specialThread": {
+    "refused": "論壇沒有接受這次操作。",
+    "done": "已完成。",
+    "unknown": "未能確認結果，已重新載入帖子，請以論壇顯示的狀態為準。",
+    "accountChanged": "載入此頁後已切換帳號，請先重新整理帖子。",
+    "openInBrowser": "在瀏覽器中開啟",
+    "submit": "提交",
+    "hongbao": {
+      "title": "紅包",
+      "status": {
+        "active": "進行中",
+        "done": "已領完",
+        "withdrawn": "已撤回",
+        "expired": "已過期",
+        "closed": "已關閉"
+      },
+      "lucky": "拼手氣",
+      "even": "均分",
+      "shares": "已領 $claimed/$shares 份",
+      "needReply": "需回帖",
+      "password": "口令",
+      "appoint": "指定領取",
+      "expireAt": "$time 到期",
+      "noExpire": "不自動到期",
+      "mine": "領到 $amount$credit",
+      "best": "手氣最佳",
+      "why": {
+        "disabled": "紅包功能已關閉",
+        "login": "登入後領取",
+        "self": "不能領取自己的紅包",
+        "claimed": "已領取",
+        "appoint": "不在指定領取名單",
+        "needreply": "回帖後領取"
+      },
+      "grab": "搶紅包",
+      "passwordTitle": "輸入口令",
+      "records": "領取紀錄",
+      "recordsEmpty": "還沒有人領取",
+      "recordsFailed": "讀取失敗",
+      "withdraw": "撤回",
+      "withdrawConfirmTitle": "撤回紅包",
+      "withdrawConfirm": "剩餘的$credit退回給你",
+      "grabbed": "領到 $amount $unit",
+      "already": "已領過 $amount $unit",
+      "withdrawn": "已撤回，退回 $amount $unit"
+    },
+    "poll": {
+      "single": "單選投票",
+      "multiple": "多選投票，最多可選 $max 項",
+      "voters": "共有 $count 人參與投票",
+      "afterResult": "投票後結果可見",
+      "separator": "，",
+      "ended": "投票已經結束",
+      "deadline": "投票截止：$time",
+      "overt": "其他人可看到您的投票項目。",
+      "viewVoters": "查看投票參與人"
+    },
+    "reward": {
+      "title": "懸賞",
+      "price": "$price $credit",
+      "resolved": "已解決",
+      "unresolved": "未解決",
+      "bestAnswer": "最佳答案",
+      "anonymous": "匿名",
+      "hiddenContent": "隱藏內容",
+      "hiddenLocked": "此帖的回覆僅作者可見。",
+      "hiddenOther": "最佳答案的內容不顯示，請到該樓查看。",
+      "jumpToFloor": "跳到該樓",
+      "setBestHint": "在回答的樓層點「設為最佳答案」即可採納。",
+      "setBest": "設為最佳答案",
+      "setBestConfirmTitle": "設為最佳答案",
+      "setBestConfirm": "要採納這一樓為最佳答案嗎？懸賞會付給該樓作者，設定後不能更改。",
+      "badge": "最佳答案",
+      "hiddenHide": "最佳答案含有隱藏內容，請到該樓查看。",
+      "hiddenPassword": "最佳答案是密碼帖，請到該樓查看。",
+      "hiddenBanned": "最佳答案的作者已被禁言，內容不顯示。",
+      "hiddenModerate": "最佳答案仍在審核中。",
+      "hiddenFormat": "App 無法摘錄這則答案，請到該樓查看。",
+      "hiddenSpoofed": "最佳答案那一樓的內容無法顯示。"
+    },
+    "activity": {
+      "title": "活動",
+      "type": "活動類型",
+      "time": "開始時間",
+      "timeRange": "$from 至 $to",
+      "place": "活動地點",
+      "gender": "性別",
+      "genderAny": "不限",
+      "genderMale": "男",
+      "genderFemale": "女",
+      "cost": "每人花銷",
+      "costValue": "$cost 元",
+      "places": "名額",
+      "placesUnlimited": "不限",
+      "applied": "已報名人數",
+      "appliedValue": "$count 人（已通過 $verified、待審核 $pending）",
+      "remaining": "剩餘名額",
+      "deadline": "報名截止",
+      "credit": "報名扣除",
+      "creditValue": "$amount $credit",
+      "creditNotEnough": "你的${credit}不足，不能報名。",
+      "closed": "活動已截止報名。",
+      "statusWaiting": "你已報名，等待發起者審核。",
+      "statusAccepted": "你的報名已通過。",
+      "statusComplete": "發起者要求你完善報名資料。",
+      "join": "我要參加",
+      "complete": "完善資料",
+      "cancel": "取消報名",
+      "cancelTitle": "取消報名",
+      "cancelReason": "取消理由（選填）",
+      "manage": "管理報名",
+      "accepted": "已通過（$count 人）",
+      "waiting": "暫未通過（$count 人）",
+      "more": "查看更多報名者",
+      "selfPay": "自付",
+      "pays": "支付 $amount 元",
+      "applyTitle": "報名",
+      "required": "必填",
+      "payValue": "支付金額（元）",
+      "needsWeb": "這個活動的報名表有 App 無法填寫的欄位，請在網頁上報名。",
+      "fillRequired": "請先填寫必填欄位。",
+      "applyOnWeb": "在瀏覽器報名"
+    },
+    "debate": {
+      "title": "辯論",
+      "affirm": "正方",
+      "nega": "反方",
+      "neutral": "中立",
+      "votes": "$count 票",
+      "debaters": "辯手 $count 人",
+      "voteFor": "支持${side}",
+      "voted": "你已投票",
+      "voteConfirmTitle": "投票",
+      "voteConfirm": "要支持${side}嗎？投票後不能更改。",
+      "endTime": "結束時間：$time",
+      "ended": "辯論已結束",
+      "umpire": "裁判：$name",
+      "winnerAffirm": "正方獲勝",
+      "winnerNega": "反方獲勝",
+      "winnerDraw": "雙方平手",
+      "umpirePoint": "裁判觀點",
+      "bestDebater": "最佳辯手：$name",
+      "umpireAction": "裁判操作",
+      "standVotes": "支持 $count",
+      "join": "加入${side}",
+      "joinHint": "以${side}身分發言",
+      "replySide": "發言觀點",
+      "fixedSide": "你的觀點是${side}（與你第一次發言相同）",
+      "support": "支持",
+      "supportConfirmTitle": "支持這一樓",
+      "supportConfirm": "要支持這一樓的觀點嗎？每一樓只能支持一次。",
+      "sideKeptNote": "若你已在某一方發言，論壇會沿用那一方。"
+    },
+    "trade": {
+      "title": "商品",
+      "count": "共 $count 件商品",
+      "noGoods": "本櫃台無商品。",
+      "removed": "此商品已被刪除。",
+      "recommended": "推薦",
+      "qualityNew": "全新",
+      "qualityUsed": "二手",
+      "remain": "剩餘 $days 天 $hours 小時",
+      "ended": "成交結束",
+      "price": "$price 元",
+      "credit": "$credit $unit",
+      "manage": "商品排序",
+      "add": "添加商品",
+      "buy": "購買",
+      "buyInBrowser": "在瀏覽器購買",
+      "soldOut": "已售完",
+      "seller": "賣家",
+      "quantity": "數量",
+      "message": "留言",
+      "next": "下一步",
+      "confirmTitle": "確認購買",
+      "pay": "付款",
+      "cost": "支付",
+      "balance": "餘額",
+      "after": "購買後",
+      "insufficient": "餘額不足",
+      "password": "登入密碼",
+      "bought": "購買完成。",
+      "notPaid": "訂單已建立，尚未付款。",
+      "payAgain": "重新付款",
+      "openOrder": "查看訂單",
+      "unknown": "未能確認結果，請在訂單頁查看。",
+      "verification": "論壇要求驗證，請在瀏覽器中完成。",
+      "openOrders": "查看交易記錄",
+      "unknownOrder": "未能確認是否已下單，請在交易記錄中查看。"
+    },
+    "already": "之前已經完成。"
+  },
+  "localDraft": {
+    "title": "本機草稿",
+    "details": "還沒送出的回覆、私信、新帖與編輯，保存在這台裝置上",
+    "offer": "有未送出的草稿（${time}）",
+    "restore": "恢復",
+    "discard": "捨棄",
+    "emoji": "[表情]",
+    "empty": "沒有本機草稿。寫到一半的內容會保存在這裡，送出後自動刪除。",
+    "needLogin": "登入後可以查看這個帳號的草稿。",
+    "deleteAll": "全部刪除",
+    "deleteAllConfirm": "刪除這個帳號的所有本機草稿？刪除後無法復原。",
+    "delete": "刪除",
+    "deleted": "草稿已刪除",
+    "copy": "複製內容",
+    "open": "前往",
+    "older": "較早的版本",
+    "kind": {
+      "threadReply": "回覆主題",
+      "floorReply": "回覆樓層",
+      "message": "私信",
+      "newThread": "發新帖",
+      "edit": "編輯"
+    },
+    "thread": "主題 ${tid}",
+    "forum": "版塊 ${fid}",
+    "member": "會員 ${uid}",
+    "post": "帖子 ${pid}",
+    "savedAt": "保存於 ${time}",
+    "offerMaybeSent": "可能已送出，請先確認（${time}）",
+    "maybeSent": "可能已送出，請先確認",
+    "restoreEditTitle": "恢復這份草稿？",
+    "restoreEditMessage": "草稿保存於 ${time}。恢復會取代現在載入的帖子內容，之後若在論壇上改過，送出時較新的內容會被蓋掉。"
+  },
+  "secCheck": {
+    "title": "請完成驗證",
+    "message": "論壇要求完成以下驗證才會接受這次發表。",
+    "captcha": "驗證碼",
+    "captchaHint": "輸入圖中的字元",
+    "refresh": "換一個",
+    "question": "問題",
+    "answer": "答案",
+    "loadFailed": "載入失敗，點擊重試",
+    "unsupported": "App 無法顯示這種驗證，請在瀏覽器中繼續。",
+    "wrongAnswer": "論壇沒有接受剛才的答案，請重新輸入。",
+    "invalidCaptcha": "驗證碼不正確，已換一張",
+    "invalidAnswer": "答案不正確",
+    "empty": "請填寫",
+    "confirm": "送出",
+    "openBrowser": "在瀏覽器中開啟",
+    "cancelled": "沒有送出：論壇要求填寫驗證碼或回答安全提問"
+  },
+  "appShortcuts": {
+    "checkinNotVerified": "登入狀態尚未確認，請稍後再簽到"
+  },
+  "keyboardShortcutsPage": {
+    "title": "鍵盤快捷鍵",
+    "groups": {
+      "global": "全域",
+      "thread": "帖子頁",
+      "list": "列表",
+      "editor": "編輯器"
+    },
+    "commands": {
+      "search": "搜尋",
+      "settings": "設定",
+      "back": "關閉對話框、返回",
+      "refresh": "重新整理",
+      "nextFloor": "下一樓",
+      "previousFloor": "上一樓",
+      "nextPage": "下一頁",
+      "previousPage": "上一頁",
+      "reply": "回覆",
+      "top": "到頂部",
+      "bottom": "到底部",
+      "copyLink": "複製帖子連結",
+      "nextItem": "下一項",
+      "previousItem": "上一項",
+      "openItem": "開啟選取的項目",
+      "send": "送出",
+      "bold": "粗體",
+      "italic": "斜體",
+      "underline": "底線"
     }
   }
 }

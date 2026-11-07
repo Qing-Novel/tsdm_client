@@ -77,7 +77,18 @@ enum SettingsKeys<T> implements Comparable<SettingsKeys<T>> {
   /// 0: [ThemeMode.system]
   /// 1: [ThemeMode.light]
   /// 2: [ThemeMode.dark]
+  ///
+  /// Set aside while [themeModeScheduled]; kept in 0 to 2 so a backup of this version still opens in an older one.
   themeMode<int>(name: 'ThemeMode', type: int, defaultValue: 0),
+
+  /// The clock decides the theme: dark from [darkScheduleStart] to [darkScheduleEnd], light outside.
+  themeModeScheduled<bool>(name: 'themeModeScheduled', type: bool, defaultValue: false),
+
+  /// Start of the dark hours, minutes after midnight (22:00).
+  darkScheduleStart<int>(name: 'darkScheduleStart', type: int, defaultValue: 1320),
+
+  /// End of the dark hours, minutes after midnight (07:00). Before the start it runs over midnight.
+  darkScheduleEnd<int>(name: 'darkScheduleEnd', type: int, defaultValue: 420),
 
   /// Locale
   ///
@@ -126,6 +137,18 @@ enum SettingsKeys<T> implements Comparable<SettingsKeys<T>> {
   threadCardHighlightAuthorName<bool>(name: 'threadCardHighlightAuthorName', type: bool, defaultValue: true),
   threadCardHighlightInfoRow<bool>(name: 'threadCardHighlightInfoRow', type: bool, defaultValue: true),
 
+  /// Show the excerpt of the first floor under the title of a thread in the lists (the forum's app API, plugin 3.1.0).
+  threadCardShowExcerpt<bool>(name: 'threadCardShowExcerpt', type: bool, defaultValue: true),
+
+  /// When the thread lists show a thumbnail of the first floor's images (the forum's app API, plugin 3.1.0): the
+  /// index of a [ThreadThumbnailMode], 0 always, 1 on Wi-Fi only (the default), 2 never.
+  threadCardThumbnailMode<int>(name: 'threadCardThumbnailMode', type: int, defaultValue: 1),
+
+  /// Let the thumbnails of the thread lists load the images of other sites (`[img]` of the first floor), not only the
+  /// forum's attachments. Off by default: the site of such an image learns of everyone who scrolls past the thread,
+  /// while the web page only loads it once the thread is opened.
+  threadCardExternalThumbnails<bool>(name: 'threadCardExternalThumbnails', type: bool, defaultValue: false),
+
   /// Use network proxy config below or not.
   netClientUseProxy<bool>(name: 'netClientUseProxy', type: bool, defaultValue: false),
 
@@ -164,6 +187,39 @@ enum SettingsKeys<T> implements Comparable<SettingsKeys<T>> {
   /// the app is in the background or was cleared (#80).
   enableBackgroundMessageService<bool>(name: 'enableBackgroundMessageService', type: bool, defaultValue: false),
 
+  /// Let the auto sync poll every account saved on this device, not only the current one: the in-app auto sync on
+  /// Android and Windows (also in the tray) and the Android background message service. Each account with its own
+  /// cookie and poll, its notifications naming the account. Off: the current account only, as before.
+  backgroundSyncAllAccounts<bool>(name: 'backgroundSyncAllAccounts', type: bool, defaultValue: false),
+
+  /// Keep the content out of the system notifications of the auto sync: only the counts, as before the notification
+  /// center showed who did what, and no expanded list of items.
+  notificationHideContent<bool>(name: 'notificationHideContent', type: bool, defaultValue: false),
+
+  /// Announce replies (and quotes) of the auto sync in system notifications.
+  notifyReply<bool>(name: 'notifyReply', type: bool, defaultValue: true),
+
+  /// Announce @ mentions of the auto sync in system notifications.
+  notifyMention<bool>(name: 'notifyMention', type: bool, defaultValue: true),
+
+  /// Announce ratings and comments of the auto sync in system notifications.
+  notifyRate<bool>(name: 'notifyRate', type: bool, defaultValue: true),
+
+  /// Announce private messages of the auto sync in system notifications.
+  notifyPersonalMessage<bool>(name: 'notifyPersonalMessage', type: bool, defaultValue: true),
+
+  /// Announce system notices, broadcast messages and every other notice kind of the auto sync in system notifications.
+  notifySystem<bool>(name: 'notifySystem', type: bool, defaultValue: true),
+
+  /// Do not post system notifications between [notifyQuietStart] and [notifyQuietEnd]; what arrives meanwhile is not announced afterwards.
+  notifyQuietHours<bool>(name: 'notifyQuietHours', type: bool, defaultValue: false),
+
+  /// Start of the quiet hours, minutes after midnight (default 23:00).
+  notifyQuietStart<int>(name: 'notifyQuietStart', type: int, defaultValue: 1380),
+
+  /// End of the quiet hours, minutes after midnight (default 08:00); may be before the start (past midnight).
+  notifyQuietEnd<int>(name: 'notifyQuietEnd', type: int, defaultValue: 480),
+
   /// Enable operations for debugging.
   enableDebugOperations<bool>(name: 'enableDebugOperations', type: bool, defaultValue: false),
 
@@ -187,10 +243,12 @@ enum SettingsKeys<T> implements Comparable<SettingsKeys<T>> {
   /// Detect system proxy settings when app startup and use the detected value.
   useDetectedProxyWhenStartup<bool>(name: 'useDetectedProxyWhenStartup', type: bool, defaultValue: false),
 
-  /// Auto clear outdated image cache.
+  /// Auto clear the image cache: the images not shown for [autoClearImageCacheDuration] and the least recently shown
+  /// ones beyond the size of the cache (`ImageCacheLimits`), the pictures of the offline thread pages kept.
   ///
-  /// Default is disabled, to match the old behavior.
-  enableAutoClearImageCache<bool>(name: 'enableAutoClearImageCache', type: bool, defaultValue: false),
+  /// On by default: the clean up runs in the background long after the first frame and never holds the homepage
+  /// (`InitCubit.scheduleImageCacheTrim`). A value saved before (on or off) stays what it was.
+  enableAutoClearImageCache<bool>(name: 'enableAutoClearImageCache', type: bool, defaultValue: true),
 
   /// Duration of an image cache considered as outdated for auto clear, in seconds.
   ///
@@ -199,9 +257,35 @@ enum SettingsKeys<T> implements Comparable<SettingsKeys<T>> {
   /// Default is 7 days = 60 * 60 * 24 * 7.
   autoClearImageCacheDuration<int>(name: 'autoClearImageCacheDuration', type: int, defaultValue: 60 * 60 * 24 * 7),
 
-  /// Collapse app bar when scroll in pages we want to do it, for example forum page and thread page where app bar
-  /// holds more spaces and user shall have more space to focus on contents in UI.
+  /// Hide the app bar and the breadcrumbs of the thread page while scrolling down the floors, show them again when
+  /// scrolling up: more room for the floors.
   collapseAppBarWhenScroll<bool>(name: 'collapseAppBarWhenScroll', type: bool, defaultValue: true),
+
+  /// Where a thread read past its first screen opens from a list: its start, its start with a "continue" banner (the
+  /// default), or where the reading stopped. The index of a `ThreadOpenPosition`.
+  threadOpenPosition<int>(name: 'threadOpenPosition', type: int, defaultValue: 1),
+
+  /// Swipe the floors of the thread page sideways to go to the next page (to the left) or the page before (to the
+  /// right).
+  threadSwipePaging<bool>(name: 'threadSwipePaging', type: bool, defaultValue: false),
+
+  /// On windows at least 840dp wide (Material's expanded class), a list page keeps its threads on the left and opens
+  /// the thread tapped on the right, instead of leaving the list. Off: one page at a time at any width.
+  twoPaneLayout<bool>(name: 'twoPaneLayout', type: bool, defaultValue: true),
+
+  /// Keep the reading progress, the quick phrases and the block list of the account on the forum (plugin 3.4.0) and
+  /// take them back on every device the account logs in on; the fast rate templates, the reading settings and the
+  /// local drafts too, each on its own switch below. Off: nothing is read or written there.
+  crossDeviceSync<bool>(name: 'crossDeviceSync', type: bool, defaultValue: true),
+
+  /// With [crossDeviceSync], keep the fast rate templates the same on every device too.
+  crossDeviceSyncRateTemplates<bool>(name: 'crossDeviceSyncRateTemplates', type: bool, defaultValue: true),
+
+  /// With [crossDeviceSync], keep the reading and display settings the same on every device too (`syncedSettings`).
+  crossDeviceSyncSettings<bool>(name: 'crossDeviceSyncSettings', type: bool, defaultValue: true),
+
+  /// With [crossDeviceSync], keep the local drafts of the account on every device too.
+  crossDeviceSyncDrafts<bool>(name: 'crossDeviceSyncDrafts', type: bool, defaultValue: true),
 
   /// Interaction mode on thread floors.
   threadFloorInteractionMode<ThreadFloorInteractionMode>(
@@ -226,6 +310,71 @@ enum SettingsKeys<T> implements Comparable<SettingsKeys<T>> {
     type: double,
     defaultValue: 1,
   ),
+
+  /// Line height of the post content in thread page, a multiple of the font size (1.4 to 2.0).
+  ///
+  /// Posts written with few line breaks read as a wall of text on a phone at the line height of the body text (1.43).
+  threadContentLineHeight<double>(
+    name: 'threadContentLineHeight',
+    type: double,
+    defaultValue: PostTypography.defaultLineHeight,
+  ),
+
+  /// Space between the paragraphs of the post content in thread page, in logical pixels (0 to 16).
+  threadContentParagraphSpacing<double>(
+    name: 'threadContentParagraphSpacing',
+    type: double,
+    defaultValue: PostTypography.defaultParagraphSpacing,
+  ),
+
+  /// Cut long paragraphs of the post content after the end of a sentence (layout only, the text is not changed).
+  threadContentSplitLongParagraphs<bool>(
+    name: 'threadContentSplitLongParagraphs',
+    type: bool,
+    defaultValue: false,
+  ),
+
+  /// Ask Android for the highest refresh rate the screen offers at the current resolution.
+  ///
+  /// Some vendor systems keep apps that do not ask at 60Hz on 90/120Hz screens (GitHub #182). Android only.
+  highRefreshRate<bool>(name: 'highRefreshRate', type: bool, defaultValue: true),
+
+  /// Save the thread pages the user loads to read them again without network.
+  ///
+  /// Off by default: nothing is stored and the thread page behaves as before. Turning it off deletes what was saved.
+  offlineThreads<bool>(name: 'offlineThreads', type: bool, defaultValue: false),
+
+  /// How many threads [offlineThreads] keeps, the least recently used ones going first; one thread of one account
+  /// counts once whatever number of its pages are saved.
+  offlineThreadsLimit<int>(name: 'offlineThreadsLimit', type: int, defaultValue: 50),
+
+  /// Render a floor from its bbcode with the app's own renderer instead of the html the forum printed (experimental).
+  ///
+  /// Only floors whose bbcode the forum's app API gives (plugin 2.7.0, the account sees the whole content) and whose
+  /// tags the app renders faithfully; every other floor keeps the forum's html. Off by default.
+  enableAppPostRenderer<bool>(name: 'enableAppPostRenderer', type: bool, defaultValue: false),
+
+  /// Title of the pinned thread group (the tabs of the forum homepage block: 最新活动, 见习天使, ..., 发帖排行) last
+  /// selected in the one card of the phone homepage.
+  ///
+  /// Kept by title, the groups have no other stable key; empty or a title the homepage no longer has selects the first
+  /// group. One value for every account.
+  homepagePinnedGroup<String>(name: 'homepagePinnedGroup', type: String, defaultValue: ''),
+
+  /// The card explaining the notification permission was shown once (after a login or on the first visit of the
+  /// notice page): those never ask again, only turning the auto sync or the background service on in the settings
+  /// does.
+  notificationPermissionPrompted<bool>(name: 'notificationPermissionPrompted', type: bool, defaultValue: false),
+
+  /// When the pictures of the posts load by themselves, the index of a `PostImageAutoLoad`: always (the default), only
+  /// on a network that is not metered, or never (each loads when tapped).
+  postImageAutoLoad<int>(name: 'postImageAutoLoad', type: int, defaultValue: 0),
+
+  /// The quick phrases of the editors' toolbar button (a JSON list of strings, the order the user arranged), see
+  /// `decodeQuickPhrases`.
+  ///
+  /// One value for every account; it lives in the settings table, so a backup carries it.
+  editorQuickPhrases<String>(name: 'editorQuickPhrases', type: String, defaultValue: ''),
   ;
 
   const SettingsKeys({required this.name, required this.type, required this.defaultValue});

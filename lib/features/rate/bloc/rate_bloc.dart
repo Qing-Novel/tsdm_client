@@ -94,10 +94,15 @@ final class RateBloc extends Bloc<RateEvent, RateState> with LoggerMixin {
   }
 
   Future<void> _onRateRateRequested(RateRateRequested event, RateEmitter emit) async {
+    // One rate at a time: a second tap while one is out would rate the post again (the forum takes it).
+    if (state.status == RateStatus.rating) {
+      debug('a rate is being sent, dropped another one');
+      return;
+    }
     final rate = ++_rateCount;
     emit(state.copyWith(status: RateStatus.rating, failedReason: null, justRated: false));
 
-    switch (await _rateRepository.rate(event.rateInfo).run()) {
+    switch (await _rateRepository.rate(event.rateInfo, target: state.info?.submitUrl).run()) {
       case Right():
         // The page stays with the form: the floor may get another rate right away. What this rate took off today's
         // scores shows at once, the forum's own window loads behind it (and the next page of this thread starts
@@ -115,7 +120,8 @@ final class RateBloc extends Bloc<RateEvent, RateState> with LoggerMixin {
           state.copyWith(
             status: RateStatus.rateFailed,
             failedReason: switch (value) {
-              RateFailedException(:final reason) => reason,
+              // A refusal without a reason (the app API's result without a message) shows the page's own text.
+              RateFailedException(:final reason) when reason.isNotEmpty => reason,
               _ => null,
             },
           ),

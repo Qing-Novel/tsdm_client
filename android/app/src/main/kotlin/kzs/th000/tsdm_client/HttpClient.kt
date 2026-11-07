@@ -5,14 +5,21 @@ import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.BufferedSink
+import java.io.File
+import java.net.ConnectException
+import java.net.NoRouteToHostException
 import java.net.ProxySelector
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 object HttpClient {
@@ -58,7 +65,21 @@ object HttpClient {
         return wantsImage || headers.keys.any { it.equals("X-Pm-Formhash", ignoreCase = true) }
     }
 
-    suspend fun get(url: String, headers: HashMap<String, String>): Response {
+    // Error code of a failed request for the Dart side: "KT_HTTP_UNREACHABLE" when the host was not reached at all (no
+    // network, the name not resolved, the connection refused or timed out while connecting), so the app can read a
+    // saved copy of a thread page instead; "KT_HTTP_ERROR" for every other failure, a socket that fails after the
+    // connect included (the forum was reached).
+    fun errorCode(e: Exception): String {
+        val unreachable = e is UnknownHostException ||
+            e is ConnectException ||
+            e is NoRouteToHostException ||
+            // Android's socket says so when the connect timed out; a read timeout is "timeout" or "Read timed out".
+            (e is SocketTimeoutException && e.message?.startsWith("failed to connect") == true)
+        return if (unreachable) "KT_HTTP_UNREACHABLE" else "KT_HTTP_ERROR"
+    }
+
+    // A GET that writes (the forum's AJAX menus, a debate vote) is never replayed either: singleAttempt.
+    suspend fun get(url: String, headers: HashMap<String, String>, singleAttempt: Boolean = false): Response {
         val request = Request.Builder()
             .url(url)
             .headers(Headers.headersOf(*headers.toList().flatMap { listOf(it.first, it.second) }.toTypedArray()))
@@ -67,7 +88,7 @@ object HttpClient {
 
         return withContext(Dispatchers.IO) {
             try {
-                pick(needsMoreTime(url, headers), false).newCall(request).execute()
+                pick(needsMoreTime(url, headers), singleAttempt).newCall(request).execute()
             } catch (e: Exception) {
                 throw e
             }
@@ -109,27 +130,52 @@ object HttpClient {
         }
     }
 
+    /**
+     * A value of [body] is a string part, or a map `{"path", "filename", "contentType"}` naming a file to send as the
+     * part (the file of a shared image uploaded as an attachment); any other value is sent as its string form.
+     *
+     * [singleAttempt] as in [postForm]: an upload the server may already have taken is never sent twice.
+     */
     suspend fun postMultipart(
         url: String,
         headers: Map<String, String> = emptyMap(),
-        body: Map<String, String> = emptyMap(),
+        body: Map<String, Any?> = emptyMap(),
+        singleAttempt: Boolean = false,
     ): Response {
         val multipartBody = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .apply {
-                body.forEach { (key, value) -> addFormDataPart(key, value) }
+                body.forEach { (key, value) ->
+                    when (value) {
+                        is Map<*, *> -> {
+                            val path = value["path"] as? String ?: throw IllegalArgumentException("file part without path")
+                            val file = File(path)
+                            val filename = value["filename"] as? String ?: file.name
+                            val type = (value["contentType"] as? String)?.toMediaTypeOrNull()
+                            addFormDataPart(key, filename, file.asRequestBody(type))
+                        }
+                        null -> addFormDataPart(key, "")
+                        else -> addFormDataPart(key, value.toString())
+                    }
+                }
             }
             .build()
+        val requestBody = if (singleAttempt) object : RequestBody() {
+            override fun contentType() = multipartBody.contentType()
+            override fun contentLength() = multipartBody.contentLength()
+            override fun isOneShot() = true
+            override fun writeTo(sink: BufferedSink) = multipartBody.writeTo(sink)
+        } else multipartBody
 
         val request = Request.Builder()
             .url(url)
             .headers(Headers.headersOf(*headers.toList().flatMap { listOf(it.first, it.second) }.toTypedArray()))
-            .post(multipartBody)
+            .post(requestBody)
             .build()
 
         return withContext(Dispatchers.IO) {
             try {
-                client.newCall(request).execute()
+                (if (singleAttempt) singleAttemptClient else client).newCall(request).execute()
             } catch (e: Exception) {
                 throw e
             }

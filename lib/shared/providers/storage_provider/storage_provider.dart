@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
 
@@ -6,16 +7,18 @@ import 'package:drift/drift.dart';
 // Only for unwrapping the sqlite error that the database isolate sends back, see `isDatabaseBusy`.
 // ignore: experimental_member_use
 import 'package:drift/remote.dart' show DriftRemoteException;
-import 'package:flutter/foundation.dart' show setEquals;
+import 'package:flutter/foundation.dart' show setEquals, visibleForTesting;
 import 'package:fpdart/fpdart.dart';
 import 'package:sqlite3/common.dart' show SqliteException;
 import 'package:tsdm_client/constants/constants.dart';
 import 'package:tsdm_client/exceptions/exceptions.dart';
 import 'package:tsdm_client/extensions/string.dart';
+import 'package:tsdm_client/features/local_draft/repository/local_draft_store.dart';
 import 'package:tsdm_client/shared/models/models.dart';
 import 'package:tsdm_client/shared/models/notification_type.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/models/database/dao/dao.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/models/database/database.dart';
+import 'package:tsdm_client/shared/providers/storage_provider/saved_answer_store.dart';
 import 'package:tsdm_client/utils/logger.dart';
 
 /// A time to fetch notice or save notice.
@@ -46,6 +49,27 @@ final class NotificationGroup {
 /// last learned that its forum session is dead (null while nothing is known, see [StorageProvider.markSessionExpired]).
 typedef StoredAccount = ({UserLoginInfo user, DateTime? lastCheckin, DateTime? sessionExpiredAt});
 
+final _authCookieRe = RegExp('${cookiePrefix}_auth=([^;"\\\\\\s]*)');
+
+/// The forum session [cookie] (a cookie jar map, as stored per account) holds: the value of its auth cookie
+/// (`<prefix>_auth`), every distinct one when several hosts hold one; null when it has none.
+///
+/// A login with the password (also of the same account) stores another one; the forum renewing the other cookies
+/// of the session (`lastact`, `sid`) leaves it as it is. A cookie provider loaded from a stored row writes back into
+/// it, and records its session expired, only while the row still holds the session the provider holds
+/// ([StorageProvider.saveCookieOfSession], [StorageProvider.markSessionExpiredIfHeld]): a request of the previous
+/// session answered after the new login must not bring that session back.
+String? cookieSessionOf(Map<String, dynamic>? cookie) {
+  if (cookie == null) {
+    return null;
+  }
+  final tokens = <String>{
+    for (final value in cookie.values)
+      for (final m in _authCookieRe.allMatches('$value')) m[1]!,
+  };
+  return tokens.isEmpty ? null : (tokens.toList()..sort()).join(',');
+}
+
 /// Load all cookie info from database without any dependency except [db].
 ///
 /// Only use this function to preload cookie before initializing
@@ -66,20 +90,29 @@ Future<Map<UserLoginInfo, Cookie>> preloadCookie(AppDatabase db) async {
   return Map.fromEntries(mappedCookie);
 }
 
-/// Load all image cache info from database without any dependency except [db].
-///
-/// Only use this function to preload cookie before initializing
-/// [StorageProvider].
-Future<Map<String, ImageEntity>> preloadImageCache(AppDatabase db) async {
-  final allImageCache = await ImageDao(db).selectAll();
-  final mappedImageCache = allImageCache.map((e) => MapEntry(e.url, e));
-  return Map.fromEntries(mappedImageCache);
-}
+/// One row of the image cache as its clean up reads it (`ImageCacheProvider.trimCache`).
+typedef ImageCacheRowRef = ({String url, String fileName, DateTime lastUsedTime});
 
 /// [StorageProvider] should be used by other providers.
 class StorageProvider with LoggerMixin {
   /// Constructor.
-  StorageProvider(this._db, this._cookieCache, this._imageCache);
+  ///
+  /// [imageCache] seeds the image cache rows kept in memory (tests); the table itself is never read whole, see
+  /// [getImageCache]. The times images were shown are written when [markImageCacheUsed] finds them waiting long
+  /// enough, or by [flushImageCacheUsedTimes].
+  StorageProvider(this._db, this._cookieCache, [Map<String, ImageEntity>? imageCache])
+    : _imageUsedTimeFlushDelay = null {
+    imageCache?.values.forEach(_rememberImage);
+  }
+
+  /// The app's provider: like [StorageProvider.new], and the times images were shown are also written
+  /// [usedTimeFlushDelay] after the first one that waits ([imageUsedTimeFlushInterval]), when no other image is shown
+  /// meanwhile.
+  StorageProvider.forApp(
+    this._db,
+    this._cookieCache, {
+    @visibleForTesting Duration usedTimeFlushDelay = imageUsedTimeFlushInterval,
+  }) : _imageUsedTimeFlushDelay = usedTimeFlushDelay;
 
   /// Reload the cookie cache from the database.
   ///
@@ -102,12 +135,30 @@ class StorageProvider with LoggerMixin {
   /// MUST update during cookie setter calls.
   final Map<UserLoginInfo, Cookie> _cookieCache;
 
-  /// All image cache cached in memory.
-  ///
-  /// Access this field to avoid disk IO and make it synchronous.
+  /// Image cache rows read or written lately, the least recently used first: at most [imageCacheMemoryCapacity].
   ///
   /// MUST update during image cache setter calls.
-  Map<String, ImageEntity> _imageCache;
+  final _imageCache = <String, ImageEntity>{};
+
+  /// Bumped by every write of the image cache table through this provider: a row read from the table while one ran
+  /// may be stale and stays out of [_imageCache].
+  int _imageWrites = 0;
+
+  /// The times images were shown that are not written yet, by url ([markImageCacheUsed]).
+  final _pendingImageUsedTimes = <String, DateTime>{};
+
+  /// When the waiting times of [_pendingImageUsedTimes] were last handed to the table.
+  DateTime _imageUsedTimesFlushedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Writes of [_pendingImageUsedTimes], one after another.
+  Future<void> _imageUsedTimeWrites = Future<void>.value();
+
+  final Duration? _imageUsedTimeFlushDelay;
+  Timer? _imageUsedTimeFlushTimer;
+
+  /// Urls of the image cache shown, cached or removed since [beginImageCacheTouchLog], null when no log runs: the clean
+  /// up of the cache never deletes one of them.
+  Set<String>? _imageTouchLog;
 
   /// Get the stream of all users in storage.
   Stream<List<UserLoginInfo>> allUsersStream() {
@@ -165,11 +216,45 @@ class StorageProvider with LoggerMixin {
     return cookies.map((e) => (UserLoginInfo(username: e.username, uid: e.uid), e.lastCheckin)).toList();
   }
 
-  /// Delete the user login info for the user specified by [uid], with the local marks of the account.
+  /// Delete the user login info for the user specified by [uid], with the local marks and the offline thread pages of
+  /// the account.
   Future<int> deleteUserLoginInfo(int uid) async {
+    _wroteCookieOf(uid);
+    // As every removal: a client of the account must not find its cookie in the cache any more.
+    _cookieCache.removeWhere((e, _) => e.uid == uid);
     final deleted = await CookieDao(_db).deleteCookieByUid(uid);
-    await RepliedThreadDao(_db).deleteByUid(uid);
+    await _deleteAccountMarks(uid);
     return deleted;
+  }
+
+  /// Settings name of the time account [uid] was last polled for notifications (`NotificationPollSlot`).
+  static String notificationPolledAtKey(int uid) => 'notificationPolledAt.$uid';
+
+  /// Settings name of the time account [uid] was last polled by the sync of all accounts the user asked for
+  /// (`NotificationPollSlot.takeForManualSync`).
+  static String notificationPolledManuallyAtKey(int uid) => 'notificationPolledManuallyAt.$uid';
+
+  /// How many times the cookie of each uid was saved or removed through this provider: a read of its row that one of
+  /// them overtook does not put what it read into the cache ([fetchCookieOfUid]).
+  final _cookieWrites = <int, int>{};
+
+  void _wroteCookieOf(int uid) {
+    _cookieWrites[uid] = (_cookieWrites[uid] ?? 0) + 1;
+  }
+
+  /// Delete the local marks of account [uid] removed from this device: the threads it replied to, its offline thread
+  /// pages, the times it was polled for notifications, the pages saved for the next start ([SavedAnswerStore]) and
+  /// the drafts its editors kept ([LocalDraftStore]).
+  Future<void> _deleteAccountMarks(int uid) async {
+    _wroteCookieOf(uid);
+    // The pages saved to show at the next start (the homepage, the guide) were served to the account.
+    SavedAnswerStore.app?.forget(uid);
+    LocalDraftStore.app?.forget(uid);
+    await RepliedThreadDao(_db).deleteByUid(uid);
+    await OfflineThreadDao(_db).deleteByUid(uid);
+    final settings = SettingsDao(_db);
+    await settings.deleteByName(notificationPolledAtKey(uid));
+    await settings.deleteByName(notificationPolledManuallyAtKey(uid));
   }
 
   /*             cookie             */
@@ -179,6 +264,31 @@ class StorageProvider with LoggerMixin {
   /// The cache only follows this provider's own writes. Another isolate on the same database (the app while the
   /// Android background message service fetches, #80) removes an account without this provider noticing.
   Future<bool> hasCookieOfUid(int uid) async => await CookieDao(_db).selectCookieByUid(uid) != null;
+
+  /// The [Cookie] of [uid] read from the database, not the cache; null when the account is not stored.
+  ///
+  /// For a caller that must see what another isolate on the same database wrote (the Android background message
+  /// service renews the cookies of the accounts it polls) without reloading the whole cache of this provider. The
+  /// cache entry of [uid] is brought in line with the row (dropped when the row is gone): the account switch and the
+  /// cookie provider's check for a removed account ([getCookieByUidSync]) see what was read.
+  ///
+  /// The cookie saved or removed through this provider while the row was read (a login with the password stored a
+  /// new session of the account, the account was removed): what the cache holds since, newer than the row read, which
+  /// stays out of the cache; null when removed.
+  Future<Cookie?> fetchCookieOfUid(int uid) async {
+    final writes = _cookieWrites[uid] ?? 0;
+    final row = await CookieDao(_db).selectCookieByUid(uid);
+    if ((_cookieWrites[uid] ?? 0) != writes) {
+      return getCookieByUidSync(uid);
+    }
+    _cookieCache.removeWhere((e, _) => e.uid == uid);
+    if (row == null) {
+      return null;
+    }
+    final cookie = jsonDecode(row.cookie) as Map<String, dynamic>;
+    _cookieCache[UserLoginInfo(username: row.username, uid: row.uid)] = cookie;
+    return cookie;
+  }
 
   /// Get [Cookie] with [uid] from cookie cached saved in memory.
   ///
@@ -218,7 +328,12 @@ class StorageProvider with LoggerMixin {
   ///
   /// Required full user info and save by [uid] so that we handled some extreme
   /// situation when username or email changed.
+  ///
+  /// Stored as it is, whatever the row holds: for a session the app takes as the account's own (a login, the switch's
+  /// check, the session a page was served to). A cookie provider writing back what the forum renewed in the session it
+  /// loaded uses [saveCookieOfSession].
   Future<void> saveCookie({required String username, required int uid, required Cookie cookie}) async {
+    _wroteCookieOf(uid);
     final allCookie = getCookieByUidSync(uid) ?? <String, dynamic>{};
 
     // Combine two map together, do not directly use [cookie].
@@ -244,14 +359,53 @@ class StorageProvider with LoggerMixin {
     );
   }
 
+  /// [saveCookie] for a cookie provider that loaded the row of [uid] and writes back what the forum renewed: only while
+  /// the row still holds [session], the session the provider holds ([cookieSessionOf]). False when it does not: another
+  /// session of the account was stored meanwhile (a login with the password, of the same account too) or the account
+  /// was removed, and a request of the previous session answered late must not bring it back.
+  ///
+  /// Checked in the cache (this isolate's writes) and in the database, which the Android background message service
+  /// writes from its own isolate ([exclusively]: nothing is written between the check and the write).
+  Future<bool> saveCookieOfSession({
+    required String username,
+    required int uid,
+    required Cookie cookie,
+    required String? session,
+  }) async {
+    bool held(Cookie? stored) => stored != null && cookieSessionOf(stored) == session;
+    if (!held(getCookieByUidSync(uid))) {
+      return false;
+    }
+    return exclusively(() async {
+      final row = await CookieDao(_db).selectCookieByUid(uid);
+      if (row == null || cookieSessionOf(jsonDecode(row.cookie) as Map<String, dynamic>) != session) {
+        return false;
+      }
+      // Read again: this isolate may have stored another session while the row was read.
+      final allCookie = getCookieByUidSync(uid);
+      if (!held(allCookie)) {
+        return false;
+      }
+      _wroteCookieOf(uid);
+      allCookie!.addAll(Map.castFrom<String, dynamic, String, String>(cookie));
+      _cookieCache[UserLoginInfo(username: username, uid: uid)] = allCookie;
+      await CookieDao(_db).upsertCookie(
+        CookieCompanion(username: Value(username), uid: Value(uid), cookie: Value(jsonEncode(allCookie))),
+      );
+      return true;
+    });
+  }
+
   /// Delete cookie for [uid].
   ///
-  /// The local marks of the account ([recordRepliedThread]) go with it.
+  /// The local marks ([recordRepliedThread]) and the offline thread pages ([saveOfflineThreadPage]) of the account go
+  /// with it.
   Future<bool> deleteCookieByUid(int uid) async {
+    _wroteCookieOf(uid);
     // Update cookie cache.
     _cookieCache.removeWhere((e, _) => e.uid == uid);
     final affectedRows = await CookieDao(_db).deleteCookieByUid(uid);
-    await RepliedThreadDao(_db).deleteByUid(uid);
+    await _deleteAccountMarks(uid);
     return affectedRows != 0;
   }
 
@@ -302,14 +456,14 @@ class StorageProvider with LoggerMixin {
     if (targets.isEmpty) {
       return 0;
     }
+    targets.forEach(_wroteCookieOf);
     _cookieCache.removeWhere((e, _) => targets.contains(e.uid));
     final dao = CookieDao(_db);
-    final marks = RepliedThreadDao(_db);
     return _db.transaction(() async {
       var deleted = 0;
       for (final uid in targets) {
         deleted += await dao.deleteCookieByUid(uid);
-        await marks.deleteByUid(uid);
+        await _deleteAccountMarks(uid);
       }
       return deleted;
     });
@@ -324,12 +478,19 @@ class StorageProvider with LoggerMixin {
     // final email = userInfo.email;
     final int affectedRows;
     if (uid != null) {
+      _wroteCookieOf(uid);
       _cookieCache.removeWhere((e, _) => e.uid == uid);
       affectedRows = await CookieDao(_db).deleteCookieByUid(uid);
-      await RepliedThreadDao(_db).deleteByUid(uid);
+      await _deleteAccountMarks(uid);
     } else if (username != null) {
+      // Every row of that name (the name is no key: two rows may carry it), read before anything is removed.
+      final uids = (await CookieDao(_db).selectAll()).where((e) => e.username == username).map((e) => e.uid).toList()
+        ..forEach(_wroteCookieOf);
       _cookieCache.removeWhere((e, _) => e.username == username);
       affectedRows = await CookieDao(_db).deleteCookieByUsername(username);
+      for (final uid in uids) {
+        await _deleteAccountMarks(uid);
+      }
       // } else if (email != null) {
       //   _cookieCache.removeWhere((e, _) => e.email == email);
       //   affectedRows = await CookieDao(_db).deleteCookieByEmail(email);
@@ -342,8 +503,57 @@ class StorageProvider with LoggerMixin {
 
   /*            image cache           */
 
-  /// Get the image cache for image from [url].
-  ImageEntity? getImageCacheSync(String url) => _imageCache.entries.firstWhereOrNull((e) => e.key == url)?.value;
+  /// How many image cache rows are kept in memory at most.
+  static const imageCacheMemoryCapacity = 1000;
+
+  /// How long the times images were shown wait in memory at most before [markImageCacheUsed] writes them.
+  static const imageUsedTimeFlushInterval = Duration(seconds: 5);
+
+  /// How many times of shown images wait in memory at most before [markImageCacheUsed] writes them.
+  static const imageUsedTimeFlushBatch = 200;
+
+  /// How many image cache rows are kept in memory now.
+  @visibleForTesting
+  int get imageCacheMemoryCount => _imageCache.length;
+
+  void _rememberImage(ImageEntity entity) {
+    _imageCache
+      ..remove(entity.url)
+      ..[entity.url] = entity;
+    while (_imageCache.length > imageCacheMemoryCapacity) {
+      _imageCache.remove(_imageCache.keys.first);
+    }
+  }
+
+  void _forgetImage(String url) {
+    _imageCache.remove(url);
+    _pendingImageUsedTimes.remove(url);
+  }
+
+  /// The image cache row of [url], null when the image is not cached: from memory when it was read or written lately,
+  /// otherwise looked up by its key in the table.
+  ///
+  /// The table is never read whole: it holds every image ever cached (a hundred thousand rows are no exception), and
+  /// reading it before the first frame slowed the start down (0.46 to 0.90 s with 150 000 rows).
+  Future<ImageEntity?> getImageCache(String url) async {
+    final cached = _imageCache.remove(url);
+    if (cached != null) {
+      _imageCache[url] = cached;
+      return cached;
+    }
+    final writes = _imageWrites;
+    final row = await ImageDao(_db).selectImageByUrl(url);
+    if (row == null) {
+      return null;
+    }
+    final shown = _pendingImageUsedTimes[url];
+    final entity = shown != null && shown.isAfter(row.lastUsedTime) ? row.copyWith(lastUsedTime: shown) : row;
+    // A write of the table while the row was read: what was read may be stale, it stays out of memory.
+    if (writes == _imageWrites) {
+      _rememberImage(entity);
+    }
+    return entity;
+  }
 
   /// Get user avatar cache info on [username].
   Future<UserAvatarEntity?> getUserAvatarEntityCache({required String username, required String? imageUrl}) async =>
@@ -357,11 +567,17 @@ class StorageProvider with LoggerMixin {
     DateTime? lastUsedTime,
   }) async {
     final now = DateTime.now();
-    _imageCache[url] = ImageEntity(
-      url: url,
-      fileName: fileName,
-      lastCachedTime: lastCacheTime ?? now,
-      lastUsedTime: lastUsedTime ?? now,
+    _imageWrites++;
+    _imageTouchLog?.add(url);
+    // Written with the row below.
+    _pendingImageUsedTimes.remove(url);
+    _rememberImage(
+      ImageEntity(
+        url: url,
+        fileName: fileName,
+        lastCachedTime: lastCacheTime ?? now,
+        lastUsedTime: lastUsedTime ?? now,
+      ),
     );
     await ImageDao(_db).upsertImageCache(
       ImageCompanion(
@@ -373,29 +589,104 @@ class StorageProvider with LoggerMixin {
     );
   }
 
-  /// Insert or update cache info, only update last used time.
-  Future<void> updateImageCacheUsedTime(String url) async {
+  /// Record that the cached image of [url] is shown now.
+  ///
+  /// The row in memory is updated at once; the table gets the time with the next batch: when this finds the waiting
+  /// times older than [imageUsedTimeFlushInterval] or [imageUsedTimeFlushBatch] of them, after the flush delay of the
+  /// app's provider, or when the app goes to the background ([flushImageCacheUsedTimes]). Writing the time of every
+  /// image shown at once took a read and a write of the table for each one.
+  void markImageCacheUsed(String url) {
     final now = DateTime.now();
-    if (_imageCache.containsKey(url)) {
-      _imageCache[url] = _imageCache[url]!.copyWith(lastUsedTime: now);
+    final cached = _imageCache.remove(url);
+    if (cached != null) {
+      _imageCache[url] = cached.copyWith(lastUsedTime: now);
     }
-    await ImageDao(_db).updateImageCache(url: url, lastUsedTime: now);
+    _imageTouchLog?.add(url);
+    _pendingImageUsedTimes[url] = now;
+    if (_pendingImageUsedTimes.length >= imageUsedTimeFlushBatch ||
+        now.difference(_imageUsedTimesFlushedAt) >= imageUsedTimeFlushInterval) {
+      unawaited(flushImageCacheUsedTimes());
+    } else if (_imageUsedTimeFlushDelay != null) {
+      _imageUsedTimeFlushTimer ??= Timer(_imageUsedTimeFlushDelay, () {
+        _imageUsedTimeFlushTimer = null;
+        unawaited(flushImageCacheUsedTimes());
+      });
+    }
+  }
+
+  /// Write the times of the shown images still waiting in memory ([markImageCacheUsed]); completes when every write
+  /// handed over so far is done. A failed write is logged, the times are lost (the images only look older).
+  Future<void> flushImageCacheUsedTimes() {
+    _imageUsedTimeFlushTimer?.cancel();
+    _imageUsedTimeFlushTimer = null;
+    if (_pendingImageUsedTimes.isNotEmpty) {
+      final batch = Map.of(_pendingImageUsedTimes);
+      _pendingImageUsedTimes.clear();
+      _imageUsedTimesFlushedAt = DateTime.now();
+      _imageUsedTimeWrites = _imageUsedTimeWrites.then((_) async {
+        try {
+          await ImageDao(_db).updateLastUsedTimes(batch);
+        } on Object catch (e, st) {
+          error('failed to write the used times of ${batch.length} cached images: $e');
+          handleRaw(e, st);
+        }
+      });
+    }
+    return _imageUsedTimeWrites;
   }
 
   /// Clear all image cache in database.
   Future<void> clearImageCache() async {
+    _imageWrites++;
     _imageCache.clear();
+    _pendingImageUsedTimes.clear();
     await ImageDao(_db).deleteAll();
   }
 
-  /// Clear all image cache have a older not-used-time then [dateTime].
-  ///
-  /// Return all deleted image cache entity.
-  Future<List<ImageEntity>> clearImageCacheOutdated(DateTime dateTime) async {
-    final deletedCache = await ImageDao(_db).deleteByLastUsedDuration(dateTime);
-    _imageCache = await preloadImageCache(_db);
-    return deletedCache;
+  /// Start recording the urls of the image cache shown, cached again or removed, for its clean up: a row that one of
+  /// them touched after the clean up read the table is never deleted ([deleteImageCacheRows]).
+  void beginImageCacheTouchLog() => _imageTouchLog = <String>{};
+
+  /// Stop the record started by [beginImageCacheTouchLog].
+  void endImageCacheTouchLog() => _imageTouchLog = null;
+
+  /// The urls recorded since [beginImageCacheTouchLog] (none when no record runs).
+  Set<String> get touchedImageUrls => _imageTouchLog ?? const {};
+
+  /// Number of rows of the image cache.
+  Future<int> countImageCache() => ImageDao(_db).countAll();
+
+  /// Number of rows of the image cache last used at [time] or before.
+  Future<int> countImageCacheUsedNoLaterThan(DateTime time) => ImageDao(_db).countUsedNoLaterThan(time);
+
+  /// Up to [limit] rows of the image cache after [afterUrl] in url order (from the first one when null).
+  Future<List<ImageCacheRowRef>> imageCacheRowsAfter(String? afterUrl, int limit) =>
+      ImageDao(_db).selectPageAfter(afterUrl, limit);
+
+  /// Delete the image cache rows of [urls] still last used at [usedNoLaterThan] or before, but the ones touched since
+  /// [beginImageCacheTouchLog]; returns how many were deleted. Only the deleted rows leave the rows in memory.
+  Future<int> deleteImageCacheRows(List<String> urls, {required DateTime usedNoLaterThan}) async {
+    final touched = _imageTouchLog;
+    final targets = touched == null ? urls : urls.where((e) => !touched.contains(e)).toList();
+    if (targets.isEmpty) {
+      return 0;
+    }
+    _imageWrites++;
+    final deleted = await ImageDao(_db).deleteUrlsUsedNoLaterThan(targets, usedNoLaterThan);
+    for (final row in deleted) {
+      _forgetImage(row.url);
+    }
+    return deleted.length;
   }
+
+  /// What the clean up of the image cache keeps besides the pictures of the offline thread pages: the image stickers
+  /// of the user (urls) and the avatars of the accounts saved on this device (cache file names).
+  Future<({Set<String> urls, Set<String> fileNames})> imageCacheKeepers() => ImageDao(_db).selectKeepers();
+
+  /// Up to [limit] bodies of the offline thread pages after the row [afterRowId], with their row ids, for the clean up
+  /// of the image cache (it keeps their pictures).
+  Future<List<({int rowId, String body})>> offlineThreadBodiesAfter(int afterRowId, int limit) =>
+      OfflineThreadDao(_db).selectBodiesAfter(afterRowId, limit);
 
   /*             settings             */
 
@@ -517,6 +808,34 @@ class StorageProvider with LoggerMixin {
     ),
   );
 
+  /// The threads user [uid] visited (by tid) with where the reading stopped, again whenever it changes.
+  Stream<Map<int, ({int? page, int? pid, int? floor, int? seenReplies})>> watchThreadVisitProgress(int uid) =>
+      ThreadVisitHistoryDao(_db).watchProgressByUid(uid);
+
+  /// An event whenever a visit record of user [uid] changes (added, removed, visited again, read further); the first
+  /// event is the current state.
+  Stream<void> watchThreadVisitChanges(int uid) => ThreadVisitHistoryDao(_db).watchChangesByUid(uid);
+
+  /// Keep where user [uid] stopped reading thread [tid] on its visit record; nothing when the visit is not recorded.
+  /// [progressUpdated] is when the progress was written (schema 18); absent, the stored time stays.
+  Future<void> updateThreadVisitProgress({
+    required int uid,
+    required int tid,
+    required int? page,
+    required int? pid,
+    required int? floor,
+    required int? seenReplies,
+    DateTime? progressUpdated,
+  }) async => ThreadVisitHistoryDao(_db).updateProgress(
+    uid: uid,
+    tid: tid,
+    page: page,
+    pid: pid,
+    floor: floor,
+    seenReplies: seenReplies,
+    progressUpdated: progressUpdated,
+  );
+
   /// Delete thread visit history with [uid] and [tid].
   Future<void> deleteThreadVisitHistory({int? uid, int? tid}) async =>
       ThreadVisitHistoryDao(_db).deleteByUidOrTid(uid: uid, tid: tid);
@@ -533,8 +852,31 @@ class StorageProvider with LoggerMixin {
   ///
   /// Call it whenever a request made with that account's cookie got the guest page. Nothing happens when the account
   /// is not stored. Cleared by [clearSessionExpired] once a login or an account switch verified the session again.
+  /// A cookie provider loaded from the row marks it with [markSessionExpiredIfHeld].
   Future<void> markSessionExpired(int uid, {DateTime? at}) async {
     final touched = await CookieDao(_db).updateSessionExpiredAt(uid, at ?? DateTime.now());
+    if (touched > 0) {
+      info('session of uid ${"$uid".obscured(4)} marked expired');
+    }
+  }
+
+  /// [markSessionExpired] for the guest page answered to [session] ([cookieSessionOf]), the session a cookie provider
+  /// loaded from the row of [uid] sent the request with: only while the row still holds it, checked in the database
+  /// ([exclusively]). The guest page answered to the previous session after a new login of the account (with the
+  /// password, of the same account too) says nothing of the new one, whichever isolate asked.
+  Future<void> markSessionExpiredIfHeld(int uid, {required String? session, DateTime? at}) async {
+    final dao = CookieDao(_db);
+    final touched = await exclusively(() async {
+      final row = await dao.selectCookieByUid(uid);
+      if (row == null) {
+        return 0;
+      }
+      if (cookieSessionOf(jsonDecode(row.cookie) as Map<String, dynamic>) != session) {
+        info('session of uid ${"$uid".obscured(4)} not marked expired: another session is stored now');
+        return 0;
+      }
+      return dao.updateSessionExpiredAt(uid, at ?? DateTime.now());
+    });
     if (touched > 0) {
       info('session of uid ${"$uid".obscured(4)} marked expired');
     }
@@ -590,6 +932,161 @@ class StorageProvider with LoggerMixin {
     await RepliedThreadDao(_db).deleteByUid(uid);
   }
 
+  /*        offline threads        */
+
+  /// Save the answer [body] of page [page] of thread [tid] as served to user [uid], asked with [orderType] and
+  /// [authorId] (0 when not asked), loaded at [savedAt]; replaces the page saved before.
+  ///
+  /// With [onlyStoredAccount], nothing is written unless the account [uid] is still stored on this device, checked by
+  /// the write itself (one statement): a page whose account was removed while its write waited never comes back (the
+  /// removal deletes the account's row before its pages). Returns whether the page was written.
+  Future<bool> saveOfflineThreadPage({
+    required int uid,
+    required int tid,
+    required int page,
+    required int orderType,
+    required int authorId,
+    required String body,
+    required DateTime savedAt,
+    bool onlyStoredAccount = false,
+  }) async {
+    final dao = OfflineThreadDao(_db);
+    final size = utf8.encode(body).length;
+    if (onlyStoredAccount) {
+      return dao.upsertForStoredAccount(
+        uid: uid,
+        tid: tid,
+        page: page,
+        orderType: orderType,
+        authorId: authorId,
+        size: size,
+        savedAt: savedAt,
+        lastUsedAt: savedAt.millisecondsSinceEpoch,
+        body: body,
+      );
+    }
+    await dao.upsert(
+      OfflineThreadCompanion(
+        uid: Value(uid),
+        tid: Value(tid),
+        page: Value(page),
+        orderType: Value(orderType),
+        authorId: Value(authorId),
+        body: Value(body),
+        size: Value(size),
+        savedAt: Value(savedAt),
+        lastUsedAt: Value(savedAt.millisecondsSinceEpoch),
+      ),
+    );
+    return true;
+  }
+
+  /// The saved page of the key ([saveOfflineThreadPage]), null when none; a page found is marked used at [usedAt].
+  Future<OfflineThreadEntity?> fetchOfflineThreadPage({
+    required int uid,
+    required int tid,
+    required int page,
+    required int orderType,
+    required int authorId,
+    DateTime? usedAt,
+  }) async {
+    final dao = OfflineThreadDao(_db);
+    final entity = await dao.selectPage(uid: uid, tid: tid, page: page, orderType: orderType, authorId: authorId);
+    if (entity != null) {
+      await dao.touch(
+        uid: uid,
+        tid: tid,
+        page: page,
+        orderType: orderType,
+        authorId: authorId,
+        time: usedAt ?? DateTime.now(),
+      );
+    }
+    return entity;
+  }
+
+  /// The saved page with the highest page number for the rest of the key ([OfflineThreadDao.selectLastPage]), null
+  /// when none; a page found is marked used at [usedAt].
+  Future<OfflineThreadEntity?> fetchLastOfflineThreadPage({
+    required int uid,
+    required int tid,
+    required int orderType,
+    required int authorId,
+    DateTime? usedAt,
+  }) async {
+    final dao = OfflineThreadDao(_db);
+    final entity = await dao.selectLastPage(uid: uid, tid: tid, orderType: orderType, authorId: authorId);
+    if (entity != null) {
+      await dao.touch(
+        uid: uid,
+        tid: tid,
+        page: entity.page,
+        orderType: orderType,
+        authorId: authorId,
+        time: usedAt ?? DateTime.now(),
+      );
+    }
+    return entity;
+  }
+
+  /// The saved page of the key without marking it used: for listing and comparing copies, which must not keep them
+  /// from being evicted nor make them look read.
+  Future<OfflineThreadEntity?> peekOfflineThreadPage({
+    required int uid,
+    required int tid,
+    required int page,
+    required int orderType,
+    required int authorId,
+  }) async => OfflineThreadDao(
+    _db,
+  ).selectPage(uid: uid, tid: tid, page: page, orderType: orderType, authorId: authorId);
+
+  /// The threads kept for user [uid], most recently used first ([OfflineThreadDao.selectCopies]).
+  Future<List<OfflineThreadCopyRow>> fetchOfflineThreadCopies(int uid) async => OfflineThreadDao(_db).selectCopies(uid);
+
+  /// Every saved offline thread page of every user, with the bodies. Tests only.
+  @visibleForTesting
+  Future<List<OfflineThreadEntity>> fetchAllOfflineThreadPages() async => OfflineThreadDao(_db).selectAll();
+
+  /// Delete every saved page of thread [tid] for user [uid].
+  Future<int> deleteOfflineThread({required int uid, required int tid}) async =>
+      OfflineThreadDao(_db).deleteThread(uid: uid, tid: tid);
+
+  /// How many threads are kept, of every account together.
+  Future<int> offlineThreadCount() async => OfflineThreadDao(_db).countThreads();
+
+  /// Delete the pages of the default request of thread [tid] for user [uid] after page [page].
+  Future<int> deleteOfflineThreadPagesAfter({required int uid, required int tid, required int page}) async =>
+      OfflineThreadDao(_db).deletePagesAfter(uid: uid, tid: tid, page: page);
+
+  /// Delete every saved page of user [uid].
+  Future<int> deleteOfflineThreadsByUid(int uid) async => OfflineThreadDao(_db).deleteByUid(uid);
+
+  /// Delete every saved page of every user.
+  Future<int> clearOfflineThreads() async => OfflineThreadDao(_db).deleteAll();
+
+  /// Size of the saved pages in bytes.
+  Future<int> offlineThreadsSize() async => OfflineThreadDao(_db).totalSize();
+
+  /// Keep the pages of the [limit] most recently used threads only; returns the number of pages deleted.
+  Future<int> trimOfflineThreads(int limit) async => OfflineThreadDao(_db).keepRecentThreads(limit);
+
+  /// Keep the [limit] most recently used pages of thread [tid] for user [uid] only; returns the number of pages
+  /// deleted.
+  Future<int> trimOfflineThreadPages({required int uid, required int tid, required int limit}) async =>
+      OfflineThreadDao(_db).keepRecentPages(uid: uid, tid: tid, limit: limit);
+
+  /// Delete every saved offline thread page when there is any; returns the number of pages deleted.
+  ///
+  /// Reads first, so an empty table (the usual case) costs no write.
+  Future<int> clearOfflineThreadsIfAny() async {
+    final dao = OfflineThreadDao(_db);
+    if (await dao.isEmpty()) {
+      return 0;
+    }
+    return dao.deleteAll();
+  }
+
   /// Save an image sticker [url] with an optional [name] (#5); returns the row id.
   Future<int> addCustomImage({required String url, String name = ''}) async =>
       CustomImageDao(_db).add(url: url, name: name);
@@ -633,6 +1130,12 @@ class StorageProvider with LoggerMixin {
     return;
   });
 
+  /// What the unread counts of user [uid] are made of, without reading the notification bodies, see
+  /// `NotificationDao.unreadOf`.
+  Future<({List<int?> noticeAuthors, List<int> personalMessagePeers, int broadcastMessages})> unreadNotificationOf(
+    int uid,
+  ) => NotificationDao(_db).unreadOf(uid);
+
   /// Fetch all notification for user [uid] since time [timestamp].
   ///
   /// Return a instance of [NotificationGroup] that contains all types of
@@ -667,6 +1170,9 @@ class StorageProvider with LoggerMixin {
               // `NotificationDao.insertManyNotice`.
               ignoreType: Value(e.ignoreType),
               authorId: Value(e.authorId),
+              author: Value(e.author),
+              fromId: Value(e.fromId),
+              fromIdType: Value(e.fromIdType),
             ),
           )
           .toList(),
@@ -828,6 +1334,32 @@ class StorageProvider with LoggerMixin {
       ),
     );
 
+    return rightVoid();
+  });
+
+  /// Replace every fast rate template with [rates], in their order, in one transaction (the watchers see one change).
+  AsyncVoidEither replaceAllFastRateTemplates(List<FastRateTemplateModel> rates) => AsyncEither(() async {
+    final dao = FastRateTemplateDao(_db);
+    final now = DateTime.now();
+    await _db.transaction(() async {
+      await dao.deleteAll();
+      for (final rate in rates) {
+        await dao.insertOrUpdate(
+          FastRateTemplateCompanion(
+            name: Value(rate.name),
+            ww: Value(rate.ww),
+            tsb: Value(rate.tsb),
+            xc: Value(rate.xc),
+            tr: Value(rate.tr),
+            fh: Value(rate.fh),
+            jl: Value(rate.jl),
+            lastUsedTime: Value(now),
+            special: Value(rate.special),
+            special2: Value(rate.special2),
+          ),
+        );
+      }
+    });
     return rightVoid();
   });
 

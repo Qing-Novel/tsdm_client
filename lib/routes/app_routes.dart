@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/features/achievements/view/achievements_page.dart';
 import 'package:tsdm_client/features/activities/view/activities_page.dart';
+import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
 import 'package:tsdm_client/features/authentication/view/login_page.dart';
 import 'package:tsdm_client/features/bank/view/bank_page.dart';
 import 'package:tsdm_client/features/blocking/view/user_block_page.dart';
@@ -10,6 +12,8 @@ import 'package:tsdm_client/features/blocking/view/website_blocklist_page.dart';
 import 'package:tsdm_client/features/chat/view/chat_history_page.dart';
 import 'package:tsdm_client/features/chat/view/chat_page.dart';
 import 'package:tsdm_client/features/checkin/view/auto_checkin_page.dart';
+import 'package:tsdm_client/features/editor/utils/mention_suggestions.dart';
+import 'package:tsdm_client/features/editor/view/quick_phrases_page.dart';
 import 'package:tsdm_client/features/favorite/models/models.dart';
 import 'package:tsdm_client/features/favorite/view/favorite_page.dart';
 import 'package:tsdm_client/features/forum/models/models.dart';
@@ -19,10 +23,19 @@ import 'package:tsdm_client/features/friend/view/friend_page.dart';
 import 'package:tsdm_client/features/home/view/home_page.dart';
 import 'package:tsdm_client/features/home/widgets/widgets.dart';
 import 'package:tsdm_client/features/homepage/view/homepage_page.dart';
-import 'package:tsdm_client/features/image/view/image_detail_page.dart';
+import 'package:tsdm_client/features/image/view/image_gallery_page.dart';
+import 'package:tsdm_client/features/keyboard/view/keyboard_shortcuts_page.dart';
 import 'package:tsdm_client/features/latest_thread/view/latest_thread_page.dart';
+import 'package:tsdm_client/features/local_draft/view/local_draft_page.dart';
+import 'package:tsdm_client/features/me/view/me_page.dart';
 import 'package:tsdm_client/features/medal_center/view/medal_center_page.dart';
 import 'package:tsdm_client/features/medal_center/view/medal_title_hub_page.dart';
+import 'package:tsdm_client/features/medal_title_tools/view/medal_grant_page.dart';
+import 'package:tsdm_client/features/medal_title_tools/view/my_medals_page.dart';
+import 'package:tsdm_client/features/medal_title_tools/view/title_exchange_page.dart';
+import 'package:tsdm_client/features/medal_title_tools/view/title_issue_page.dart';
+import 'package:tsdm_client/features/member_thread/utils/member_thread_url.dart';
+import 'package:tsdm_client/features/member_thread/view/member_thread_page.dart';
 import 'package:tsdm_client/features/multi_user/view/manage_account_page.dart';
 import 'package:tsdm_client/features/my_thread/view/my_thread_page.dart';
 import 'package:tsdm_client/features/notification/models/models.dart';
@@ -31,6 +44,7 @@ import 'package:tsdm_client/features/notification/view/notification_detail_page.
 import 'package:tsdm_client/features/notification/view/notification_page.dart';
 import 'package:tsdm_client/features/notification/view/notification_search_page.dart';
 import 'package:tsdm_client/features/notification/view/notification_sync_all_page.dart';
+import 'package:tsdm_client/features/offline_thread/view/offline_threads_page.dart';
 import 'package:tsdm_client/features/open_in_app/view/open_in_app_page.dart';
 import 'package:tsdm_client/features/packet/view/packet_detail_page.dart';
 import 'package:tsdm_client/features/points/views/points_page.dart';
@@ -43,11 +57,13 @@ import 'package:tsdm_client/features/pokemon/view/pokemon_page.dart';
 import 'package:tsdm_client/features/pokemon/view/pokemon_storage_page.dart';
 import 'package:tsdm_client/features/post/models/models.dart';
 import 'package:tsdm_client/features/post/models/poll_create.dart';
+import 'package:tsdm_client/features/post/models/special_thread_form.dart';
 import 'package:tsdm_client/features/post/view/fast_reply_edit_template_page.dart';
 import 'package:tsdm_client/features/post/view/fast_reply_template_page.dart';
 import 'package:tsdm_client/features/post/view/poll_create_page.dart';
 import 'package:tsdm_client/features/post/view/post_edit_page.dart';
 import 'package:tsdm_client/features/profile/view/edit_avatar_page.dart';
+import 'package:tsdm_client/features/profile/view/edit_signature_page.dart';
 import 'package:tsdm_client/features/profile/view/edit_user_profile_page.dart';
 import 'package:tsdm_client/features/profile/view/my_titles_page.dart';
 import 'package:tsdm_client/features/profile/view/profile_page.dart';
@@ -64,8 +80,10 @@ import 'package:tsdm_client/features/settings/view/debug_log_page.dart';
 import 'package:tsdm_client/features/settings/view/settings_page.dart';
 import 'package:tsdm_client/features/settings/view/thread_card_appearance.dart';
 import 'package:tsdm_client/features/settings/widgets/app_license_page.dart';
+import 'package:tsdm_client/features/share_receive/models/shared_thread_draft.dart';
+import 'package:tsdm_client/features/tag/view/tag_cloud_page.dart';
+import 'package:tsdm_client/features/thread/v1/view/share_floor_image_page.dart';
 import 'package:tsdm_client/features/thread/v1/view/thread_page.dart';
-import 'package:tsdm_client/features/thread/v2/view/thread_page_v2.dart';
 import 'package:tsdm_client/features/thread_visit_history/view/thread_visit_history_page.dart';
 import 'package:tsdm_client/features/title_shop/view/title_shop_page.dart';
 import 'package:tsdm_client/features/topics/view/topics_page.dart';
@@ -91,12 +109,11 @@ final router = GoRouter(
 
 /// All named routes in app.
 final List<RouteBase> _appRoutes = [
+  // The four tabs of the bottom navigation bar (phones) and of the side navigation (tablets and desktop), in the order
+  // of [HomeTab]: homepage, forums, notifications and "me". Every other page is opened above the shell.
   StatefulShellRoute(
-    builder: (context, router, navigator) {
-      final hideNavigationBarPages = [ScreenPaths.settingsThreadAppearance.fullPath];
-      // Partial global singleton page here.
-      return HomePage(showNavigationBar: !hideNavigationBarPages.contains(router.fullPath), child: navigator);
-    },
+    // Partial global singleton page here.
+    builder: (context, router, navigator) => HomePage(showNavigationBar: true, child: navigator),
     // Slide horizontally between the shell branches instead of switching instantly.
     navigatorContainerBuilder: (context, navigationShell, children) =>
         AnimatedBranchPageView(navigationShell: navigationShell, children: children),
@@ -108,22 +125,24 @@ final List<RouteBase> _appRoutes = [
         routes: [AppRoute(path: ScreenPaths.topic, builder: (_) => const TopicsPage())],
       ),
       StatefulShellBranch(
-        routes: [
-          AppRoute(
-            path: ScreenPaths.settings.path,
-            builder: (_) => const SettingsPage(),
-            routes: [
-              AppRoute(
-                path: ScreenPaths.settingsThreadAppearance.path,
-                builder: (_) => const SettingsThreadCardAppearancePage(),
-              ),
-            ],
-          ),
-        ],
+        routes: [AppRoute(path: ScreenPaths.notice, builder: (_) => const NotificationPage(asTab: true))],
+      ),
+      StatefulShellBranch(
+        routes: [AppRoute(path: ScreenPaths.me, builder: (_) => const MePage())],
       ),
     ],
   ),
-  AppRoute(path: ScreenPaths.rootSettings, builder: (_) => const SettingsPage()),
+  // The settings were the third tab; the "me" tab opens them now, as do the menus of the list pages.
+  AppRoute(
+    path: ScreenPaths.settings.path,
+    builder: (_) => const SettingsPage(),
+    routes: [
+      AppRoute(
+        path: ScreenPaths.settingsThreadAppearance.path,
+        builder: (_) => const SettingsThreadCardAppearancePage(),
+      ),
+    ],
+  ),
   AppRoute(
     path: ScreenPaths.loggedUserProfile,
     builder: (state) {
@@ -134,6 +153,7 @@ final List<RouteBase> _appRoutes = [
   AppRoute(path: ScreenPaths.about, builder: (_) => const AboutPage()),
   AppRoute(path: ScreenPaths.activities, builder: (_) => const ActivitiesPage()),
   AppRoute(path: ScreenPaths.license, builder: (_) => const AppLicensePage()),
+  AppRoute(path: ScreenPaths.keyboardShortcuts, builder: (_) => const KeyboardShortcutsPage()),
   AppRoute(
     path: ScreenPaths.forum,
     builder: (state) {
@@ -158,69 +178,9 @@ final List<RouteBase> _appRoutes = [
       return ForumGroupPage(gid: gid!, title: title);
     },
   ),
-  AppRoute(
-    path: ScreenPaths.threadV1,
-    builder: (state) {
-      final title = state.uri.queryParameters['appBarTitle'];
-      final threadTypeName = state.uri.queryParameters['threadTypeName'];
-      final threadTypeID = state.uri.queryParameters['threadTypeID'];
-      final FilterType? threadType;
-      if (threadTypeName != null && threadTypeID != null) {
-        threadType = FilterType(name: threadTypeName, typeID: threadTypeID);
-      } else {
-        threadType = null;
-      }
-
-      final tid = state.uri.queryParameters['tid'];
-      final pid = state.uri.queryParameters['pid'];
-      final onlyVisibleUid = state.uri.queryParameters['onlyVisibleUid'];
-      final bool overrideReverseOrder;
-      if (state.uri.queryParameters['overrideReverseOrder'] == 'false') {
-        overrideReverseOrder = false;
-      } else {
-        overrideReverseOrder = true;
-      }
-      final overrideWithExactOrder = state.uri.queryParameters['overrideWithExactOrder']?.parseToInt();
-
-      assert(tid != null || pid != null, 'MUST provide tid or pid through query parameters');
-      final pageNumber = state.uri.queryParameters['pageNumber'];
-      return ThreadPage(
-        title: title,
-        threadType: threadType,
-        threadID: tid,
-        findPostID: pid,
-        pageNumber: pageNumber ?? '1',
-        overrideReverseOrder: overrideReverseOrder,
-        overrideWithExactOrder: overrideWithExactOrder,
-        onlyVisibleUid: onlyVisibleUid,
-      );
-    },
-  ),
-  AppRoute(
-    path: ScreenPaths.threadV2,
-    builder: (state) {
-      final id = state.pathParameters['id']!;
-      final bool overrideReverseOrder;
-      final onlyVisibleUid = state.uri.queryParameters['onlyVisibleUid'];
-      if (state.uri.queryParameters['overrideReverseOrder'] == 'false') {
-        overrideReverseOrder = false;
-      } else {
-        overrideReverseOrder = true;
-      }
-      final overrideWithExactOrder = state.uri.queryParameters['overrideWithExactOrder']?.parseToInt();
-      final pageNumber = state.uri.queryParameters['pageNumber'];
-      final pid = state.uri.queryParameters['pid'];
-
-      return ThreadPageV2(
-        id: id,
-        pageNumber: pageNumber ?? '1',
-        overrideReverseOrder: overrideReverseOrder,
-        overrideWithExactOrder: overrideWithExactOrder,
-        onlyVisibleUid: onlyVisibleUid,
-        pid: pid?.parseToInt(),
-      );
-    },
-  ),
+  // The same page shows in the detail pane of the list pages on wide windows (`TwoPaneLayout`), built from the same
+  // query; a deep link or a notification still opens it here, as a page of its own.
+  AppRoute(path: ScreenPaths.threadV1, builder: (state) => ThreadPage.fromQuery(state.uri.queryParameters)),
   AppRoute(
     path: ScreenPaths.search,
     builder: (state) {
@@ -232,7 +192,7 @@ final List<RouteBase> _appRoutes = [
       return SearchPage(keyword: keyword, authorUid: authorUid, authorName: authorName, fid: fid, page: page);
     },
   ),
-  AppRoute(path: ScreenPaths.notice, builder: (_) => const NotificationPage()),
+  AppRoute(path: ScreenPaths.rootNotice, builder: (_) => const NotificationPage()),
   AppRoute(
     path: ScreenPaths.reply,
     builder: (state) {
@@ -256,11 +216,34 @@ final List<RouteBase> _appRoutes = [
       return FastReplyTemplateEditPage(editType, initialValue);
     },
   ),
+  AppRoute(path: ScreenPaths.quickPhrases, builder: (_) => const QuickPhrasesPage()),
   AppRoute(path: ScreenPaths.noticeSearch, builder: (_) => const NotificationSearchPage()),
   AppRoute(path: ScreenPaths.notificationSyncAll, builder: (_) => const NotificationSyncAllPage()),
   AppRoute(
     path: ScreenPaths.myThread,
-    builder: (state) => MyThreadPage(showDrafts: state.uri.queryParameters['tab'] == 'drafts'),
+    builder: (state) => MyThreadPage(
+      showDrafts: state.uri.queryParameters['tab'] == 'drafts',
+      showReplies: state.uri.queryParameters['tab'] == 'reply',
+    ),
+  ),
+  AppRoute(
+    path: ScreenPaths.memberThread,
+    // The current user's own list is the "my threads" page, with its drafts and filters.
+    redirect: (context, state) {
+      final auth = context.readOrNull<AuthenticationRepository>();
+      return memberThreadRedirect(
+        state.uri.queryParameters,
+        currentUid: auth?.effectiveCurrentUid,
+        currentUsername: auth?.effectiveCurrentUser?.username,
+      );
+    },
+    builder: (state) => MemberThreadPage(
+      uid: state.uri.queryParameters['uid'],
+      username: state.uri.queryParameters['username'],
+      initialTab: state.uri.queryParameters['tab'] == MemberThreadTab.reply.name
+          ? MemberThreadTab.reply
+          : MemberThreadTab.thread,
+    ),
   ),
   AppRoute(
     path: ScreenPaths.favorite,
@@ -270,11 +253,13 @@ final List<RouteBase> _appRoutes = [
           : FavoriteType.thread,
     ),
   ),
+  AppRoute(path: ScreenPaths.offlineThreads, builder: (state) => const OfflineThreadsPage()),
   AppRoute(
     path: ScreenPaths.friend,
     builder: (state) =>
         FriendPage(uid: state.uri.queryParameters['uid'], username: state.uri.queryParameters['username']),
   ),
+  AppRoute(path: ScreenPaths.tagCloud, builder: (_) => const TagCloudPage()),
   AppRoute(
     path: ScreenPaths.latestThread,
     builder: (state) {
@@ -314,8 +299,15 @@ final List<RouteBase> _appRoutes = [
   AppRoute(path: ScreenPaths.websiteBlocklist, builder: (_) => const WebsiteBlocklistPage()),
   AppRoute(path: ScreenPaths.medalCenter, builder: (_) => const MedalCenterPage()),
   AppRoute(path: ScreenPaths.medalTitleHub, builder: (_) => const MedalTitleHubPage()),
+  AppRoute(path: ScreenPaths.titleExchange, builder: (_) => const TitleExchangePage()),
+  AppRoute(path: ScreenPaths.myMedals, builder: (_) => const MyMedalsPage()),
+  AppRoute(path: ScreenPaths.medalGrant, builder: (_) => const MedalGrantPage()),
+  AppRoute(path: ScreenPaths.titleIssue, builder: (_) => const TitleIssuePage()),
   AppRoute(path: ScreenPaths.bank, builder: (_) => const BankPage()),
-  AppRoute(path: ScreenPaths.pokemon, builder: (state) => PokemonPage(initialTab: (state.extra as int?) ?? 0)),
+  AppRoute(
+    path: ScreenPaths.pokemon,
+    builder: (state) => PokemonPage(initialTab: (state.extra as int?) ?? 0),
+  ),
   AppRoute(
     path: ScreenPaths.pokemonDetail,
     builder: (state) => PokemonDetailPage(pokemon: state.extra! as Pokemon),
@@ -331,6 +323,7 @@ final List<RouteBase> _appRoutes = [
     builder: (state) => PokemonEquipmentPage(pokemon: state.extra! as Pokemon),
   ),
   AppRoute(path: ScreenPaths.editUserProfile, builder: (_) => const EditUserProfilePage()),
+  AppRoute(path: ScreenPaths.editSignature, builder: (_) => const EditSignaturePage()),
   AppRoute(
     path: ScreenPaths.ratePost,
     builder: (state) {
@@ -383,7 +376,20 @@ final List<RouteBase> _appRoutes = [
         tid: tid,
         pid: pid,
         pollOffered: state.uri.queryParameters['poll'] == '1',
-        transfer: state.extra is ThreadModeTransfer ? state.extra! as ThreadModeTransfer : null,
+        threadKind: ThreadKind.fromQuery(state.uri.queryParameters['kind']),
+        transfer: switch (state.extra) {
+          final ThreadModeTransfer transfer => transfer,
+          SharedThreadDraft(:final transfer) => transfer,
+          _ => null,
+        },
+        mentionSuggestions: switch (state.extra) {
+          final List<MentionSuggestion> suggestions => suggestions,
+          _ => null,
+        },
+        sharedImages: switch (state.extra) {
+          SharedThreadDraft(:final imagePaths) => imagePaths,
+          _ => null,
+        },
       );
     },
   ),
@@ -425,14 +431,15 @@ final List<RouteBase> _appRoutes = [
       return ChatHistoryPage(uid: uid);
     },
   ),
+  ImageGalleryRoute(),
   AppRoute(
-    path: ScreenPaths.imageDetail,
-    builder: (state) {
-      final imageUrl = state.pathParameters['imageUrl']!;
-      return ImageDetailPage(imageUrl);
-    },
+    path: ScreenPaths.shareFloorImage,
+    // Only opened from a floor's menu with the floor: nothing to render without it.
+    redirect: (_, state) => state.extra is ShareFloorImageArgs ? null : ScreenPaths.homepage,
+    builder: (state) => ShareFloorImagePage(state.extra! as ShareFloorImageArgs),
   ),
   AppRoute(path: ScreenPaths.threadVisitHistory, builder: (_) => const ThreadVisitHistoryPage()),
+  AppRoute(path: ScreenPaths.localDrafts, builder: (_) => const LocalDraftPage()),
   AppRoute(path: ScreenPaths.autoCheckinDetail, builder: (_) => const AutoCheckinPage()),
   AppRoute(path: ScreenPaths.debugLog, builder: (_) => const DebugLogPage()),
   AppRoute(path: ScreenPaths.debugHistoricalLog, builder: (_) => const DebugHistoricalLogPage()),

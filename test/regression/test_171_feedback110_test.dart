@@ -282,11 +282,19 @@ final class _Auth extends Fake implements AuthenticationRepository {
   @override
   Stream<AuthStatus> get status => _controller.stream;
 
+  /// Nothing is replayed: the stream is a plain broadcast one.
+  @override
+  AuthStatus? get latestStatus => null;
+
   @override
   int? get effectiveCurrentUid => currentUser?.uid;
 
   @override
-  AsyncVoidEither loginWithDocument(uh.Document document) => AsyncVoidEither(() async => rightVoid());
+  AsyncVoidEither loginWithDocument(uh.Document document, {int? fetchedAs, int? epoch}) =>
+      AsyncVoidEither(() async => rightVoid());
+
+  @override
+  int get identityEpoch => 0;
 
   Future<void> close() => _controller.close();
 }
@@ -568,7 +576,7 @@ void main() {
               ),
             ),
             routes: [
-              for (final path in [ScreenPaths.homepage, ScreenPaths.topic, '/settings'])
+              for (final path in [ScreenPaths.homepage, ScreenPaths.topic, ScreenPaths.notice, ScreenPaths.me])
                 GoRoute(
                   path: path,
                   name: path,
@@ -576,15 +584,7 @@ void main() {
                 ),
             ],
           ),
-          for (final path in [
-            ScreenPaths.activities,
-            ScreenPaths.notice,
-            ScreenPaths.loggedUserProfile,
-            ScreenPaths.titleShop,
-            ScreenPaths.medalCenter,
-            ScreenPaths.bank,
-            ScreenPaths.login,
-          ])
+          for (final path in [ScreenPaths.login])
             GoRoute(
               path: path,
               name: path,
@@ -605,17 +605,8 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    List<String> labels() => [
-      tr.navigation.homepage,
-      tr.navigation.topics,
-      tr.navigation.activities,
-      tr.navigation.notice,
-      tr.navigation.profile,
-      tr.navigation.titleShop,
-      tr.navigation.medalCenter,
-      tr.navigation.bank,
-      tr.navigation.settings,
-    ];
+    // The four tabs since the navigation rework of 2026-10-23 (nine entries before).
+    List<String> labels() => [tr.navigation.homepage, tr.navigation.topics, tr.navigation.notice, tr.navigation.me];
 
     for (final scale in [1.0, 2.0]) {
       testWidgets('scrolled to the end at ${scale}x text: nothing under the status bar, every entry reachable', (
@@ -633,12 +624,14 @@ void main() {
         // Drag the rail as far as it goes, the way the tester did.
         await tester.drag(scroll, const Offset(0, -2000));
         await tester.pumpAndSettle();
-        final settings = tester.getRect(find.text(tr.navigation.settings));
+        final last = tester.getRect(find.text(tr.navigation.me));
         // The scroll ends with the last entry fully shown at the bottom: no empty room after it, no half clipped entry
-        // at the top edge (the height is measured, not estimated).
-        expect(settings.top, greaterThanOrEqualTo(24), reason: 'the last entry is not clipped by the top edge');
-        expect(settings.bottom, lessThanOrEqualTo(_landscape.height));
-        expect(settings.bottom, greaterThan(viewport.bottom - 48), reason: 'the scroll ends at the last entry');
+        // at the top edge (the height is measured, not estimated). Four entries may fit without scrolling.
+        expect(last.top, greaterThanOrEqualTo(24), reason: 'the last entry is not clipped by the top edge');
+        expect(last.bottom, lessThanOrEqualTo(_landscape.height));
+        if (Scrollable.of(tester.element(find.text(tr.navigation.me))).position.maxScrollExtent > 0) {
+          expect(last.bottom, greaterThan(viewport.bottom - 48), reason: 'the scroll ends at the last entry');
+        }
         // The status bar strip is the rail's own band, not a destination scrolled under it.
         final railX = tester.getRect(find.byType(NavigationRail)).center.dx;
         await tester.tapAt(Offset(railX, 12));
@@ -656,12 +649,12 @@ void main() {
         expect(tester.getRect(find.text(tr.navigation.homepage)).top, greaterThanOrEqualTo(24));
 
         // And they still work.
-        final bank = find.byIcon(Icons.account_balance_outlined);
-        await tester.dragUntilVisible(bank, scroll, const Offset(0, -60));
+        final me = find.byIcon(Icons.person_outline);
+        await tester.dragUntilVisible(me, scroll, const Offset(0, -60));
         await tester.pumpAndSettle();
-        await tester.tap(bank);
+        await tester.tap(me);
         await tester.pumpAndSettle();
-        expect(routerTopLocation(router), ScreenPaths.bank);
+        expect(routerTopLocation(router), ScreenPaths.me);
         expect(tester.takeException(), isNull);
       });
     }
@@ -834,8 +827,9 @@ void main() {
       expect(isThreadClosedForReply(parseHtmlDocument(_threadPage)), isFalse);
     });
 
-    // The three hosts of the bar, with what they show above it. Chat and thread keep their height when the keyboard
-    // shows (`resizeToAvoidBottomInset: false`, the editor panel handles it); the notice detail resizes.
+    // The three hosts of the bar, with what they show above it. They keep their height when the keyboard shows
+    // (`resizeToAvoidBottomInset: false`, the editor panel handles it); the notice detail resized too until GitHub
+    // #235, which lifted its editor twice the keyboard's height.
     final hosts = <(String, Widget Function(), Finder Function(), bool)>[
       ('chat', () => const ChatPage(username: 'Bob', uid: '1000'), () => find.byType(ChatMessageCard), false),
       (
@@ -857,7 +851,7 @@ void main() {
           noticeType: NoticeType.reply,
         ),
         () => find.byType(PostCard),
-        true,
+        false,
       ),
     ];
 
@@ -939,7 +933,7 @@ void main() {
           await pumpPage(tester, page());
           final bar = tester.getRect(background());
           expect((bar.left, bar.right), (0, size.width));
-          // The notice detail stands the bar on the keyboard; chat and thread leave the room to the editor panel.
+          // No host stands the bar on the keyboard: they leave the room to the editor panel.
           expect(bar.bottom, resizes ? size.height - keyboard : size.height);
           final box = tester.getRect(field());
           // The keyboard covers the gesture bar: under the field only the bar's own 8 and the minimum 4 are left.

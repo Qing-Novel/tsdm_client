@@ -1,5 +1,8 @@
+import 'package:collection/collection.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/features/post/utils/draft_marker.dart';
+import 'package:tsdm_client/features/thread/v1/utils/parse_thread_document.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:universal_html/html.dart' as uh;
 
 /// The current account's server-side drafts, not local editor backups.
@@ -117,6 +120,67 @@ DraftPage parseDraftPage(uh.Document document, {required int page, required int 
   return DraftPage(List.unmodifiable(entries), next);
 }
 
+/// [parseDraftPage] on the structured "my threads" answer [json] of the forum's app API (plugin 2.4.0, `schema: 9`,
+/// `myThreadApiAnswerOf`, `ok` 1) asked for page [page] of the draft box of the account [uid].
+///
+/// The answer must be the draft filter of the account's own list (`view=me`, `filter=save`, which the plugin kinds
+/// `draft`: the page the web path recognizes by its selected filter link; the list of the account, `owner.uid`), else
+/// the list is unavailable;
+/// every row must name a thread, a forum and a subject, else the row is invalid; the next page is the one after
+/// [page] when the forum has one (`has_next`). The rows carry no first floor (`pid` 0): the draft is resolved from
+/// its thread page when opened, as before. Throws [FormatException] as the page parser throws.
+DraftPage draftPageFromApi(Map<String, dynamic> json, {required int page, required int uid}) {
+  final ownerUid = tsdmAppInt(tsdmAppMap(json['owner'])['uid']);
+  if (json['view'] != 'me' || json['filter'] != 'save' || json['kind'] != 'draft' || ownerUid != uid) {
+    throw const FormatException('Draft list unavailable');
+  }
+  final rows = json['threads'];
+  if (rows is! List) throw const FormatException('Unrecognized draft list');
+  final entries = <DraftEntry>[];
+  for (final row in rows) {
+    if (row is! Map<String, dynamic>) throw const FormatException('Invalid draft row');
+    final tid = tsdmAppInt(row['tid']);
+    final fid = tsdmAppInt(row['fid']);
+    final title = row['subject'] is String ? (row['subject'] as String).trim() : '';
+    final forumName = row['forum'] is String ? (row['forum'] as String).trim() : '';
+    if (tid <= 0 || fid <= 0 || title.isEmpty) {
+      throw const FormatException('Invalid draft row');
+    }
+    entries.add(DraftEntry(tid: '$tid', fid: '$fid', title: title, forumName: forumName));
+  }
+  return DraftPage(List.unmodifiable(entries), tsdmAppInt(json['has_next']) == 1 ? page + 1 : null);
+}
+
+/// [parseDraftTarget] on the thread page [page] built from the structured answer of the forum's app API
+/// (`threadPageFromApi`): the thread must still be a draft (`thread.draft`) and the one of [entry], with its first
+/// floor and the edit link the forum offers on it (`can.edit`, `urls.edit`) naming the draft's forum, thread and
+/// post. Throws [FormatException] as the page parser throws.
+DraftEditTarget draftTargetOfPage(ThreadPageInfo page, DraftEntry entry) {
+  if (!page.isDraft) throw const FormatException('Draft no longer available');
+  final firstPost = page.postList.firstWhereOrNull((e) => e.postFloor == 1);
+  if (firstPost == null) throw const FormatException('Draft first post missing');
+  if (page.tid != null && page.tid != entry.tid) throw const FormatException('Draft thread changed');
+  final postId = firstPost.postID;
+  if (!_positive(postId)) throw const FormatException('Draft post missing');
+  if (_isDraftEditLink(firstPost.editUrl, entry, postId)) {
+    return (fid: entry.fid, tid: entry.tid, pid: postId);
+  }
+  throw const FormatException('Draft edit link unavailable');
+}
+
+/// Whether [href] is the forum's edit link of the draft's first post [postId]: `forum.php?mod=post&action=edit` naming
+/// the draft's forum and thread ([entry]) and the post.
+bool _isDraftEditLink(String? href, DraftEntry entry, String postId) {
+  final uri = draftForumUri(href);
+  final q = uri?.queryParameters;
+  return uri?.path == '/forum.php' &&
+      q?['mod'] == 'post' &&
+      q?['action'] == 'edit' &&
+      q?['tid'] == entry.tid &&
+      q?['fid'] == entry.fid &&
+      q?['pid'] == postId;
+}
+
 /// Recheck draft state before entering the editor; a published/deleted draft is not editable here.
 DraftEditTarget parseDraftTarget(uh.Document document, DraftEntry entry) {
   if (!isDraftThreadDocument(document)) throw const FormatException('Draft no longer available');
@@ -129,15 +193,8 @@ DraftEditTarget parseDraftTarget(uh.Document document, DraftEntry entry) {
   final postId = firstPost?.id.replaceFirst('post_', '');
   if (!_positive(postId)) throw const FormatException('Draft post missing');
   for (final link in firstPost!.querySelectorAll('a[href]')) {
-    final uri = draftForumUri(link.attributes['href']);
-    final q = uri?.queryParameters;
-    if (uri?.path == '/forum.php' &&
-        q?['mod'] == 'post' &&
-        q?['action'] == 'edit' &&
-        q?['tid'] == entry.tid &&
-        q?['fid'] == entry.fid &&
-        q?['pid'] == postId) {
-      return (fid: entry.fid, tid: entry.tid, pid: postId!);
+    if (_isDraftEditLink(link.attributes['href'], entry, postId!)) {
+      return (fid: entry.fid, tid: entry.tid, pid: postId);
     }
   }
   throw const FormatException('Draft edit link unavailable');

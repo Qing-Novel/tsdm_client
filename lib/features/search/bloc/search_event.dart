@@ -16,6 +16,7 @@ final class SearchRequested extends SearchEvent with SearchRequestedMappable {
     required this.uid,
     required this.pageNumer,
     this.authorName = '',
+    this.filter = const SearchFilter(),
   }) : super();
 
   /// Keyword to search.
@@ -23,7 +24,7 @@ final class SearchRequested extends SearchEvent with SearchRequestedMappable {
 
   /// Forum id to search.
   ///
-  /// '0' represents any forum.
+  /// '0' represents any forum, several are joined by `_` ([searchForumIdsValue]).
   final String fid;
 
   /// Author's uid to search.
@@ -36,6 +37,9 @@ final class SearchRequested extends SearchEvent with SearchRequestedMappable {
 
   /// Page number of search result.
   final int pageNumer;
+
+  /// Time range, order and title only.
+  final SearchFilter filter;
 }
 
 /// User requested to jump to another page [pageNumber].
@@ -55,3 +59,17 @@ final class SearchGotoNextPageRequested extends SearchEvent with SearchGotoNextP
 /// User requested to jump to the previous page.
 @MappableClass()
 final class SearchGotoPreviousPageRequested extends SearchEvent with SearchGotoPreviousPageRequestedMappable {}
+
+/// Append the next page of the results to the ones shown: the end of the result list came near.
+@MappableClass()
+final class SearchLoadMoreRequested extends SearchEvent with SearchLoadMoreRequestedMappable {
+  /// Constructor.
+  const SearchLoadMoreRequested() : super();
+}
+
+/// Ask the last search (or page of it) again, after it failed.
+@MappableClass()
+final class SearchRetryRequested extends SearchEvent with SearchRetryRequestedMappable {
+  /// Constructor.
+  const SearchRetryRequested() : super();
+}

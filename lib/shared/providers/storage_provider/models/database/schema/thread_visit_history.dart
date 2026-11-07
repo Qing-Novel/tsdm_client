@@ -26,6 +26,24 @@ class ThreadVisitHistory extends Table {
   /// Visit time, timestamp.
   DateTimeColumn get visitTime => dateTime()();
 
+  /// Where the reading stopped: the page (oldest floor first) of the floor at the top of the thread page. Null while
+  /// not known (a visit kept before schema 17, a page newest first without the floors per page).
+  IntColumn get lastPage => integer().nullable()();
+
+  /// Where the reading stopped: the post id of that floor; null at the start of the thread.
+  IntColumn get lastPid => integer().nullable()();
+
+  /// Where the reading stopped: the number of that floor, 1 at the start of the thread.
+  IntColumn get lastFloor => integer().nullable()();
+
+  /// The thread's replies when it was read (as the thread lists count them): the lists tell the replies since.
+  IntColumn get seenReplies => integer().nullable()();
+
+  /// When the reading progress ([lastPage], [lastPid], [lastFloor], [seenReplies]) was last written; null while not
+  /// known (a progress kept before schema 18). The cross-device sync tells the later progress by it, apart from
+  /// [visitTime], which moves on every visit.
+  DateTimeColumn get progressUpdated => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {uid, tid};
 }

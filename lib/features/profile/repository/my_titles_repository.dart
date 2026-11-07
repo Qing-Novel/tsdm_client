@@ -40,11 +40,33 @@ final class MyTitlesRepository with LoggerMixin {
   String? _formHash;
 
   /// Fetch all available secondary titles for current user.
-  AsyncEither<List<SecondaryTitle>> fetchSecondaryTitles() => getIt
-      .get<NetClientProvider>()
-      .get(withTsdmAppJson(_pageUrl))
-      .mapHttp((v) => tsdmAppPageDocument(v.data))
-      .map((doc) {
+  ///
+  /// The forum's app API (`titles`, plugin 1.5.0) first: the card layout of the title plugin 6.2 has no table to
+  /// parse. Every page of it is read (up to 200 titles each); the web page is the path when the API can not answer.
+  AsyncEither<List<SecondaryTitle>> fetchSecondaryTitles() => TaskEither(() async {
+    final client = getIt.get<NetClientProvider>();
+    final titles = <SecondaryTitle>[];
+    for (var page = 1; page <= 20; page++) {
+      final json = await TsdmAppApi.askWaiting(client, 'titles', {'pp': '200', 'page': '$page'});
+      final got = SecondaryTitle.fromApi(json);
+      if (got == null || ((json!['uid'] as num?)?.toInt() ?? 0) <= 0) {
+        break;
+      }
+      _formHash = json['formhash'] is String && (json['formhash'] as String).isNotEmpty
+          ? json['formhash'] as String
+          : _formHash;
+      titles.addAll(got);
+      final query = json['query'];
+      final pages = query is Map ? (query['pages'] as num?)?.toInt() ?? 1 : 1;
+      if (page >= pages) {
+        return Right(titles);
+      }
+    }
+    return _fetchWebTitles().run();
+  });
+
+  AsyncEither<List<SecondaryTitle>> _fetchWebTitles() =>
+      getIt.get<NetClientProvider>().get(withTsdmAppJson(_pageUrl)).mapHttpPage((doc) => doc).map((doc) {
         _formHash = doc.querySelector('input[name="formhash"]')?.attributes['value'] ?? _formHash;
         return SecondaryTitle.parseTitlesPage(doc);
       });
@@ -65,7 +87,8 @@ final class MyTitlesRepository with LoggerMixin {
   /// Submit the switch title request, [id] is the title id, 0 to unset.
   ///
   /// The server responds a "提示信息" page for both success and failure so the result is verified by fetching the titles
-  /// page again and checking the current title.
+  /// page again and checking the current title. With the forum's app API (plugin 2.6.0) the page comes as the write
+  /// result ([tsdmAppWriteResultOf]), whose message is the page's; an older plugin answers the page, read as before.
   AsyncVoidEither _submit(int id) => _getFormHash().flatMap(
     (formHash) => getIt
         .get<NetClientProvider>()
@@ -78,7 +101,16 @@ final class MyTitlesRepository with LoggerMixin {
             'settitlesubmit': 'true',
           },
         )
-        .mapHttp((v) => parseHtmlDocument(v.data as String).querySelector('div#messagetext > p')?.innerText.trim())
+        .mapHttp(
+          (v) => switch (tsdmAppWriteResultOf(v.data)) {
+            final result? when result.kind != TsdmAppWriteKind.page => result.reason.isEmpty ? null : result.reason,
+            final result =>
+              (result?.document ?? parseHtmlDocument(tsdmAppAnswerText(v.data)))
+                  .querySelector('div#messagetext > p')
+                  ?.innerText
+                  .trim(),
+          },
+        )
         .flatMap(
           (message) => fetchSecondaryTitles().flatMap((titles) {
             final currentId = titles.firstWhereOrNull((e) => e.activated)?.id ?? 0;

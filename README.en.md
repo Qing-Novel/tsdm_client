@@ -16,15 +16,14 @@
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/Carinoasd/tsdm_client" alt="license"/></a>
 </p>
 
-## Latest update: 1.33.3 (2026-10-09)
+## Latest update: 1.49.2 (2026-10-27)
 
-- Rating: the page stays after an accepted rate, with a notice above the button; scores and reason are kept and today's remaining is reduced, so the same floor can be rated again at once or with other scores; press back to leave.
-- Rating floor after floor in one thread shows the form at once instead of loading the rate window for every floor.
-- Message sync (Android): the background service's requests time out, so a request held while the phone sleeps no longer blocks new messages; the app and the service no longer each poll.
-- In-app update (Windows): "cannot start the update" is fixed; the upgrade from 1.33.0 still has to be installed by hand, later ones update in the app.
-- Android build number 130, installs over earlier releases and test builds.
+- The thread page's app bar hides and shows after the list scrolled some way, so a flaky touch no longer makes it flicker.
+- The community bank tells a network failure from an unsupported page when loading the withdrawal confirmation; loan actions point to the web page; the forum's reply is shown after a submit.
+- Android build number 159, installs over earlier releases and test builds.
 
-[Download 1.33.3](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.33.3) · [Full changelog](./CHANGELOG.md)
+[Download 1.49.2](https://github.com/Carinoasd/tsdm_client/releases/tag/v1.49.2) · [Full changelog](./CHANGELOG.md)
+
 ## What it is
 
 A cross-platform client for the [天使动漫 forum](https://www.tsdm39.com/). When the forum moved to Discuz! X5 in 2026 the original client could no longer parse its pages; this project took over maintenance at the forum's request, adapted the app to the X5 page structure and keeps adding features. It is the client version recognised by the forum as official.
@@ -61,6 +60,7 @@ The package name is `com.tsdm.tsdm_client`, signed with the forum's official key
 - Home: forum statistics, the four digest modules (hot, digest, latest replies, latest posts) and the "grab the sofa" entry, each opening its full list
 - Forum groups: the boards of every group with their moderators; "My favourite boards" follows the favourites set on the website
 - Boards and threads: thread lists, floors, comments, ratings, purchases, attachments, spoilers, @ mentions, and a "replied" mark on threads you answered
+- Save viewed threads offline (off by default, in the settings): the saved pages open again without network, only for the account that saved them, with the actions that need the network hidden
 - Favourite or unfavourite a board from its page; the favourites page has "Threads" and "Boards" tabs
 - Share a thread with a friend: pick someone from your friend list and send the title and link as a private message
 - Notices, private messages, chat and public messages; plain-text URLs in notices are tappable; friend requests show up as notices
@@ -87,6 +87,7 @@ The package name is `com.tsdm.tsdm_client`, signed with the forum's official key
 - Foreground/background polling for new messages with system notifications; a cold start from a notification goes straight to the message centre
 - The settings page shows and requests the notification permission and battery-optimisation exemption (Android); the Debug section can send a test notification and export the logs
 - Windows: a system notification with a sound when the automatic sync finds new notices or private messages; tapping it restores the window and opens the message centre
+- Android, Windows: optional "Background notifications: all logged-in accounts": the automatic sync (while the app is open or in the tray, and the Android background message service) checks every account logged in on the device in turn, each with its own login and on its own; notifications name the account, and tapping one switches to it before opening the message centre
 - The fetch window of the automatic sync follows the forum's clock, so a wrong device clock does not skip notices or messages
 - Unread notices are tracked per device: a notice another device of the same account already fetched is still unread the first time it shows up here, until you view it here or mark all as read
 - Android: an optional background message service keeps a foreground service running and checks for new messages at the auto sync interval while the app is in the background or was cleared; it shares the database with the in-app sync, so nothing is announced twice

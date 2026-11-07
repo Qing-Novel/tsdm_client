@@ -1,7 +1,11 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/features/local_notice/keys.dart';
 import 'package:tsdm_client/features/notification/models/models.dart';
+import 'package:tsdm_client/features/notification/utils/notice_info.dart';
+import 'package:tsdm_client/features/notification/utils/push_rules.dart';
+import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/utils/platform.dart';
@@ -14,6 +18,30 @@ import 'package:tsdm_client/utils/platform.dart';
 /// id is only worth it together with deleting the old channel at boot ([deleteLegacyLocalNoticeChannel]).
 const localNoticeChannelId = 'newNoticeChannelV2';
 
+/// The channel of [info]: the one of the newest item it announces, which its title and body name.
+///
+/// A notification announcing several items of different categories is posted in the channel of that headline item, as
+/// it is one notification.
+NoticeCategory noticeCategoryOfInfo(NotificationAutoSyncInfo info) => switch (info) {
+  NotificationAutoSyncInfoPm() => NoticeCategory.pm,
+  NotificationAutoSyncInfoBm() => NoticeCategory.system,
+  NotificationAutoSyncInfoNotice(:final noticeType, :final fromIdType) => noticeCategoryOf(
+    noticeKindOf(type: noticeType, fromIdType: fromIdType),
+  ),
+};
+
+/// Name of the Android channel of [category] with the texts of [translations].
+String noticeChannelName(Translations translations, NoticeCategory category) {
+  final tr = translations.localNotification.channels;
+  return switch (category) {
+    NoticeCategory.reply => tr.reply,
+    NoticeCategory.mention => tr.mention,
+    NoticeCategory.rate => tr.rate,
+    NoticeCategory.pm => tr.pm,
+    NoticeCategory.system => tr.system,
+  };
+}
+
 /// Id of the channel used before [localNoticeChannelId].
 ///
 /// Deleted at boot so the user does not keep a dead channel in the system notification settings.
@@ -23,6 +51,189 @@ const legacyLocalNoticeChannelId = 'newNoticeChannel';
 ///
 /// One id: a newer result replaces the previous notification instead of piling up.
 const localNoticeId = 0;
+
+/// Whether the auto sync posts system notifications on this platform: Android and Windows.
+///
+/// Elsewhere nothing is shown ([showLocalNotification]), so nothing that only changes notifications is offered there
+/// (the setting to announce every logged-in account).
+bool get autoSyncPostsNotifications => isAndroid || isWindows;
+
+/// Id of the notification of account [uid] while the auto sync announces every logged-in account
+/// (`SettingsKeys.backgroundSyncAllAccounts`): one notification per account, a newer result replacing only that
+/// account's. Never [localNoticeId], nor the persistent notification of the service (`backgroundSyncNotificationId`).
+int localNoticeIdOf(int uid) => _accountIdBase | (uid & _accountIdMask);
+
+const _accountIdBase = 0x10000000;
+const _accountIdMask = 0x0FFFFFFF;
+
+/// Whether [id] is the id of an auto sync notification: [localNoticeId] or one of [localNoticeIdOf].
+bool isLocalNoticeId(int? id) => id == localNoticeId || (id != null && (id & ~_accountIdMask) == _accountIdBase);
+
+/// The account a notification is about, see [showLocalNotificationWith].
+final class LocalNoticeAccount {
+  /// Constructor.
+  const LocalNoticeAccount({required this.uid, this.username, this.named = false});
+
+  /// The account.
+  final int uid;
+
+  /// Its name, for the title of a [named] notification.
+  final String? username;
+
+  /// Whether every saved account is announced (`SettingsKeys.backgroundSyncAllAccounts`): the title names the account,
+  /// the account gets a notification of its own ([localNoticeIdOf]) and the payload names it. Otherwise the
+  /// notification is exactly what it always was, one for the account in use.
+  final bool named;
+}
+
+/// What is posted for an auto sync result: id, title, body and payload of the notification, and the lines and the
+/// summary of its expanded form (Android's inbox style; empty for a single new item).
+typedef LocalNotificationContent = ({
+  int id,
+  String title,
+  String body,
+  String payload,
+  List<String> lines,
+  String? summary,
+});
+
+/// Build the notification of [info] with the texts of [translations], about [account] when known.
+///
+/// The title and the body say who did what: "A 回复了你的帖子" and the thread, "B 发来私信" and the message, the text
+/// of the notice when its kind has no sentence of its own. With several new items the body adds the counts, and the
+/// expanded notification lists them (the lines of the content, newest first) with the counts as its summary.
+/// A result without the details (built elsewhere, the test notification of the settings page) keeps the old texts.
+///
+/// A [LocalNoticeAccount.named] notification (every logged-in account announced) names its account in the title, has
+/// an id of its own ([localNoticeIdOf]) and a payload naming the account ([LocalNoticeKeys.openNotificationOf]): a tap
+/// opens the notice page as that account, switching to it first when another one is in use by then. Any other
+/// notification is the one it always was: one id, the payload of the account in use
+/// ([LocalNoticeKeys.openNotification]).
+///
+/// A notification of a single new item also carries what it is about ([LocalNoticeKeys.withTarget]): the floor of the
+/// notice, the conversation of the message, and always the account it is about, named or not. A tap opens that
+/// instead of the notice page, as that account: switching to it first when another one is in use by then (an item of
+/// one account must never be opened, nor marked read, as another one). Without an [account] there is no target.
+///
+/// With [hideContent] (`SettingsKeys.notificationHideContent`) the notification only says how many new items came:
+/// the plain title (naming the account when [LocalNoticeAccount.named]), the counts, no list.
+LocalNotificationContent localNotificationContentOf(
+  Translations translations,
+  NotificationAutoSyncInfo info, {
+  LocalNoticeAccount? account,
+  bool hideContent = false,
+}) {
+  final tr = translations.localNotification;
+  final head = hideContent ? (title: null, body: _countsOf(translations, info)) : _headOf(translations, info);
+  final named = account != null && account.named;
+  final username = account?.username;
+  final String title;
+  if (named && username != null && username.isNotEmpty) {
+    title = head.title == null ? tr.notice.titleOf(username: username) : '[$username] ${head.title}';
+  } else {
+    title = head.title ?? tr.notice.title;
+  }
+  final base = named ? LocalNoticeKeys.openNotificationOf(account.uid) : LocalNoticeKeys.openNotification;
+  final target = info.total == 1 && account != null ? _targetOf(info) : null;
+  final several = !hideContent && info.total > 1 && info.lines.isNotEmpty;
+  final counts = _countsOf(translations, info);
+  return (
+    id: named ? localNoticeIdOf(account.uid) : localNoticeId,
+    title: title,
+    body: several ? '${head.body}\n$counts' : head.body,
+    payload: target == null
+        ? base
+        : LocalNoticeKeys.withTarget(LocalNoticeKeys.openNotificationOf(account!.uid), target),
+    lines: several ? [for (final line in info.lines) _lineOf(translations, line)] : const [],
+    summary: several
+        ? (info.total > info.lines.length ? '$counts · ${tr.notice.more(n: info.total - info.lines.length)}' : counts)
+        : null,
+  );
+}
+
+/// Longest thread title written in a notification, in characters.
+const _threadTitleLength = 24;
+
+/// Title (null for the old generic one) and body of the notification of [info].
+({String? title, String body}) _headOf(Translations translations, NotificationAutoSyncInfo info) {
+  final tr = translations.localNotification.notice;
+  switch (info) {
+    case NotificationAutoSyncInfoPm(:final user, :final msg, :final peerUid, :final lines):
+      // A result without the details keeps the old body: the counts and the message.
+      if (peerUid == null && lines.isEmpty) {
+        return (title: null, body: localNotificationBodyOf(translations, info));
+      }
+      return (title: tr.pmFrom(user: user), body: msg);
+    case NotificationAutoSyncInfoBm(:final msg, :final lines):
+      if (lines.isEmpty) {
+        return (title: null, body: localNotificationBodyOf(translations, info));
+      }
+      return (title: tr.bmTitle, body: msg);
+    case NotificationAutoSyncInfoNotice(
+      :final msg,
+      :final nid,
+      :final author,
+      :final noticeType,
+      :final fromIdType,
+      :final threadTitle,
+      :final quote,
+      :final tid,
+      :final pid,
+    ):
+      if (nid == null) {
+        return (title: null, body: localNotificationBodyOf(translations, info));
+      }
+      final kind = noticeKindOf(
+        type: noticeType,
+        fromIdType: fromIdType,
+        target: tid == null && pid == null ? null : NoticeTarget(tid: tid, pid: pid),
+      );
+      final action = noticeActionOf(translations, kind, author);
+      if (action == null) {
+        // The forum's text already says who did what.
+        return (title: tr.noticeTitle, body: msg);
+      }
+      final detail = [
+        if (threadTitle != null) '《${threadTitle.truncate(_threadTitleLength, ellipsis: true)}》',
+        ?quote,
+      ].join(' ');
+      return (title: action, body: detail.isEmpty ? msg : detail);
+  }
+}
+
+/// What a tap on the notification of [info], a single new item, opens; null when it names nothing.
+LocalNoticeTarget? _targetOf(NotificationAutoSyncInfo info) {
+  final target = switch (info) {
+    NotificationAutoSyncInfoNotice(:final nid, :final tid, :final pid) => LocalNoticeTarget(
+      nid: nid,
+      tid: tid,
+      pid: pid,
+    ),
+    NotificationAutoSyncInfoPm(:final peerUid) => LocalNoticeTarget(peerUid: peerUid),
+    NotificationAutoSyncInfoBm() => null,
+  };
+  return target == null || target.isEmpty ? null : target;
+}
+
+/// The counts of new items of [info], the kinds with none left out: "2 条提醒 · 1 条私信".
+String _countsOf(Translations translations, NotificationAutoSyncInfo info) {
+  final tr = translations.localNotification.notice;
+  return [
+    if (info.notice > 0) tr.noticeCount(n: info.notice),
+    if (info.personalMessage > 0) tr.pmCount(n: info.personalMessage),
+    if (info.broadcastMessage > 0) tr.bmCount(n: info.broadcastMessage),
+  ].join(' · ');
+}
+
+/// One line of the expanded notification.
+String _lineOf(Translations translations, NotificationAutoSyncLine line) {
+  final tr = translations.localNotification.notice;
+  return switch (line.kind) {
+    NotificationAutoSyncLineKind.notice => line.text,
+    NotificationAutoSyncLineKind.personalMessage => tr.pmLine(user: line.user ?? '', msg: line.text),
+    NotificationAutoSyncLineKind.broadcastMessage => tr.bmLine(msg: line.text),
+  };
+}
 
 /// Windows 平台使用的系统预设提示音。
 ///
@@ -76,18 +287,37 @@ String localNotificationBodyOf(Translations translations, NotificationAutoSyncIn
 /// icon is not set here on purpose: the one given to `flnp.initialize` is used.
 ///
 /// Windows: system toast with the IM preset sound (see [_windowsSound]).
+///
+/// [title], [body], [lines] and [summary] are the texts of the notification ([LocalNotificationContent]): Android
+/// shows [lines] in the inbox style when there are any, the whole [body] otherwise.
+///
+/// With a [category] the notification is posted in the channel of that category (named [channelName]), so the system
+/// settings can switch each category off on its own; without one (the test notification of the settings page) in
+/// [localNoticeChannelId].
 NotificationDetails buildLocalNotificationDetails({
   required String channelName,
   required String channelDescription,
   required String ticker,
+  String? title,
+  String? body,
+  List<String> lines = const [],
+  String? summary,
+  NoticeCategory? category,
 }) => NotificationDetails(
   android: AndroidNotificationDetails(
-    localNoticeChannelId,
+    category?.channelId ?? localNoticeChannelId,
     channelName,
     channelDescription: channelDescription,
     ticker: ticker,
     importance: Importance.high,
     priority: Priority.high,
+    // Said once instead of left to the device's default: on a locked screen the content shows only where the user
+    // allows private content of notifications; `SettingsKeys.notificationHideContent` keeps it out everywhere.
+    visibility: NotificationVisibility.private,
+    // Several new items are listed one per line when expanded; a single one shows its whole text.
+    styleInformation: lines.isNotEmpty
+        ? InboxStyleInformation(lines, contentTitle: title, summaryText: summary)
+        : (body != null ? BigTextStyleInformation(body, contentTitle: title) : null),
   ),
   windows: WindowsNotificationDetails(
     audio: WindowsNotificationAudio.preset(sound: _windowsSound),
@@ -118,8 +348,15 @@ Future<void> deleteLegacyLocalNoticeChannel() async {
 /// `NotificationManager.notify` is a silent no-op when the app has no notification permission (#13).
 ///
 /// Windows: shows a system toast; the IM preset sound is configured in [buildLocalNotificationDetails].
-Future<void> showLocalNotification(BuildContext context, NotificationAutoSyncInfo info) async {
-  if (!isAndroid && !isWindows) {
+///
+/// [account] is the account the result is about (the account in use for the in-app auto sync), see
+/// [localNotificationContentOf].
+Future<void> showLocalNotification(
+  BuildContext context,
+  NotificationAutoSyncInfo info, {
+  LocalNoticeAccount? account,
+}) async {
+  if (!autoSyncPostsNotifications) {
     return;
   }
   // Taken before the await below: the context must not be used across it.
@@ -131,10 +368,19 @@ Future<void> showLocalNotification(BuildContext context, NotificationAutoSyncInf
               .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
               ?.areNotificationsEnabled()
         : null;
+    final id = account != null && account.named ? localNoticeIdOf(account.uid) : localNoticeId;
     talker.info(
-      'push local notification id=$localNoticeId channel=$localNoticeChannelId enabled=$enabled: ${info.runtimeType}',
+      'push local notification id=$id channel=${noticeCategoryOfInfo(info).channelId} enabled=$enabled: ${info.runtimeType}',
     );
-    await showLocalNotificationWith(plugin: flnp, translations: translations, info: info);
+    await showLocalNotificationWith(
+      plugin: flnp,
+      translations: translations,
+      info: info,
+      account: account,
+      hideContent:
+          getIt.isRegistered<SettingsRepository>() &&
+          getIt.get<SettingsRepository>().currentSettings.notificationHideContent,
+    );
   } on Exception catch (e, st) {
     talker.handle(e, st, 'push local notification failed: ');
   }
@@ -144,24 +390,34 @@ Future<void> showLocalNotification(BuildContext context, NotificationAutoSyncInf
 ///
 /// The in-app auto sync calls it with the app's plugin and the widget tree's translations; the Android background
 /// message service with its own plugin instance and the locale it loaded from the settings (#80). Same channel and
-/// payload, so a tap is handled by the existing route logic in both cases.
+/// payload, so a tap is handled by the existing route logic in both cases. What is posted for [account] is
+/// [localNotificationContentOf].
 Future<void> showLocalNotificationWith({
   required FlutterLocalNotificationsPlugin plugin,
   required Translations translations,
   required NotificationAutoSyncInfo info,
+  LocalNoticeAccount? account,
+  bool hideContent = false,
 }) async {
   final tr = translations.localNotification;
+  final content = localNotificationContentOf(translations, info, account: account, hideContent: hideContent);
+  final category = noticeCategoryOfInfo(info);
   final nd = buildLocalNotificationDetails(
-    channelName: tr.channelName,
+    channelName: noticeChannelName(translations, category),
+    category: category,
     channelDescription: tr.channelDesc,
     ticker: tr.ticker,
+    title: content.title,
+    body: content.body,
+    lines: content.lines,
+    summary: content.summary,
   );
   await plugin.show(
-    id: localNoticeId,
-    title: tr.notice.title,
-    body: localNotificationBodyOf(translations, info),
+    id: content.id,
+    title: content.title,
+    body: content.body,
     notificationDetails: nd,
-    payload: LocalNoticeKeys.openNotification,
+    payload: content.payload,
   );
 }
 
@@ -179,7 +435,7 @@ Future<void> logActiveLocalNotifications() async {
     final active = await flnp
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.getActiveNotifications();
-    final shown = active?.any((e) => e.id == localNoticeId) ?? false;
+    final shown = active?.any((e) => isLocalNoticeId(e.id)) ?? false;
     talker.debug('auto sync notification in shade: $shown');
   } on Exception catch (e, st) {
     talker.handle(e, st, 'read active notifications failed: ');

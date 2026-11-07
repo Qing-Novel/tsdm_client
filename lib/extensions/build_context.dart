@@ -9,6 +9,7 @@ import 'package:tsdm_client/features/friend/utils/approve_friend_link.dart';
 import 'package:tsdm_client/features/friend/widgets/approve_friend_dialog.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/routes/screen_paths.dart';
+import 'package:tsdm_client/widgets/two_pane.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Extension on [BuildContext] that provides ability to dispatch a [String]
@@ -31,6 +32,11 @@ extension DispatchUrl<T> on BuildContext {
     Map<String, String>? extraQueryParameters,
   }) async {
     talker.debug('dispatch url: $url');
+    if (url.isEmpty) {
+      // Nothing to open: `Uri.tryParse('')` is a relative url that would resolve to the forum root.
+      talker.error('failed to dispatch empty url');
+      return null;
+    }
     final u = Uri.tryParse(url);
     if (u == null) {
       // Do nothing if is invalid url.
@@ -49,6 +55,10 @@ extension DispatchUrl<T> on BuildContext {
     }
     final route = url.parseUrlToRoute();
     if (route != null) {
+      // A thread linked from a pane of a wide list page stays in its detail pane.
+      if (route.screenPath == ScreenPaths.threadV1 && openThreadInPane(this, route.queryParameters)) {
+        return null;
+      }
       // Push route to the page if is recognized route.
       return pushNamed<T>(
         route.screenPath,

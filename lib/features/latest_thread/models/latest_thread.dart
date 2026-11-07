@@ -1,6 +1,8 @@
 import 'package:collection/collection.dart';
+import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/extensions/universal_html.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/models/models.dart';
 import 'package:universal_html/html.dart' as uh;
@@ -18,6 +20,8 @@ class _LatestThreadInfo {
     required this.latestReplyTime,
     required this.quotedMessage,
     this.threadAuthor,
+    this.preview,
+    this.quoteIsExcerpt = false,
   });
 
   /// Thread title.
@@ -61,6 +65,12 @@ class _LatestThreadInfo {
 
   /// Author of the thread itself, only known in the guide page layout.
   final User? threadAuthor;
+
+  /// The excerpt and the images of the first floor, from a structured answer of plugin 3.1.0.
+  final ThreadPreview? preview;
+
+  /// [quotedMessage] is the forum's excerpt of the thread (a search row), not a reply.
+  final bool quoteIsExcerpt;
 }
 
 /// Latest thread model.
@@ -86,6 +96,32 @@ class LatestThread {
   ///   </tr>
   /// </tbody>
   LatestThread.fromTBody(uh.Element element) : _info = _buildFromTBodyNode(element);
+
+  /// Build from a thread row [row] of a structured guide list answer of the forum's app API (plugin 2.4.0,
+  /// `schema: 7`, `latestThreadsFromApi`).
+  ///
+  /// The row is read as [NormalThread.fromApi] reads it (a moved thread is the row of its target, as the page links
+  /// it; an anonymous author has no uid; the times are the forum's unix seconds): the forum from `fid` and `forum`,
+  /// the last replier and time from `lastposter` / `lastpost` (the replier by name only: the list pages name no uid
+  /// for them, as the web page links them by name), the thread's author as [threadAuthor], as [LatestThread.fromTBody] reads the
+  /// guide page. A row that is one reply (`pid`: the guide's "my replies") links the reply (`goto=findpost`) and
+  /// quotes it (`summary`); a row of the guide's reply list ([reply], the answer's `kind` `reply`) whose reply has no
+  /// text quotes "...", as the page prints it then. The time ([latestReplyTime], shown as a date) is the forum's wall
+  /// clock with [timeOffset] (the answer's `timeoffset`), as the page prints it. The `preview` of a thread row (plugin
+  /// 3.1.0) is the [preview]; a reply row has none.
+  LatestThread.fromApi(Map<String, dynamic> row, {num timeOffset = 8, bool reply = false})
+    : _info = _buildFromApi(row, timeOffset: timeOffset, reply: reply);
+
+  /// Build from a thread row [row] of the structured search results of 查看新帖 (`search.php?mod=forum&srchfrom=…`,
+  /// plugin 2.4.0, `schema: 6`), which share the guide's row shape.
+  ///
+  /// As [LatestThread.fromApi], but the person and the time shown are the thread's author and its publish time (`author`,
+  /// `dateline`), as the search layout prints them (`dateline - author`) and [LatestThread.fromLi] reads them; the last replier
+  /// and the last reply are not shown there. The excerpt (`summary`) is quoted, as the layout's was, unless the row
+  /// carries the `preview` of plugin 3.1.0: the [preview] stands for it then, and the search's own excerpt is not
+  /// shown (the forum cuts it from the floor as stored, the hidden parts and a paid thread's content included).
+  LatestThread.fromSearchApi(Map<String, dynamic> row, {num timeOffset = 8})
+    : _info = _buildFromApi(row, search: true, timeOffset: timeOffset);
 
   final _LatestThreadInfo? _info;
 
@@ -126,6 +162,47 @@ class LatestThread {
 
   /// Author of the thread (not the latest reply), null when the layout does not tell.
   User? get threadAuthor => _info?.threadAuthor;
+
+  /// The excerpt and the images of the first floor the forum's app API gave for the row (plugin 3.1.0), null when it
+  /// gave none.
+  ThreadPreview? get preview => _info?.preview;
+
+  /// Whether [quotedMessage] is the forum's own excerpt of the thread (the search of 查看新帖, an older plugin), which
+  /// the lists hide with the excerpts ([SettingsKeys.threadCardShowExcerpt]); false for a reply quoted.
+  bool get quoteIsExcerpt => _info?.quoteIsExcerpt ?? false;
+
+  static _LatestThreadInfo _buildFromApi(
+    Map<String, dynamic> row, {
+    required num timeOffset,
+    bool search = false,
+    bool reply = false,
+  }) {
+    final fid = tsdmAppInt(row['fid']);
+    final thread = NormalThread.fromApi(row, fid: fid, typePrefix: 0, timeOffset: timeOffset);
+    final pid = tsdmAppInt(row['pid']);
+    // The guide's reply list prints the reply's text, or "..." when it has none (`guide_list_row`: `$post[message]`
+    // is empty or "0").
+    final text = tsdmAppText(row['summary']);
+    final summary = reply && pid > 0 && (text.isEmpty || text == '0') ? '...' : text;
+    // A reply row quotes the reply, it has no preview of the thread.
+    final preview = pid > 0 ? null : thread.preview;
+    return _LatestThreadInfo(
+      title: thread.title,
+      url: pid > 0 ? '$baseUrl/forum.php?mod=redirect&goto=findpost&ptid=${thread.threadID}&pid=$pid' : thread.url,
+      threadID: thread.threadID,
+      forumName: tsdmAppText(row['forum']),
+      forumUrl: '$baseUrl/forum.php?mod=forumdisplay&fid=$fid',
+      replyCount: thread.replyCount,
+      viewCount: thread.viewCount,
+      latestReplyAuthor: search ? thread.author : thread.latestReplyAuthor,
+      // Shown as a date: the forum's wall clock, as the page prints it.
+      latestReplyTime: search ? thread.publishDate : tsdmAppWallClockTime(row['lastpost'], timeOffset),
+      quotedMessage: summary.isEmpty || preview != null ? null : summary,
+      threadAuthor: thread.author,
+      preview: preview,
+      quoteIsExcerpt: pid <= 0,
+    );
+  }
 
   static _LatestThreadInfo? _buildFromTBodyNode(uh.Element element) {
     final thread = NormalThread.fromTBody(element);

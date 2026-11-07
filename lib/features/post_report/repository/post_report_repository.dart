@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io' if (dart.libaray.js) 'package:web/web.dart';
 
+import 'package:collection/collection.dart';
 import 'package:dio/dio.dart' show Options;
 import 'package:fpdart/fpdart.dart';
 import 'package:tsdm_client/extensions/universal_html.dart';
@@ -7,6 +9,9 @@ import 'package:tsdm_client/features/authentication/utils/logged_user_parser.dar
 import 'package:tsdm_client/features/blocking/repository/notice_ignore_repository.dart' show isCloudflareChallengePage;
 import 'package:tsdm_client/features/post_report/models/post_report.dart';
 import 'package:tsdm_client/features/post_report/utils/report_page_context.dart';
+import 'package:tsdm_client/features/thread/v1/utils/thread_page_api.dart';
+import 'package:tsdm_client/features/tsdmapp/small_form.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/shared/models/models.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
 import 'package:tsdm_client/utils/logger.dart';
@@ -20,7 +25,8 @@ final class PostReportResponse {
   /// Http status.
   final int statusCode;
 
-  /// Text body, empty when there was none.
+  /// Text body, empty when there was none; a JSON answer of the forum's app API (the thread page asked in the JSON
+  /// mode) as its JSON text.
   final String body;
 
   /// Cloudflare marked the answer as a challenge (`cf-mitigated: challenge`).
@@ -57,7 +63,12 @@ class PostReportRepository with LoggerMixin {
         Left(:final value) => throw value,
         Right(:final value) => PostReportResponse(
           value.statusCode ?? 0,
-          value.data is String ? value.data as String : '',
+          switch (value.data) {
+            final String text => text,
+            // The JSON answer dio decoded already (the thread page in the JSON mode).
+            final Map<dynamic, dynamic> json => jsonEncode(json),
+            _ => '',
+          },
           challenge: value.headers.value('cf-mitigated')?.toLowerCase() == 'challenge',
         ),
       };
@@ -66,7 +77,12 @@ class PostReportRepository with LoggerMixin {
       Left(:final value) => throw value,
       Right(:final value) => PostReportResponse(
         value.statusCode ?? 0,
-        value.data is String ? value.data as String : '',
+        switch (value.data) {
+          final String text => text,
+          // The write result of the forum's app API dio decoded already (plugin 2.6.0).
+          final Map<dynamic, dynamic> json => jsonEncode(json),
+          _ => '',
+        },
       ),
     },
   );
@@ -104,9 +120,19 @@ class PostReportRepository with LoggerMixin {
   }
 
   /// Check on a fresh full thread page that [uid] is still served and still offered the report of [target].
+  ///
+  /// The page is asked in the JSON mode of the forum's app API. A structured answer (plugin 2.1.0, `schema: 3`) is
+  /// checked on its fields ([_verifyFloorBuilt]) when it names the account it was served to (`uid`: every thread
+  /// answer, and the forum's message since plugin 2.2.0); any other answer is the page, read as before. The message of
+  /// plugin 2.1.0 names no account, and the account is what tells a change from a refusal: its document is read.
   Future<void> _verifyFloor(PostReportTarget target, int uid) async {
-    final raw = await _read(target.floorUrl, ajax: false);
-    final doc = parseHtmlDocument(raw);
+    final raw = await _read(Uri.parse(withTsdmAppJson(target.floorUrl.toString())), ajax: false);
+    final api = threadApiAnswerOf(raw);
+    if (api != null && api.containsKey('uid')) {
+      _verifyFloorBuilt(target, uid, api);
+      return;
+    }
+    final doc = tsdmAppPageDocument(raw);
     if (isCloudflareChallengePage(doc)) {
       throw const PostReportFailure(PostReportProblem.challenge);
     }
@@ -138,11 +164,44 @@ class PostReportRepository with LoggerMixin {
     }
   }
 
+  /// [_verifyFloor] on the page built from the structured answer [api], which names the account it was served to:
+  /// a guest (the login prompt, or the thread served to one) is not logged in, another account is a change, as the
+  /// page's `discuz_uid` tells first on the document path; then the forum's message (no such thread, no permission),
+  /// the floor among the posts, the thread and forum of [target], and the same report still offered ([Post.fromApi]
+  /// builds the target from `can.report`).
+  void _verifyFloorBuilt(PostReportTarget target, int uid, Map<String, dynamic> api) {
+    final pageUid = threadApiViewerUid(api);
+    if (pageUid == null) {
+      throw const PostReportFailure(PostReportProblem.notLoggedIn);
+    }
+    if (pageUid != uid) {
+      throw const PostReportFailure(PostReportProblem.accountChanged);
+    }
+    final page = threadPageFromApi(api, 1);
+    if (!page.havePermission) {
+      final message = page.permissionDeniedMessage?.innerText.trim();
+      if (message != null && message.isNotEmpty) {
+        throw PostReportFailure(PostReportProblem.forumMessage, message: plainForumText(message));
+      }
+      throw const PostReportFailure(PostReportProblem.noPermission);
+    }
+    final post = page.postList.firstWhereOrNull((e) => e.postID == '${target.pid}');
+    if (post == null) {
+      throw const PostReportFailure(PostReportProblem.noPermission);
+    }
+    if (page.tid != '${target.tid}' || page.fid != target.fid || post.reportTarget != target) {
+      throw const PostReportFailure(PostReportProblem.noPermission);
+    }
+  }
+
   /// A fresh report form of [target] for account [uid].
   ///
   /// First the full thread page proves the account (the ajax dialog has no page header) and that the forum still
-  /// offers this report to it, then the dialog is read like the forum's `showWindow` does. Nothing is sent to the
-  /// forum's report handler. Throws [PostReportFailure] only.
+  /// offers this report to it, then the dialog is read like the forum's `showWindow` does, with the write result of
+  /// the forum's app API: plugin 3.0.0 answers the form as structured fields ([withTsdmAppForm],
+  /// [postReportFormFromApi]) or the forum's message instead of it, served to [uid] or never used; an older plugin
+  /// answers its write result (plugin 2.6.0: a `page` with the form, [parsePostReportForm]), which is parsed as
+  /// before. Nothing is sent to the forum's report handler. Throws [PostReportFailure] only.
   Future<PostReportForm> prepare(PostReportTarget target, {required int uid}) async {
     if (uid <= 0 || uid != target.viewerUid) {
       throw const PostReportFailure(PostReportProblem.accountChanged);
@@ -156,8 +215,38 @@ class PostReportRepository with LoggerMixin {
         'handlekey': target.handleKey,
       },
     );
-    final raw = await _read(url, ajax: true);
-    return parsePostReportForm(raw, target: target);
+    final raw = await _read(Uri.parse(withTsdmAppForm(url.toString())), ajax: true);
+    switch (smallFormAnswerOf(raw, SmallFormKind.report)) {
+      case final SmallFormAnswer answer when !answer.servedTo(uid):
+        // A guest's answer (the session expired) or another account's: never used.
+        throw PostReportFailure(answer.uid == 0 ? PostReportProblem.notLoggedIn : PostReportProblem.accountChanged);
+      case SmallFormMessage(:final login, :final reason):
+        if (login) {
+          throw const PostReportFailure(PostReportProblem.notLoggedIn);
+        }
+        final message = plainForumText(reason);
+        throw PostReportFailure(
+          message.isEmpty ? PostReportProblem.unsupported : PostReportProblem.forumMessage,
+          message: message.isEmpty ? null : message,
+        );
+      case final SmallFormFields form when form.usable:
+        return postReportFormFromApi(form, target: target);
+      case SmallFormFields():
+        // Other plugins' fields or something the plugin says the app cannot fill: the dialog as before, whose
+        // parser refuses any field it does not know.
+        return parsePostReportForm(
+          await _read(Uri.parse(withTsdmAppJsonWrite(url.toString())), ajax: true),
+          target: target,
+        );
+      case null when isSmallFormUnknown(raw):
+        return parsePostReportForm(
+          await _read(Uri.parse(withTsdmAppJsonWrite(url.toString())), ajax: true),
+          target: target,
+        );
+      case null:
+        // An older plugin's answer (its write result of the dialog), or the dialog itself without the plugin.
+        return parsePostReportForm(raw, target: target);
+    }
   }
 
   /// Send [message] with [form] once. Never throws and never retries.

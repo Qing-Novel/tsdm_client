@@ -2,8 +2,10 @@ import 'package:collection/collection.dart';
 import 'package:tsdm_client/extensions/string.dart';
 import 'package:tsdm_client/extensions/universal_html.dart';
 import 'package:tsdm_client/extensions/uri.dart';
+import 'package:tsdm_client/features/authentication/utils/logged_user_parser.dart';
 import 'package:tsdm_client/features/forum/models/models.dart';
 import 'package:tsdm_client/features/post/utils/draft_marker.dart';
+import 'package:tsdm_client/features/post/utils/verification.dart';
 import 'package:tsdm_client/features/post_report/utils/report_page_context.dart';
 import 'package:tsdm_client/features/thread/v1/models/models.dart';
 import 'package:tsdm_client/instance.dart';
@@ -37,6 +39,12 @@ final class ThreadPageInfo {
     required this.postMedals,
     required this.viewCount,
     required this.replyCount,
+    this.special,
+    this.offlineSavedAt,
+    this.authorUid,
+    this.postsPerPage,
+    this.paginationReplies,
+    this.newestFirst = false,
   });
 
   /// Thread id.
@@ -98,6 +106,63 @@ final class ThreadPageInfo {
 
   /// Thread reply count.
   final int? replyCount;
+
+  /// The special block of the thread (poll, goods, bounty, activity, debate) the page's first floor holds, as the
+  /// forum's app API gives it (plugin 2.8.0); null on another page, for a web page or an older plugin. The first floor
+  /// carries it too ([Post.special]).
+  final ThreadSpecial? special;
+
+  /// When the page was loaded from the forum, for a page read back from the offline copies because the forum could not
+  /// be reached ([asOffline]); null for a page that just came from the forum.
+  final DateTime? offlineSavedAt;
+
+  /// The uid of the member who started the thread, as the forum's app API names it with every page (`thread.authorid`,
+  /// plugin 2.1.0); null when the page does not tell: an anonymous thread, a web page, an older plugin. A page past
+  /// the first does not show the first floor, this tells the thread's author all the same.
+  final int? authorUid;
+
+  /// Floors per page of the thread for the account the page was served to, as the forum's app API tells it (`ppp`);
+  /// null for a web page or an older answer.
+  final int? postsPerPage;
+
+  /// The replies the forum paginated this page by (the forum's app API `thread.replies`: one author's floors only, the
+  /// highest floor of a rush thread…); null when the page does not tell.
+  final int? paginationReplies;
+
+  /// The floors of this page are in the newest first order (the forum's app API `ordertype` 1: asked so, or the
+  /// thread's author set it, the thread status bit 4); false when the page does not tell (a web page).
+  final bool newestFirst;
+
+  /// This page read back from an offline copy loaded at [savedAt]: without its reply form, whose form hash is from an
+  /// old session and could only send a reply over a network that is not there.
+  ThreadPageInfo asOffline(DateTime savedAt) => ThreadPageInfo(
+    tid: tid,
+    title: title,
+    fid: fid,
+    forumName: forumName,
+    currentPage: currentPage,
+    totalPages: totalPages,
+    havePermission: havePermission,
+    permissionDeniedMessage: permissionDeniedMessage,
+    needLogin: needLogin,
+    threadSoftClosed: threadSoftClosed,
+    threadClosed: threadClosed,
+    postList: postList,
+    replyParameters: null,
+    threadType: threadType,
+    isDraft: isDraft,
+    latestModAct: latestModAct,
+    breadcrumbs: breadcrumbs,
+    postMedals: postMedals,
+    viewCount: viewCount,
+    replyCount: replyCount,
+    special: special,
+    offlineSavedAt: savedAt,
+    authorUid: authorUid,
+    postsPerPage: postsPerPage,
+    paginationReplies: paginationReplies,
+    newestFirst: newestFirst,
+  );
 }
 
 /// Whether the thread page says the thread accepts no more replies.
@@ -117,6 +182,16 @@ bool isThreadClosedForReply(uh.Document document) {
   return !hint.contains('登录');
 }
 
+/// The first floor on the thread page [document] names no user: an anonymous or guest post, whose author has no user
+/// link (the post parser skips such floors). Nobody on a block list can be its author. Links in the post body are
+/// not looked at; a page without a first floor is not such a thread.
+bool firstFloorNamesNoUser(uh.Document document) {
+  final first = document
+      .querySelectorAll('div#postlist div[id^="post_"]')
+      .firstWhereOrNull((e) => e.querySelector('div.pi strong em')?.text?.trim() == '1');
+  return first != null && first.querySelector('td.pls a[href*="uid="], div.authi a[href*="uid="]') == null;
+}
+
 /// Parse thread page info from [document].
 ///
 /// [pageNumber] is the fallback page number when not found in document.
@@ -132,11 +207,13 @@ ThreadPageInfo parseThreadDocument(uh.Document document, int pageNumber) {
       document.querySelector('div#postlist h1.ts i[title="关闭"]') != null;
   final threadClosed = isThreadClosedForReply(document);
   final threadDataNode = document.querySelector('div#postlist');
-  // Ids of the page itself (not of any post link) that report links must match (#127).
+  // Ids of the page itself (not of any post link) that report links must match (#127). The account the page was
+  // served to goes with the poll form of a floor (a formhash of that account), which the poll card shows as it is.
   final postList = Post.buildListFromThreadDataNode(
     threadDataNode,
     document.currentPage() ?? 1,
     reportContext: postReportPageContextOf(document),
+    viewerUid: parseLoggedUidFromDocument(document),
   );
   // Title node ALWAYS has a node with id `thread_subject`.
   // It's an `<a>` node in legacy styles (invisible in most styles and visible in 爱丽丝 style) and a `<span>` node on
@@ -216,12 +293,16 @@ ThreadPageInfo parseThreadDocument(uh.Document document, int pageNumber) {
       'failed to get reply form hash: tid=$tid fid=$fid hasFormHash=${formHash != null} hasSubject=${subject != null}',
     );
   } else {
+    final fastPost = document.querySelector('form#fastpostform');
     replyParameters = ReplyParameters(
       fid: '$fid',
       tid: tid,
       postTime: postTime,
       formHash: formHash,
       subject: subject,
+      // The quick reply form asks for a captcha or a security question (its `seccheck_fastpost` placeholders).
+      verification: fastPost != null && elementAsksVerification(fastPost),
+      secCheck: SecCheck.fromElement(fastPost, modid: SecCheck.viewthreadModid),
     );
   }
 

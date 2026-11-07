@@ -28,7 +28,8 @@ import 'package:tsdm_client/shared/providers/net_client_provider/net_client_prov
 import 'package:tsdm_client/shared/providers/net_client_provider/net_error_saver.dart';
 import 'package:tsdm_client/shared/providers/providers.dart';
 
-const _now = 1791269898;
+/// The forum clock: now, since the repository clamps `since` to three days ago (a fixed time broke on 2026-10-10).
+final int _now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
 /// A `notify` answer as the plugin gives it (1.1.0 on the test forum, names replaced).
 Map<String, Object?> _notify({
@@ -143,7 +144,7 @@ void main() {
   setUp(TsdmAppApi.reset);
 
   group('notify gate', () {
-    const since = _now - 60;
+    final since = _now - 60;
 
     test('nothing since the last fetch: no page, the forum clock', () {
       final gate = notifyGateOf(_notify(notices: [_notice(since - 600)]), since: since);
@@ -247,10 +248,13 @@ void main() {
       expect(forum.requests, hasLength(1));
     });
 
-    test('the first fetch (no timestamp) reads the pages without asking', () async {
+    test('the first fetch (no timestamp) asks once and reads the pages: an older plugin only gates polls', () async {
+      // Plugin 1.9.0 answers the lists themselves (test 211); this answer is an older plugin's.
       final forum = _Forum(api: _notify(), pages: [_noticePage, _emptyPage, _emptyPage]);
-      await NotificationRepository().fetchNotificationWith(_client(forum)).run();
-      expect(forum.apiRequests, isEmpty);
+      final result = await NotificationRepository().fetchNotificationWith(_client(forum)).run();
+      expect(result.isRight(), isTrue);
+      expect(forum.apiRequests, hasLength(1));
+      expect(forum.requests, hasLength(4));
     });
   });
 

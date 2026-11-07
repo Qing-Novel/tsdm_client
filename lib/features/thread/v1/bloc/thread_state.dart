@@ -15,6 +15,23 @@ enum ThreadStatus {
   failure,
 }
 
+/// Status of a page loaded at an end of the floors on screen ([ThreadState.nextStatus],
+/// [ThreadState.previousStatus]): the floors stay on screen whatever it is.
+enum ThreadEdgeStatus {
+  /// Nothing asked, or the last one asked arrived.
+  idle,
+
+  /// The page is being loaded.
+  loading,
+
+  /// The page could not be loaded: the end of the floors offers to try again.
+  failed,
+}
+
+/// Pages of a thread kept in [ThreadState.postList] at most: reading on, the farthest pages are dropped and loaded
+/// again when scrolled back to, so a long thread read for a while does not keep every floor it went through.
+const threadWindowPages = 10;
+
 /// State of thread.
 @MappableClass()
 class ThreadState with ThreadStateMappable {
@@ -28,6 +45,7 @@ class ThreadState with ThreadStateMappable {
     this.forumName,
     this.canLoadMore = false,
     this.currentPage = 1,
+    this.firstPage = 1,
     this.totalPages = 1,
     this.havePermission = true,
     this.permissionDeniedMessage,
@@ -46,6 +64,19 @@ class ThreadState with ThreadStateMappable {
     this.postMedals = const [],
     this.viewCount,
     this.replyCount,
+    this.paginationReplies,
+    this.postsPerPage,
+    this.offlineSavedAt,
+    this.floorsUid,
+    this.generation = 0,
+    this.nextStatus = ThreadEdgeStatus.idle,
+    this.previousStatus = ThreadEdgeStatus.idle,
+    this.scrollTargetPid,
+    this.scrollTargetSerial = 0,
+    this.jumpFloorMissed,
+    this.newRepliesSerial = 0,
+    this.newRepliesCount = 0,
+    this.newestFirst = false,
   });
 
   /// Status.
@@ -80,11 +111,15 @@ class ThreadState with ThreadStateMappable {
   /// May be null at the beginning of state but will be set shortly after it.
   final String? forumName;
 
-  /// Flag indicating can load more pages or not.
+  /// Flag indicating can load more pages or not: [currentPage] is not the last page of the thread.
   final bool canLoadMore;
 
-  /// Current pageNumber
+  /// The last page of the floors on screen ([postList] holds [firstPage] to it).
   final int currentPage;
+
+  /// The first page of the floors on screen: above it the thread goes on with the pages before, loaded when scrolled
+  /// to ([canLoadPrevious]).
+  final int firstPage;
 
   /// Total pages number in the thread.
   final int totalPages;
@@ -115,7 +150,7 @@ class ThreadState with ThreadStateMappable {
   /// Indicating current thread is closed or not.
   final bool threadClosed;
 
-  /// List of [Post] in current thread.
+  /// The floors on screen: pages [firstPage] to [currentPage] in the order shown, at most [threadWindowPages] pages.
   final List<Post> postList;
 
   /// Parameters used to reply to another post in the same thread.
@@ -157,7 +192,7 @@ class ThreadState with ThreadStateMappable {
   /// It's ordered so held by a list and more right side more deep.
   final List<ThreadBreadcrumb> breadcrumbs;
 
-  /// All available in post medal.
+  /// The medal menus of the pages on screen (each page prints those of its own floors).
   final List<PostMedalMenuItem> postMedals;
 
   /// Total count of views on current thread.
@@ -165,4 +200,60 @@ class ThreadState with ThreadStateMappable {
 
   /// Total count of replies in thread.
   final int? replyCount;
+
+  /// The replies the forum paginated the floors on screen by (the forum's app API `thread.replies`: one author's
+  /// floors only, the highest floor of a rush thread…), [replyCount] when the page does not tell.
+  final int? paginationReplies;
+
+  /// Floors per page of the thread for the account (the forum's app API `ppp`, else worked out from a full page);
+  /// null while not known.
+  final int? postsPerPage;
+
+  /// Floors on screen came from the offline copies because the forum could not be reached: when the oldest of those
+  /// pages was loaded. Null while every floor came from the forum. Actions that need the network are not offered then.
+  final DateTime? offlineSavedAt;
+
+  /// Whether floors on screen came from the offline copies ([offlineSavedAt]).
+  bool get isOffline => offlineSavedAt != null;
+
+  /// The account the floors on screen were loaded for (null: a guest). A load for another account that fails never
+  /// puts them back on screen, nor appends to them.
+  final int? floorsUid;
+
+  /// Bumped by every load that replaces the floors on screen (refresh, jump, one author's floors, order): the list
+  /// starts over instead of keeping its place among floors that are gone.
+  final int generation;
+
+  /// The page after [currentPage] being loaded, or failed to.
+  final ThreadEdgeStatus nextStatus;
+
+  /// The page before [firstPage] being loaded, or failed to.
+  final ThreadEdgeStatus previousStatus;
+
+  /// A floor to bring into view (a jump to a floor), told once per [scrollTargetSerial].
+  final String? scrollTargetPid;
+
+  /// Bumped with every [scrollTargetPid] asked for, the same floor included.
+  final int scrollTargetSerial;
+
+  /// The floor a jump asked for when the thread does not have it (a deleted floor of a rush thread, past the last one):
+  /// the jump went to the closest one ([scrollTargetPid]). Null otherwise.
+  final int? jumpFloorMissed;
+
+  /// Bumped every time the last page was asked again for new replies ([newRepliesCount] of them).
+  final int newRepliesSerial;
+
+  /// Floors the last ask for new replies added ([newRepliesSerial]).
+  final int newRepliesCount;
+
+  /// Whether the thread goes on above the floors on screen.
+  bool get canLoadPrevious => firstPage > 1;
+
+  /// The last page loaded came in the newest first order ([ThreadPageInfo.newestFirst]): asked so, or the order the
+  /// thread's author set.
+  final bool newestFirst;
+
+  /// Whether the floors are shown newest first, page 1 holding the latest replies: asked so (the reverse order), or
+  /// the thread's author set it ([newestFirst]).
+  bool get shownNewestFirst => newestFirst || exactOrder == 1 || (exactOrder == null && (reverseOrder ?? false));
 }

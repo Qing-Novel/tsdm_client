@@ -4,6 +4,9 @@ import 'package:collection/collection.dart';
 import 'package:tsdm_client/constants/url.dart';
 import 'package:tsdm_client/features/blocking/repository/notice_ignore_repository.dart'
     show isCloudflareChallengePage, unwrapAjax;
+import 'package:tsdm_client/features/post/models/post_form.dart';
+import 'package:tsdm_client/features/tsdmapp/small_form.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/shared/models/models.dart';
 import 'package:universal_html/html.dart' as uh;
 import 'package:universal_html/parsing.dart';
@@ -343,6 +346,10 @@ String _fragmentMessage(uh.Document doc) {
 /// or from `report_select` radios when there is no script; neither is ever run nor sent. Any verification or other
 /// field refuses the form so the user falls back to the browser.
 ///
+/// With the forum's app API (plugin 2.6.0) [raw] is its write result ([tsdmAppWriteResultOf]): the dialog as a
+/// `page`, whose document is checked exactly as the fragment is; the forum's refusal (the error hook, a message
+/// page) is the forum's message, the login prompt is not logged in.
+///
 /// Throws [PostReportFailure] only.
 PostReportForm parsePostReportForm(String raw, {required PostReportTarget target}) {
   try {
@@ -355,13 +362,31 @@ PostReportForm parsePostReportForm(String raw, {required PostReportTarget target
 }
 
 PostReportForm _parsePostReportForm(String raw, {required PostReportTarget target}) {
-  if (isCloudflareChallengePage(parseHtmlDocument(raw))) {
-    throw const PostReportFailure(PostReportProblem.challenge);
+  final String html;
+  if (tsdmAppWriteResultOf(raw) case final result?) {
+    if (result.kind != TsdmAppWriteKind.page) {
+      if (result.login) {
+        throw const PostReportFailure(PostReportProblem.notLoggedIn);
+      }
+      final message = plainForumText(result.reason);
+      throw PostReportFailure(
+        message.isEmpty ? PostReportProblem.unsupported : PostReportProblem.forumMessage,
+        message: message.isEmpty ? null : message,
+      );
+    }
+    if (isCloudflareChallengePage(result.document)) {
+      throw const PostReportFailure(PostReportProblem.challenge);
+    }
+    html = result.documentHtml;
+  } else {
+    if (isCloudflareChallengePage(parseHtmlDocument(raw))) {
+      throw const PostReportFailure(PostReportProblem.challenge);
+    }
+    if (!raw.contains('<![CDATA[')) {
+      throw const PostReportFailure(PostReportProblem.unsupported);
+    }
+    html = unwrapAjax(raw);
   }
-  if (!raw.contains('<![CDATA[')) {
-    throw const PostReportFailure(PostReportProblem.unsupported);
-  }
-  final html = unwrapAjax(raw);
   final doc = parseHtmlDocument(html);
   if (_hasLoginMarker(doc, html)) {
     throw const PostReportFailure(PostReportProblem.notLoggedIn);
@@ -465,6 +490,61 @@ PostReportForm _parsePostReportForm(String raw, {required PostReportTarget targe
   return PostReportForm._(
     action: action,
     hidden: List.unmodifiable(hidden),
+    reasons: List.unmodifiable(reasons),
+    target: target,
+  );
+}
+
+/// The report form of [target] from the small form answer [form] of the forum's app API (plugin 3.0.0, `type:
+/// form`, `form: report`), checked as the dialog's form is: `rtype=post`, `rid`, `fid` and the handle key of
+/// [target], a form hash, `reportsubmit`, only the hidden fields the dialog is known to carry, a `url` of this post
+/// when there is one, `misc.php?mod=report` as the target (posted with `inajax=1`, as the website's `ajaxpost` does)
+/// and the `message` textarea; the reasons are the forum's own (`reasons`, the last one "other"). The forum's limit
+/// (`message.max` 200, cut and not refused) is the one [postReportReasonFits] models.
+///
+/// The caller has checked the account the answer was served to, and that the form is [SmallFormFields.usable].
+/// Throws [PostReportFailure] only: any mismatch refuses the form so the user falls back to the browser.
+PostReportForm postReportFormFromApi(SmallFormFields form, {required PostReportTarget target}) {
+  final json = form.json;
+  final fields = form.submitFields;
+  final action = _reportAction(withSmallFormInAjax(form.submitUrlRaw));
+  if (action == null ||
+      json['rtype'] != 'post' ||
+      tsdmAppInt(json['rid']) != target.pid ||
+      tsdmAppInt(json['fid']) != target.fid ||
+      fields.keys.any((name) => !_knownHiddenFields.contains(name) || _isVerificationField(name)) ||
+      (fields['formhash'] ?? '').isEmpty ||
+      (fields['reportsubmit'] ?? '').isEmpty ||
+      fields['rtype'] != 'post' ||
+      fields['rid'] != '${target.pid}' ||
+      fields['fid'] != '${target.fid}' ||
+      fields['handlekey'] != target.handleKey ||
+      (fields['inajax'] != null && fields['inajax'] != '1')) {
+    throw const PostReportFailure(PostReportProblem.unsupported);
+  }
+  final url = fields['url'];
+  if (url != null && url.isNotEmpty && !_isTargetUrl(url, target)) {
+    throw const PostReportFailure(PostReportProblem.unsupported);
+  }
+  final message = PostFormInput.fromJson(json['message']);
+  if (message == null || message.name != 'message' || message.type != 'textarea') {
+    throw const PostReportFailure(PostReportProblem.unsupported);
+  }
+  final reasons = switch (json['reasons']) {
+    final List<dynamic> list when list.every((e) => e is String) => list.cast<String>(),
+    _ => null,
+  };
+  if (reasons == null ||
+      reasons.length < 2 ||
+      reasons.toSet().length != reasons.length ||
+      reasons.any(
+        (e) => normalizePostReportReason(e).isEmpty || !postReportReasonFits(normalizePostReportReason(e)),
+      )) {
+    throw const PostReportFailure(PostReportProblem.unsupported);
+  }
+  return PostReportForm._(
+    action: action,
+    hidden: List.unmodifiable([for (final MapEntry(:key, :value) in fields.entries) (key, value)]),
     reasons: List.unmodifiable(reasons),
     target: target,
   );
@@ -635,12 +715,36 @@ enum _Arg { nil, number, either }
 /// Success is only `report_succeed`: the callback with `{}` and the `right` dialog of the same text. The callback alone
 /// is an explicit refusal. Anything else (text in comments, strings or plain html, another handle, other statements, a
 /// forward, another dialog mode, a bare 200) is [PostReportUnknown]: the forum may have stored the report.
+///
+/// With the forum's app API (plugin 2.6.0) [raw] is its write result ([tsdmAppWriteResultOf]), read the same way:
+/// the `handle` of this form's handle key is the success when the forum showed it as one (`alert` right, no values:
+/// `report_succeed`) and the explicit refusal otherwise (with the login prompt told apart); anything else is
+/// [PostReportUnknown].
 PostReportOutcome parsePostReportResult(String raw, {required PostReportForm form}) {
   try {
+    if (tsdmAppWriteResultOf(raw) case final result?) {
+      return _parsePostReportResultOf(result, form: form);
+    }
     return _parsePostReportResult(raw, form: form);
   } on Object {
     return const PostReportUnknown();
   }
+}
+
+PostReportOutcome _parsePostReportResultOf(TsdmAppWriteResult result, {required PostReportForm form}) {
+  if (result.kind != TsdmAppWriteKind.handle || result.handleKey != form.target.handleKey) {
+    return const PostReportUnknown();
+  }
+  final text = plainForumText(result.message);
+  if (result.succeeded) {
+    return result.alert == 'right' && result.values.isEmpty && text.isNotEmpty
+        ? PostReportSucceeded(text)
+        : const PostReportUnknown();
+  }
+  if (result.login || result.isError || result.alert.isEmpty) {
+    return PostReportRejected(text, notLoggedIn: result.login);
+  }
+  return const PostReportUnknown();
 }
 
 PostReportOutcome _parsePostReportResult(String raw, {required PostReportForm form}) {

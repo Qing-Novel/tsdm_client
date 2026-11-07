@@ -6,7 +6,6 @@ import 'package:dart_mappable/dart_mappable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:fpdart/fpdart.dart';
-import 'package:rxdart/rxdart.dart';
 import 'package:tsdm_client/exceptions/exceptions.dart';
 import 'package:tsdm_client/extensions/fp.dart';
 import 'package:tsdm_client/extensions/universal_html.dart';
@@ -14,43 +13,51 @@ import 'package:tsdm_client/features/authentication/repository/authentication_re
 import 'package:tsdm_client/features/authentication/repository/models/models.dart';
 import 'package:tsdm_client/features/authentication/utils/logged_user_parser.dart';
 import 'package:tsdm_client/features/homepage/models/models.dart';
+import 'package:tsdm_client/features/homepage/repository/guide_feed.dart';
+import 'package:tsdm_client/features/homepage/utils/homepage_api.dart';
 import 'package:tsdm_client/features/profile/repository/profile_repository.dart';
 import 'package:tsdm_client/features/profile/utils/parse_profile.dart';
 import 'package:tsdm_client/features/red_packet/models/models.dart';
 import 'package:tsdm_client/features/red_packet/utils/parse_red_packet.dart';
-import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/models/models.dart';
+import 'package:tsdm_client/shared/providers/cookie_provider/cookie_provider.dart';
 import 'package:tsdm_client/shared/repositories/forum_home_repository/forum_home_repository.dart';
+import 'package:tsdm_client/utils/load_failure.dart';
 import 'package:tsdm_client/utils/logger.dart';
 import 'package:universal_html/html.dart' as uh;
 
 part 'homepage_bloc.mapper.dart';
 part 'homepage_event.dart';
 part 'homepage_state.dart';
+part 'homepage_state_from_api.dart';
 
-/// Extension on [uh.Document] to extract user info.
-extension ExtractProfileAvatar on uh.Document {
-  /// Extract the user avatar url from the profile page.
-  String? extractAvatar() => parseProfileAvatarUrl(this);
-}
+/// What a page was asked as: the account the global cookie named and the identity epoch
+/// (`AuthenticationRepository.identityEpoch`) when it was asked.
+typedef _AskedAs = ({int? uid, int epoch});
 
 /// Bloc for the homepage of the app.
 class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
   /// Constructor.
+  ///
+  /// [guideFeed] is asked for the guide together with the page and reads the guide saved for the account
+  /// (`GuideSection` takes both from it).
   HomepageBloc({
     required ForumHomeRepository forumHomeRepository,
     required ProfileRepository profileRepository,
     required AuthenticationRepository authenticationRepository,
+    GuideFeed? guideFeed,
   }) : _forumHomeRepository = forumHomeRepository,
        _profileRepository = profileRepository,
        _authenticationRepository = authenticationRepository,
+       _guideFeed = guideFeed,
+       _shownPage = forumHomeRepository.getCache(),
        super(
          forumHomeRepository.hasCache()
-             ? _parseStateFromDocument(
+             ? _parseState(
                  forumHomeRepository.getCache()!,
                  authenticationRepository.currentUser?.username,
-                 avatarUrl: profileRepository.getCache()?.extractAvatar(),
+                 avatarUrl: profileRepository.getCache()?.avatarUrl,
                )
              : const HomepageState(),
        ) {
@@ -58,28 +65,53 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
     on<HomepageRefreshRequested>(_onHomepageRefreshRequested);
     on<HomepageDailyRedPacketCheckRequested>(_onDailyRedPacketCheckRequested);
     on<HomepageAuthChanged>(_onHomepageAuthChanged);
+    on<HomepagePageReplaced>(_onHomepagePageReplaced);
     on<HomepagePauseSwiper>(_onHomepagePauseSwiper);
     on<HomepageResumeSwiper>(_onHomepageResumeSwiper);
 
-    // Pair wise the latest two auth status so that we can check if only its
-    // inner data changed. For example switch user from one to anther keeps an
-    // authed state but the user is changed.
-    _authStatusSub = _authenticationRepository.status.pairwise().listen(
-      (statusList) =>
-          add(HomepageAuthChanged(prev: statusList.elementAtOrNull(statusList.length - 2), curr: statusList.last)),
+    // The daily rewards run after the page showed; the page asked once more after them replaces it.
+    _replacementSub = _forumHomeRepository.pageReplacements.listen(
+      (e) => add(HomepagePageReplaced(previous: e.previous, page: e.page)),
     );
+
+    // Every status from now on, the first one too (a switch may be the first status of the run: the stored login of
+    // the account the app started with was never verified); the one the stream replays to this new listener ended
+    // before, it is no change.
+    final replayed = _authenticationRepository.latestStatus;
+    var previous = replayed;
+    var first = true;
+    _authStatusSub = _authenticationRepository.status.listen((status) {
+      final isReplay = first && replayed != null && identical(status, replayed);
+      first = false;
+      if (isReplay) {
+        return;
+      }
+      add(HomepageAuthChanged(prev: previous, curr: status));
+      previous = status;
+    });
   }
 
   final ForumHomeRepository _forumHomeRepository;
   final ProfileRepository _profileRepository;
+  final GuideFeed? _guideFeed;
+  late final StreamSubscription<({ForumHomePage previous, ForumHomePage page})> _replacementSub;
+
+  /// The fetched page the state shows (null while none, or while the saved page shows): a page replacing it in the
+  /// background ([HomepagePageReplaced]) shows instead.
+  ForumHomePage? _shownPage;
 
   /// Do not dispose this repo because it is not the owner.
   final AuthenticationRepository _authenticationRepository;
-  late final StreamSubscription<List<AuthStatus>> _authStatusSub;
+  late final StreamSubscription<AuthStatus> _authStatusSub;
 
-  /// Bumped whenever the whole page is loaded again or the account changes; a daily red packet check that finishes
-  /// under another generation is stale and dropped.
+  /// Bumped whenever the whole page is loaded again or the account changes; a load, a refresh or a daily red packet
+  /// check that finishes under another generation is stale: what it brings is dropped, the newer one shows.
   int _pageGeneration = 0;
+
+  /// The account the page is loaded (or being loaded) for: the account whose cookie asked for it, then the account it
+  /// was served to. A login of another account (an account switch, the first status of the run included) reloads the
+  /// page; a login of this one (the page's own record of its account) does not.
+  int? _loadedFor;
 
   /// Build the swiper picture list from the `Kahrpba` plugin block.
   ///
@@ -113,139 +145,134 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
         .toList();
   }
 
-  /// For the following structure, filter and combine thread and its author.
-  ///
-  /// <div class="Kahrpba_threads">
-  ///   <a href="thread_url">
-  ///     thread_title
-  ///   </a>
-  ///   <a href="author_url">
-  ///     <em>author_name</em>
-  ///   </a>
-  ///
-  /// Filter out thread_url, thread_title, author_url and author_name.
-  ///
-  /// Where [element] is <div class="Kahrpba_threads"> node.
-  static PinnedThread? _filterThreadAndAuthors(uh.Element element) {
-    final allNode = element.querySelectorAll('a').toList();
-    // The "见习天使" (new members) tab lists one link per row, to the new member's space: "欢迎NAME加入~" (GitHub #155).
-    // The member is both the row and its "author", so the tile shows the avatar and name and opens the profile.
-    if (allNode.length == 1) {
-      final url = allNode.single.attributes['href'];
-      final text = allNode.single.firstEndDeepText()?.trim();
-      if (url == null || text == null || text.isEmpty || !url.contains('mod=space')) {
-        talker.info('skip pinned row with one link that is not a user space');
-        return null;
+  /// The tabs of the homepage block of the `Kahrpba` plugin read from the web page: [parsePinnedThreadGroups] of
+  /// the homepage API helpers, kept here for the tests of the page parser.
+  static List<PinnedThreadGroup> parsePinnedThreadGroups(uh.Document document) =>
+      parsePinnedThreadGroupsFromDocument(document);
+
+  /// Tell the authentication repository the account [page] was served to, as `loginWithDocument` reads it from
+  /// the web page: the structured answer names it in `user`. [asked] is the account whose cookie asked for it and the
+  /// identity epoch then ([_askedAs] before the fetch): a page that arrives after the session changed (a switch, a
+  /// login, a logout) records nothing ([IdentityChangedException]); the page is loaded again.
+  AsyncVoidEither _loginWithPage(ForumHomePage page, {required _AskedAs asked}) => switch (page) {
+    ForumHomeWebPage(:final document) => _authenticationRepository.loginWithDocument(
+      document,
+      fetchedAs: asked.uid,
+      epoch: asked.epoch,
+    ),
+    ForumHomeApiPage(:final json) => _authenticationRepository.loginWithServedUser(
+      servedUserOf(json),
+      guest: indexAnswerIsGuest(json),
+      fetchedAs: asked.uid,
+      epoch: asked.epoch,
+    ),
+  };
+
+  /// The account the global cookie names now (null when none, or no provider in tests) and the identity epoch now: what
+  /// a page asked now is asked as.
+  _AskedAs _askedAs() => (
+    uid: getIt.isRegistered<CookieProvider>() ? getIt.get<CookieProvider>().userLoginInfo.uid : null,
+    epoch: _authenticationRepository.identityEpoch,
+  );
+
+  /// The account [page] was served to, null for a guest or when it does not tell.
+  static int? _servedUidOf(ForumHomePage page) => switch (page) {
+    ForumHomeWebPage(:final document) => parseLoggedUidFromDocument(document),
+    ForumHomeApiPage(:final json) => servedUserOf(json)?.uid,
+  };
+
+  /// Record the account [page] was served to, [asked] as an account and under an identity epoch ([_askedAs]), for the
+  /// load of [generation]; false when the page must not be shown: the session changed since it was asked
+  /// ([IdentityChangedException]) or a newer load took over. On a change no newer load picked up yet, a refresh for the account in use now is asked here: the page never
+  /// stays loading.
+  Future<bool> _recordAccountOf(ForumHomePage page, {required _AskedAs asked, required int generation}) async {
+    if (generation == _pageGeneration) {
+      _loadedFor = _servedUidOf(page) ?? asked.uid;
+    }
+    final login = await _loginWithPage(page, asked: asked).run();
+    if (login case Left(value: IdentityChangedException())) {
+      debug('homepage served to the previous account, dropped');
+      if (generation == _pageGeneration) {
+        add(HomepageRefreshRequested());
       }
-      final name = RegExp('^欢迎(.+?)加入').firstMatch(text)?.group(1)?.trim();
-      return PinnedThread(
-        threadUrl: url,
-        threadTitle: text,
-        authorUrl: url,
-        authorName: name == null || name.isEmpty ? text : name,
-      );
+      return false;
     }
-    // There should be two <a> in children.
-    if (allNode.length != 2) {
-      talker.info(
-        'skip build thread author pair: '
-        'node count is ${allNode.length}',
-      );
-      return null;
-    }
-
-    final threadUrl = allNode[0].attributes['href'];
-    if (threadUrl == null) {
-      talker.info('skip incomplete thread author pair: thread url not found');
-      return null;
-    }
-
-    final threadTitle = allNode[0].firstEndDeepText();
-    if (threadTitle == null) {
-      talker.info('skip incomplete thread author pair: thread title not found');
-      return null;
-    }
-
-    final authorUrl = allNode[1].attributes['href'];
-    if (authorUrl == null) {
-      talker.info('skip incomplete thread author pair: author url not found');
-      return null;
-    }
-
-    final authorName = allNode[1].firstEndDeepText();
-    if (authorName == null) {
-      talker.info('skip incomplete thread author pair: author name not found');
-      return null;
-    }
-
-    return PinnedThread(threadUrl: threadUrl, threadTitle: threadTitle, authorUrl: authorUrl, authorName: authorName);
+    login.mapLeft(handle);
+    return generation == _pageGeneration;
   }
 
-  /// The tabs of the homepage block of the `Kahrpba` plugin (最新活动, 见习天使, ..., 发帖排行), in the order the
-  /// website shows them; tabs without any row the app can show are left out (GitHub #155).
-  static List<PinnedThreadGroup> parsePinnedThreadGroups(uh.Document document) {
-    final pinnedThreadGroupList = <PinnedThreadGroup>[];
-    final navNameList = document
-        .querySelector('td#Kahrpba_nav')
-        ?.children
-        .map((e) => e.firstEndDeepText())
-        .whereType<String>()
-        .toList();
-    final navShowList = document
-        .querySelector('td#Kahrpba_show')
-        ?.children
-        .where((e) => e.id.startsWith('Kahrpba_c'))
-        .whereType<uh.Element>()
-        .toList();
-
-    if (navNameList != null && navShowList != null && navNameList.length == navShowList.length) {
-      if (navNameList.length >= 7) {
-        navNameList
-          ..swap(4, 6)
-          ..swap(5, 6);
-      }
-      final count = navNameList.length;
-      for (var i = 0; i < count; i++) {
-        final threadList = navShowList[i]
-            .querySelectorAll('div.Kahrpba_threads')
-            .map(_filterThreadAndAuthors)
-            .whereType<PinnedThread>()
-            .toList();
-        // Kept even when empty here so the reordering below still finds every tab where it expects it; empty
-        // groups are left out after that.
-        final group = PinnedThreadGroup(title: navNameList[i], threadList: threadList);
-        pinnedThreadGroupList.add(group);
-      }
-
-      // The sort on server side is not as displayed, fix the sort to keep the
-      // same with website appearance.
-      if (pinnedThreadGroupList.length >= 7) {
-        pinnedThreadGroupList
-          ..swap(4, 5)
-          ..swap(5, 6);
-        // The rank is the last tab once reordered; marked before empty tabs are left out and the indices move.
-        pinnedThreadGroupList[6] = pinnedThreadGroupList[6].copyWith(isRank: true);
-      }
+  /// Ask the guide of the account [asked] together with the page: its card is built only once the page shows. Not
+  /// for a guest, whose homepage asks to log in and has no guide card.
+  void _prefetchGuide(_AskedAs asked) {
+    if ((asked.uid ?? 0) > 0) {
+      _guideFeed?.prefetch();
     }
-    // A tab without any row the app can show would be an empty card as tall as the full ones (GitHub #155).
-    pinnedThreadGroupList.removeWhere((e) => e.threadList.isEmpty);
-    return pinnedThreadGroupList;
   }
+
+  /// Show at once what the homepage showed last for the account [asked] while its page is asked again
+  /// (stale-while-revalidate): the page saved at the last fetch ([ForumHomeRepository.savedPageOf]) with the guide
+  /// saved for it ([GuideFeed.loadSaved]), for the load of [generation]. False when nothing is saved for the account,
+  /// it is too old, or the session changed meanwhile (nothing of another account ever shows).
+  ///
+  /// The saved page names no daily red packet and no form hash (the packet may be claimed meanwhile, the form hash
+  /// old), and records nothing about the account: only the fresh page does ([_recordAccountOf]).
+  Future<bool> _showSavedPage(Emitter<HomepageState> emit, {required _AskedAs asked, required int generation}) async {
+    final (saved, _) = await (
+      _forumHomeRepository.savedPageOf(asked.uid),
+      _guideFeed?.loadSaved(asked.uid) ?? Future<void>.value(),
+    ).wait;
+    if (saved == null || generation != _pageGeneration || _askedAs() != asked) {
+      return false;
+    }
+    debug('show saved homepage of ${saved.savedAt}');
+    emit(
+      _parseState(saved.page, null).copyWith(
+        savedAt: saved.savedAt,
+        dailyRedPacket: null,
+        formHash: null,
+        scrollSwiper: state.scrollSwiper,
+      ),
+    );
+    return true;
+  }
+
+  /// [failed] while the saved page shows ([HomepageState.savedAt]): it stays, with a retry; otherwise [failed].
+  HomepageState _failedOver(HomepageState failed) =>
+      state.savedAt != null && state.status == HomepageStatus.success ? state.copyWith(refreshFailed: true) : failed;
 
   Future<void> _onHomepageLoadRequested(HomepageLoadRequested event, Emitter<HomepageState> emit) async {
-    _pageGeneration++;
-    if (_forumHomeRepository.hasCache()) {
-      final s = _parseStateFromDocument(
-        _forumHomeRepository.getCache()!,
+    final generation = ++_pageGeneration;
+    final cached = _forumHomeRepository.getCache();
+    if (cached != null) {
+      _shownPage = cached;
+      final s = _parseState(
+        cached,
         _authenticationRepository.currentUser?.username,
         avatarUrl: state.loggedUserInfo?.avatarUrl,
       );
       emit(s);
       return;
     }
-    // Clear data.
-    emit(const HomepageState(status: HomepageStatus.loading));
+    final asked = _askedAs();
+    _loadedFor = asked.uid;
+    _prefetchGuide(asked);
+    if ((asked.uid ?? 0) <= 0 && _authenticationRepository.currentUser == null) {
+      // No account in use: the homepage asks to log in whatever the forum answers (the page is still asked, the
+      // topics tab shows it), so the login card shows at once instead of after the page.
+      debug('show guest homepage');
+      emit(const HomepageState(status: HomepageStatus.needLogin));
+    } else if (!await _showSavedPage(emit, asked: asked, generation: generation)) {
+      if (generation != _pageGeneration) {
+        return;
+      }
+      // Clear data.
+      emit(const HomepageState(status: HomepageStatus.loading));
+    }
     var needLogin = false;
+    // A request dropped: the account or its session changed while it was on its way (a login with the password of
+    // the same account too, which reloads nothing by itself).
+    var identityChanged = false;
+    AppException? failed;
     final respList = (await Future.wait([
       _forumHomeRepository.fetchHomePage().mapLeft((e) {
         if (e case HttpHandshakeFailedException(:final statusCode)) {
@@ -254,7 +281,10 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
           }
         } else if (e case LoginUserInfoNotFoundException()) {
           needLogin = true;
+        } else if (e case IdentityChangedException()) {
+          identityChanged = true;
         } else {
+          failed ??= e;
           handle(e);
         }
       }).run(),
@@ -262,71 +292,113 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
         switch (e) {
           case LoginUserInfoNotFoundException() || ProfileNeedLoginException():
             needLogin = true;
+          case IdentityChangedException():
+            identityChanged = true;
           default:
+            failed ??= e;
             handle(e);
         }
       }).run(),
     ])).where((e) => e.isRight()).map((e) => e.unwrap()).toList();
+    if (generation != _pageGeneration) {
+      // A newer load (an account change) took over: it shows the page.
+      return;
+    }
+    if (identityChanged) {
+      // Load it for the session in use now.
+      add(HomepageRefreshRequested());
+      return;
+    }
     if (respList.length != 2) {
       if (_authenticationRepository.currentUser == null && needLogin) {
-        emit(state.copyWith(status: HomepageStatus.needLogin));
+        if (state.status != HomepageStatus.needLogin) {
+          emit(const HomepageState(status: HomepageStatus.needLogin));
+        }
         return;
       } else {
-        emit(state.copyWith(status: HomepageStatus.failure));
+        emit(_failedOver(state.copyWith(status: HomepageStatus.failure, failure: LoadFailure.of(failed))));
         return;
       }
     }
-    final document = respList[0] as uh.Document;
+    final page = respList[0] as ForumHomePage;
     final avatarUrl = respList[1] as String;
-    await _authenticationRepository.loginWithDocument(document).mapLeft(handle).run();
-    // Parse data and change state.
-    final s = _parseStateFromDocument(document, _authenticationRepository.currentUser?.username, avatarUrl: avatarUrl);
-    emit(s);
+    if (!await _recordAccountOf(page, asked: asked, generation: generation)) {
+      return;
+    }
+    // Parse data and change state; the page the daily rewards replaced meanwhile, if they finished first.
+    final shown = _latestOf(page);
+    _shownPage = shown;
+    final s = _parseState(shown, _authenticationRepository.currentUser?.username, avatarUrl: avatarUrl);
+    emit(s.copyWith(scrollSwiper: state.scrollSwiper));
   }
 
   Future<void> _onHomepageRefreshRequested(HomepageRefreshRequested event, Emitter<HomepageState> emit) async {
-    _pageGeneration++;
-    // Clear data.
-    emit(const HomepageState(status: HomepageStatus.loading));
+    final generation = ++_pageGeneration;
+    final asked = _askedAs();
+    _loadedFor = asked.uid;
+    _shownPage = null;
+    _prefetchGuide(asked);
+    // An account switched to (or logged in again) shows what the homepage showed it last while its page is asked; a
+    // refresh asked by the user starts from a clean page.
+    if (event.userLoginInfo == null || !await _showSavedPage(emit, asked: asked, generation: generation)) {
+      if (generation != _pageGeneration) {
+        return;
+      }
+      // Clear data.
+      emit(const HomepageState(status: HomepageStatus.loading));
+    }
 
-    switch (await _forumHomeRepository.fetchHomePage(force: true).run()) {
+    final fetched = await _forumHomeRepository.fetchHomePage(force: true).run();
+    if (generation != _pageGeneration) {
+      // A newer load (an account change) took over: it shows the page.
+      return;
+    }
+    switch (fetched) {
+      case Left(value: IdentityChangedException()):
+        // The account changed while the page was fetched: load it for the account in use now.
+        add(HomepageRefreshRequested());
       case Left(:final value):
         handle(value);
         debug('failed to fetch dom: $value');
-        emit(state.copyWith(status: HomepageStatus.failure));
+        emit(_failedOver(state.copyWith(status: HomepageStatus.failure, failure: LoadFailure.of(value))));
       case Right(:final value):
-        await _authenticationRepository
-            .loginWithDocument(value)
-            .mapLeft((e) {
-              handle(e);
-              emit(state.copyWith(status: HomepageStatus.failure));
-            })
-            .map((v) => v)
-            .run();
+        if (!await _recordAccountOf(value, asked: asked, generation: generation)) {
+          return;
+        }
         final loggedUser = _authenticationRepository.currentUser;
         if (loggedUser == null) {
           emit(const HomepageState(status: HomepageStatus.needLogin));
           return;
         }
         final d2 = await _profileRepository.fetchProfile(force: true).run();
-        if (d2.isLeft()) {
-          handle(d2.unwrapErr());
-          emit(state.copyWith(status: HomepageStatus.failure));
+        if (generation != _pageGeneration) {
           return;
         }
-        final avatarUrl = d2.unwrap().extractAvatar();
-        // Parse data and change state.
-        final s = _parseStateFromDocument(value, _authenticationRepository.currentUser?.username, avatarUrl: avatarUrl);
-        emit(s);
+        if (d2 case Left(value: IdentityChangedException())) {
+          // The session changed while the profile was fetched: load the page for the one in use now.
+          add(HomepageRefreshRequested());
+          return;
+        }
+        if (d2.isLeft()) {
+          handle(d2.unwrapErr());
+          emit(_failedOver(state.copyWith(status: HomepageStatus.failure, failure: LoadFailure.of(d2.unwrapErr()))));
+          return;
+        }
+        final avatarUrl = d2.unwrap().avatarUrl;
+        // Parse data and change state; the page the daily rewards replaced meanwhile, if they finished first.
+        final shown = _latestOf(value);
+        _shownPage = shown;
+        final s = _parseState(shown, _authenticationRepository.currentUser?.username, avatarUrl: avatarUrl);
+        emit(s.copyWith(scrollSwiper: state.scrollSwiper));
     }
   }
 
   /// Ask the forum again for today's daily red packet only (its entry on the greeting card had none).
   ///
-  /// The homepage document is fetched like a refresh does (same identity checks and daily rewards handling in
+  /// The homepage is fetched like a refresh does (same identity checks and daily rewards handling in
   /// [ForumHomeRepository]), but only [HomepageState.dailyRedPacket] and [HomepageState.formHash] change: the loaded
   /// page stays on screen, nothing else is reloaded. The answer is dropped when the page was reloaded or the account
-  /// changed meanwhile, or when the document belongs to another account.
+  /// changed meanwhile, or when the page belongs to another account.
   Future<void> _onDailyRedPacketCheckRequested(
     HomepageDailyRedPacketCheckRequested event,
     Emitter<HomepageState> emit,
@@ -354,48 +426,74 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
       case Left(:final value):
         handle(value);
         emit(state.copyWith(checkingDailyRedPacket: false));
-      case Right(:final value) when parseLoggedUidFromDocument(value) != uid:
+      case Right(:final value) when value.servedUid != uid:
         debug('drop the daily red packet check for uid $uid: the page belongs to another account');
         emit(state.copyWith(checkingDailyRedPacket: false));
       case Right(:final value):
+        // The page the packet was read from is the page the daily rewards may replace now.
+        final shown = _latestOf(value);
+        _shownPage = shown;
         emit(
-          state.copyWith(
-            checkingDailyRedPacket: false,
-            dailyRedPacket: parseDailyRedPacketConfig(value),
-            formHash: parseFormHash(value),
-          ),
+          state.copyWith(checkingDailyRedPacket: false, dailyRedPacket: shown.dailyRedPacket, formHash: shown.formHash),
         );
     }
   }
 
-  Future<void> _onHomepageAuthChanged(HomepageAuthChanged event, Emitter<HomepageState> emit) async {
-    if (event.prev != event.curr) {
-      _pageGeneration++;
-      // The cached `forum.php` was served to the previous user (or guest); nobody may show it again, and the
-      // forced refresh below can fail (rate limit, offline), so drop it now rather than after the refresh.
-      _forumHomeRepository.invalidate();
-    }
-    if (event.curr is AuthStatusNotAuthed &&
-        state.status != HomepageStatus.loading &&
-        state.status != HomepageStatus.needLogin) {
-      // Start from a clean state: keeping the old `loggedUserInfo` would leave the avatar and the logged-in
-      // actions in the app bar after logging out.
-      emit(const HomepageState(status: HomepageStatus.needLogin));
+  /// [page] or the page it was replaced with in the background, when that one is of the same account.
+  ForumHomePage _latestOf(ForumHomePage page) {
+    final latest = _forumHomeRepository.latestOf(page);
+    return latest.servedUid == page.servedUid ? latest : page;
+  }
+
+  /// The page shown was replaced in the background after the daily rewards: show the new one, while it is still the
+  /// page shown, fresh, and of the account in use.
+  void _onHomepagePageReplaced(HomepagePageReplaced event, Emitter<HomepageState> emit) {
+    if (!identical(event.previous, _shownPage) ||
+        state.status != HomepageStatus.success ||
+        state.savedAt != null ||
+        event.page.servedUid != _authenticationRepository.currentUser?.uid) {
       return;
     }
-    if (event.curr is AuthStatusAuthed &&
-        // Bloc state changes from not authed to authed.
-        (state.status == HomepageStatus.needLogin ||
-            state.status == HomepageStatus.failure ||
-            // Still authed, now and then, but user changed.
-            event.prev != event.curr)) {
-      // FIXME: anti-pattern
-      final settings = getIt.get<SettingsRepository>().currentSettings;
-      add(
-        HomepageRefreshRequested(
-          userLoginInfo: UserLoginInfo(username: settings.loginUsername, uid: settings.loginUid),
-        ),
-      );
+    debug('show the homepage reloaded after the daily rewards');
+    _shownPage = event.page;
+    emit(
+      _parseState(
+        event.page,
+        _authenticationRepository.currentUser?.username,
+        avatarUrl: state.loggedUserInfo?.avatarUrl,
+      ).copyWith(scrollSwiper: state.scrollSwiper, checkingDailyRedPacket: state.checkingDailyRedPacket),
+    );
+  }
+
+  Future<void> _onHomepageAuthChanged(HomepageAuthChanged event, Emitter<HomepageState> emit) async {
+    switch (event.curr) {
+      case AuthStatusNotAuthed():
+        if (event.prev != event.curr) {
+          _pageGeneration++;
+          _loadedFor = null;
+          _shownPage = null;
+          // The cached `forum.php` was served to the previous user; nobody may show it again.
+          _forumHomeRepository.invalidate();
+        }
+        if (state.status != HomepageStatus.needLogin) {
+          // Start from a clean state: keeping the old `loggedUserInfo` would leave the avatar and the logged-in
+          // actions in the app bar after logging out. Also while loading: that load is stale now and shows nothing.
+          emit(const HomepageState(status: HomepageStatus.needLogin));
+        }
+      case AuthStatusAuthed(:final userInfo) when userInfo.uid != _loadedFor:
+        // Another account than the page is (being) loaded for, the first status of the run included (a switch
+        // before the stored login was verified): the cached `forum.php` was served to the previous one (or a guest),
+        // nobody may show it again, and the forced refresh below can fail (rate limit, offline), so drop it now.
+        _pageGeneration++;
+        _shownPage = null;
+        _forumHomeRepository.invalidate();
+        add(HomepageRefreshRequested(userLoginInfo: userInfo));
+      case AuthStatusAuthed(:final userInfo)
+          when state.status == HomepageStatus.needLogin || state.status == HomepageStatus.failure:
+        // The same account logged in again after the page failed or asked for a login.
+        add(HomepageRefreshRequested(userLoginInfo: userInfo));
+      case AuthStatusAuthed() || AuthStatusLoading() || AuthStatusUnknown():
+        break;
     }
   }
 
@@ -411,6 +509,14 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
   @visibleForTesting
   static HomepageState parseStateForTest(uh.Document document, String? username, {String? avatarUrl}) =>
       _parseStateFromDocument(document, username, avatarUrl: avatarUrl);
+
+  /// The state of [page], for the account [username] with the avatar [avatarUrl] the app has: the web page parsed
+  /// as before ([_parseStateFromDocument]), the structured answer of the forum's app API built from its fields
+  /// ([homepageStateFromApi]).
+  static HomepageState _parseState(ForumHomePage page, String? username, {String? avatarUrl}) => switch (page) {
+    ForumHomeWebPage(:final document) => _parseStateFromDocument(document, username, avatarUrl: avatarUrl),
+    ForumHomeApiPage(:final json) => homepageStateFromApi(json, username, avatarUrl: avatarUrl),
+  };
 
   static HomepageState _parseStateFromDocument(uh.Document document, String? username, {String? avatarUrl}) {
     final swiperUrlList = <SwiperUrl>[];
@@ -486,7 +592,7 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
       avatarUrl: loggedUserAvatar,
     );
 
-    pinnedThreadGroupList.addAll(parsePinnedThreadGroups(document));
+    pinnedThreadGroupList.addAll(parsePinnedThreadGroupsFromDocument(document));
     // Discuz! X5 renders the unread state in the page header; keep it so the badge can show up right away.
     final (unreadNoticeCount, hasUnreadMessage) = buildUnreadInfoStatus(document);
     return HomepageState(
@@ -506,6 +612,7 @@ class HomepageBloc extends Bloc<HomepageEvent, HomepageState> with LoggerMixin {
   @override
   Future<void> close() async {
     await _authStatusSub.cancel();
+    await _replacementSub.cancel();
     await super.close();
   }
 }

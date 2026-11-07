@@ -33,9 +33,59 @@ final class ThreadVisitHistoryDao extends DatabaseAccessor<AppDatabase> with _$T
         .get();
   }
 
+  /// An event whenever a visit record of user [uid] is added, removed, visited again or read further (the cross-device
+  /// sync schedules a write on it): the times of the records, which every such change moves.
+  Stream<void> watchChangesByUid(int uid) {
+    final t = threadVisitHistory;
+    final query = selectOnly(t)
+      ..addColumns([t.tid, t.visitTime, t.progressUpdated])
+      ..where(t.uid.equals(uid));
+    return query.watch().map((_) {});
+  }
+
+  /// The threads user [uid] visited (by tid) with where the reading stopped, again whenever the table changes.
+  Stream<Map<int, ({int? page, int? pid, int? floor, int? seenReplies})>> watchProgressByUid(int uid) {
+    final t = threadVisitHistory;
+    final query = selectOnly(t)
+      ..addColumns([t.tid, t.lastPage, t.lastPid, t.lastFloor, t.seenReplies])
+      ..where(t.uid.equals(uid));
+    return query.watch().map(
+      (rows) => {
+        for (final row in rows)
+          row.read(t.tid)!: (
+            page: row.read(t.lastPage),
+            pid: row.read(t.lastPid),
+            floor: row.read(t.lastFloor),
+            seenReplies: row.read(t.seenReplies),
+          ),
+      },
+    );
+  }
+
+  /// Keep where user [uid] stopped reading thread [tid] on its visit record; nothing when the visit is not recorded.
+  /// [progressUpdated] is when the progress was written (the cross-device sync tells the later progress by it);
+  /// absent, the stored time stays.
+  Future<int> updateProgress({
+    required int uid,
+    required int tid,
+    required int? page,
+    required int? pid,
+    required int? floor,
+    required int? seenReplies,
+    DateTime? progressUpdated,
+  }) => (update(threadVisitHistory)..where((e) => e.uid.equals(uid) & e.tid.equals(tid))).write(
+    ThreadVisitHistoryCompanion(
+      lastPage: Value(page),
+      lastPid: Value(pid),
+      lastFloor: Value(floor),
+      seenReplies: Value(seenReplies),
+      progressUpdated: Value.absentIfNull(progressUpdated),
+    ),
+  );
+
   /// Insert or update item [companion].
   ///
-  /// All info are provided by the caller.
+  /// All info are provided by the caller. Columns the companion leaves absent (the reading progress) keep their value.
   Future<int> upsertVisitHistory(ThreadVisitHistoryCompanion companion) async {
     return into(threadVisitHistory).insertOnConflictUpdate(companion);
   }

@@ -44,6 +44,8 @@ class Notice with NoticeMappable {
     required this.score,
     required this.quotedMessage,
     required this.taskId,
+    this.ignoreType,
+    this.authorId,
   });
 
   /// User avatar.
@@ -99,6 +101,13 @@ class Notice with NoticeMappable {
   ///
   /// Only useful when NoticeType is batchRate.
   final String? taskId;
+
+  /// Notice type from the notice's own ignore link (`post`, `at`, `rate`, `system`...), the same `type` the forum's
+  /// app API gives; null when the link is absent.
+  final String? ignoreType;
+
+  /// Uid of the user who triggered the notice, from the notice's own ignore link; null when the link is absent.
+  final int? authorId;
 
   /// Parse the notice id from the `<dl>` node.
   ///
@@ -186,6 +195,29 @@ class Notice with NoticeMappable {
     return null;
   }
 
+  /// The name of the user [authorId] in the notice body [body]: the text of the first link to that user's space
+  /// (`home.php?mod=space&uid=N`), which is how every notice of a user names its author.
+  ///
+  /// Null for a system notice (author 0), an unknown author or when no such link is there: other links of the body
+  /// name other users (the rater of a batch rate, the member a rate track is about) and are never taken.
+  static String? parseAuthorName(uh.Element? body, int? authorId) {
+    if (body == null || authorId == null || authorId <= 0) {
+      return null;
+    }
+    for (final a in body.querySelectorAll('a[href]')) {
+      final href = a.attributes['href'];
+      // A link with `do=` is a page of the space (the wall of a wall notice), not the user.
+      if (uidOfProfileUrl(href) != authorId || href!.contains('do=')) {
+        continue;
+      }
+      final name = a.innerText.trim();
+      if (name.isNotEmpty) {
+        return name;
+      }
+    }
+    return null;
+  }
+
   /// Convert a `<dl>` notice node in the notice page into [NoticeV2].
   ///
   /// Return null if any of id, time or body not found.
@@ -206,6 +238,61 @@ class Notice with NoticeMappable {
       alreadyRead: alreadyRead,
       ignoreType: target?.type,
       authorId: target?.authorId,
+      author: parseAuthorName(element.querySelector('dd.ntc_body'), target?.authorId),
+    );
+  }
+
+  /// Convert a notice of the `notify` answer of the forum's app API (plugin 1.9.0) into [NoticeV2], the same as
+  /// [toV2] gives for that notice on the notice page.
+  ///
+  /// The answer's `note` is the html the notice page prints in `dd.ntc_body` as it is, and the page prints the ignore
+  /// link from the notice's `authorid` and `type`. Both are put in a notice node of the same shape and read by the
+  /// same parsers ([buildBodyHtml], [parseIgnoreTarget]): the body gets the same absolute urls and image sources, a
+  /// system notice (author 0) the same target. The time is the one the page path reads ([apiTimeOf], with the
+  /// [timeOffset] of the answer). Unread is the answer's `new`. Return null if id, time or note is missing.
+  static NoticeV2? toV2FromApi(Map<String, dynamic> json, {required num timeOffset}) {
+    final id = json['id'];
+    final dateline = json['dateline'];
+    final note = json['note'];
+    if (id is! int || dateline is! int || note is! String) {
+      talker.error('failed to build notice v2 from the app api: id=$id, dateline=$dateline, hasNote=${note is String}');
+      return null;
+    }
+    final authorId = json['authorid'] is int ? json['authorid'] : '';
+    final type = json['type'] is String ? json['type'] : '';
+    // The markup of the notice page (`template/default/home/space_notice.php`): the template compiler escapes the `&`
+    // of the link, the values are printed as they are.
+    const ignore = 'home.php?mod=spacecp&amp;ac=common&amp;op=ignore';
+    final ignoreUrl = '$ignore&amp;authorid=$authorId&amp;type=$type&amp;handlekey=noticeignore';
+    final element = parseHtmlDocument(
+      '<html><body><div class="nts"><dl class="cl" notice="$id" id="notice_$id"><dt><a class="d b" '
+      'href="$ignoreUrl" id="a_note_$id">屏蔽</a></dt><dd class="ntc_body">$note</dd></dl></div></body></html>',
+    ).querySelector('div.nts > dl');
+    final data = element == null ? null : buildBodyHtml(element);
+    if (element == null || data == null) {
+      talker.error('failed to build notice v2 from the app api: no body for notice $id');
+      return null;
+    }
+    final target = parseIgnoreTarget(element);
+    final author = json['author'];
+    final fromId = json['from_id'];
+    final fromIdType = json['from_idtype'];
+    return NoticeV2(
+      id: id,
+      timestamp: apiTimeOf(dateline, timeOffset),
+      data: data,
+      alreadyRead: json['new'] == 0,
+      ignoreType: target?.type,
+      authorId: target?.authorId,
+      // The name of the author's link in the body first, as the notice page path reads it: the forum writes the
+      // `author` column with the name of whoever made the request, which is not always the author (a reply held for
+      // moderation is announced by the moderator's request, `authorid` is still the replier). The column is only
+      // taken when the body links no such user; a system notice (author 0) has none.
+      author:
+          parseAuthorName(element.querySelector('dd.ntc_body'), target?.authorId) ??
+          (author is String && author.trim().isNotEmpty && (target?.authorId ?? 0) > 0 ? author.trim() : null),
+      fromId: fromId is int && fromId > 0 ? fromId : null,
+      fromIdType: fromIdType is String && fromIdType.isNotEmpty ? fromIdType : null,
     );
   }
 
@@ -366,7 +453,10 @@ class Notice with NoticeMappable {
       return null;
     }
 
+    final ignoreTarget = parseIgnoreTarget(element);
     return Notice(
+      ignoreType: ignoreTarget?.type,
+      authorId: ignoreTarget?.authorId,
       userAvatarUrl: userAvatarUrl,
       noticeTime: noticeTime,
       noticeTimeString: noticeTimeString ?? '',
@@ -382,6 +472,23 @@ class Notice with NoticeMappable {
       taskId: taskId,
     );
   }
+}
+
+/// The time (seconds) of a notification of the forum's app API that carries [seconds] (the real time) for a member
+/// whose times the forum shows with an offset of [offsetHours] (`timeoffset` of the answer), the same number the web
+/// page path reads for it.
+///
+/// The pages show a time as the member's wall clock to the minute (`Y-n-j H:i`), and the page parsers read that text
+/// as the device's local time (`parseToDateTimeUtc8`, which does not apply +8: a bug of the page path, left as it is
+/// here). This takes the same wall clock from [seconds] and [offsetHours] and reads it the same way, so a notice, a
+/// conversation or a broadcast message has the same time whichever path fetched it, whatever the device's zone: the
+/// stored copies are reconciled by time (a newer copy is a new event, unread again; an older one is dropped as
+/// stale), and a copy the API gives must not be "newer" or "older" than the copy a fetch that falls back to the pages
+/// (an older plugin, an answer refused as too soon) reads. It is the real time to the minute when the device's zone
+/// is the member's offset, as on most devices. The bound of the next fetch is a whole minute (`nextFetchBound`).
+int apiTimeOf(int seconds, num offsetHours) {
+  final wall = DateTime.fromMillisecondsSinceEpoch((seconds + (offsetHours * 3600).round()) * 1000, isUtc: true);
+  return DateTime(wall.year, wall.month, wall.day, wall.hour, wall.minute).millisecondsSinceEpoch ~/ 1000;
 }
 
 /// Get the image url of an `<img>` node, lazy loaded images use `data-src`.

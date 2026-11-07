@@ -53,9 +53,43 @@ class SettingsMap with SettingsMapMappable {
     required this.threadFloorInteractionMode,
     required this.textScaleFactor,
     required this.threadContentScale,
+    this.threadContentLineHeight = PostTypography.defaultLineHeight,
+    this.threadContentParagraphSpacing = PostTypography.defaultParagraphSpacing,
+    this.threadContentSplitLongParagraphs = false,
+    this.threadCardShowExcerpt = true,
+    this.threadCardThumbnailMode = 1,
+    this.threadCardExternalThumbnails = false,
     this.windowMaximized = false,
     this.enableBackgroundMessageService = false,
+    this.notificationPermissionPrompted = false,
+    this.backgroundSyncAllAccounts = false,
+    this.notificationHideContent = false,
+    this.notifyReply = true,
+    this.notifyMention = true,
+    this.notifyRate = true,
+    this.notifyPersonalMessage = true,
+    this.notifySystem = true,
+    this.notifyQuietHours = false,
+    this.notifyQuietStart = 1380,
+    this.notifyQuietEnd = 480,
     this.autoDailyRedPacket = false,
+    this.highRefreshRate = true,
+    this.offlineThreads = false,
+    this.offlineThreadsLimit = 50,
+    this.enableAppPostRenderer = false,
+    this.postImageAutoLoad = 0,
+    this.editorQuickPhrases = '',
+    this.homepagePinnedGroup = '',
+    this.threadOpenPosition = 1,
+    this.threadSwipePaging = false,
+    this.twoPaneLayout = true,
+    this.themeModeScheduled = false,
+    this.darkScheduleStart = 1320,
+    this.darkScheduleEnd = 420,
+    this.crossDeviceSync = true,
+    this.crossDeviceSyncRateTemplates = true,
+    this.crossDeviceSyncSettings = true,
+    this.crossDeviceSyncDrafts = true,
   });
 
   final String netClientAccept;
@@ -85,6 +119,20 @@ class SettingsMap with SettingsMapMappable {
   final bool threadCardHighlightRecentThread;
   final bool threadCardHighlightAuthorName;
   final bool threadCardHighlightInfoRow;
+
+  /// Whether the thread lists show the excerpt of the first floor. Not required: backups from older versions lack it.
+  final bool threadCardShowExcerpt;
+
+  /// When the thread lists show a thumbnail, the index of a [ThreadThumbnailMode]. Not required: backups from older
+  /// versions lack it.
+  final int threadCardThumbnailMode;
+
+  /// Whether the thumbnails of the thread lists load the images of other sites too. Not required: backups from older
+  /// versions lack it.
+  final bool threadCardExternalThumbnails;
+
+  /// When the thread lists show a thumbnail.
+  ThreadThumbnailMode get threadThumbnailMode => ThreadThumbnailMode.fromIndex(threadCardThumbnailMode);
   final String netClientProxy;
   final bool netClientUseProxy;
   final bool autoCheckin;
@@ -96,6 +144,37 @@ class SettingsMap with SettingsMapMappable {
 
   /// Whether the Android background message service is on. Not required: backups from older versions lack it.
   final bool enableBackgroundMessageService;
+
+  /// Whether the auto sync polls every saved account. Not required: backups from older versions lack it.
+  final bool backgroundSyncAllAccounts;
+
+  /// Whether the system notifications only show the counts, no content. Not required: backups from older versions
+  /// lack it.
+  final bool notificationHideContent;
+
+  /// See `SettingsKeys.notifyReply`. Not required: backups from older versions lack it.
+  final bool notifyReply;
+
+  /// See `SettingsKeys.notifyMention`. Not required: backups from older versions lack it.
+  final bool notifyMention;
+
+  /// See `SettingsKeys.notifyRate`. Not required: backups from older versions lack it.
+  final bool notifyRate;
+
+  /// See `SettingsKeys.notifyPersonalMessage`. Not required: backups from older versions lack it.
+  final bool notifyPersonalMessage;
+
+  /// See `SettingsKeys.notifySystem`. Not required: backups from older versions lack it.
+  final bool notifySystem;
+
+  /// See `SettingsKeys.notifyQuietHours`. Not required: backups from older versions lack it.
+  final bool notifyQuietHours;
+
+  /// See `SettingsKeys.notifyQuietStart`. Not required: backups from older versions lack it.
+  final int notifyQuietStart;
+
+  /// See `SettingsKeys.notifyQuietEnd`. Not required: backups from older versions lack it.
+  final int notifyQuietEnd;
   final bool enableDebugOperations;
   final String fontFamily;
   final bool enableEditorBBCodeParser;
@@ -105,9 +184,90 @@ class SettingsMap with SettingsMapMappable {
   final bool enableAutoClearImageCache;
   final int autoClearImageCacheDuration;
   final bool collapseAppBarWhenScroll;
+  final bool notificationPermissionPrompted;
   final ThreadFloorInteractionMode threadFloorInteractionMode;
+
+  /// Index of a [ThreadOpenPosition]. Not required: backups from older versions lack it.
+  final int threadOpenPosition;
+
+  /// Swipe the floors sideways to change pages. Not required: backups from older versions lack it.
+  final bool threadSwipePaging;
+
+  /// Wide windows show a list page and the thread opened from it side by side. Not required: backups from older
+  /// versions lack it.
+  final bool twoPaneLayout;
+
+  /// Sync the reading progress, the quick phrases and the block list across devices (the rate templates, the reading
+  /// settings and the drafts each on their own switch too). Not required: backups from older
+  /// versions lack it.
+  final bool crossDeviceSync;
+
+  /// With [crossDeviceSync], sync the fast rate templates. Not required: backups from older versions lack it.
+  final bool crossDeviceSyncRateTemplates;
+
+  /// With [crossDeviceSync], sync the reading and display settings. Not required: backups from older versions lack it.
+  final bool crossDeviceSyncSettings;
+
+  /// With [crossDeviceSync], sync the local drafts. Not required: backups from older versions lack it.
+  final bool crossDeviceSyncDrafts;
+
+  /// The clock decides the theme. Not required: backups from older versions lack it.
+  final bool themeModeScheduled;
+
+  /// Start of the dark hours, minutes after midnight. Not required: backups from older versions lack it.
+  final int darkScheduleStart;
+
+  /// End of the dark hours, minutes after midnight. Not required: backups from older versions lack it.
+  final int darkScheduleEnd;
+
+  /// Where a thread read before opens from a list.
+  ThreadOpenPosition get openPosition => ThreadOpenPosition.fromIndex(threadOpenPosition);
   final double textScaleFactor;
   final double threadContentScale;
+
+  /// Line height of the post content. Not required: backups from older versions lack it.
+  final double threadContentLineHeight;
+
+  /// Space between the paragraphs of the post content. Not required: backups from older versions lack it.
+  final double threadContentParagraphSpacing;
+
+  /// Whether long paragraphs of the post content are cut after the end of a sentence. Not required: backups from older
+  /// versions lack it.
+  final bool threadContentSplitLongParagraphs;
+
+  /// How the post content is laid out with these settings, in the ranges the settings offer (a value from an older
+  /// backup or written by hand is clamped).
+  PostTypography get postTypography => PostTypography(
+    lineHeight: threadContentLineHeight,
+    paragraphSpacing: threadContentParagraphSpacing,
+    splitLongParagraphs: threadContentSplitLongParagraphs,
+  ).clamped();
+
+  /// Whether Android runs at the highest refresh rate of the screen. Not required: backups from older versions lack it.
+  final bool highRefreshRate;
+
+  /// Whether the thread pages loaded are saved for reading without network. Not required: backups from older versions
+  /// lack it.
+  final bool offlineThreads;
+
+  /// How many threads the offline pages are kept for. Not required: backups from older versions lack it.
+  final int offlineThreadsLimit;
+
+  /// Whether floors are rendered from their bbcode by the app (experimental). Not required: backups from older
+  /// versions lack it.
+  final bool enableAppPostRenderer;
+
+  /// Title of the pinned thread group last selected on the phone homepage, empty for the first one. Not required:
+  /// backups from older versions lack it.
+  final String homepagePinnedGroup;
+
+  /// When the pictures of the posts load by themselves, the index of a `PostImageAutoLoad`. Not required: backups from
+  /// older versions lack it.
+  final int postImageAutoLoad;
+
+  /// The quick phrases of the editors' toolbar button, a JSON list of strings in the user's order (see
+  /// `decodeQuickPhrases`). Not required: backups from older versions lack it.
+  final String editorQuickPhrases;
 
   SettingsMap copyWithKey<T>(SettingsKeys<T> key, T? value) {
     assert(
@@ -144,6 +304,9 @@ class SettingsMap with SettingsMapMappable {
       SettingsKeys.threadCardHighlightRecentThread => copyWith(threadCardHighlightRecentThread: value as bool?),
       SettingsKeys.threadCardHighlightAuthorName => copyWith(threadCardHighlightAuthorName: value as bool?),
       SettingsKeys.threadCardHighlightInfoRow => copyWith(threadCardHighlightInfoRow: value as bool?),
+      SettingsKeys.threadCardShowExcerpt => copyWith(threadCardShowExcerpt: value as bool?),
+      SettingsKeys.threadCardThumbnailMode => copyWith(threadCardThumbnailMode: value as int?),
+      SettingsKeys.threadCardExternalThumbnails => copyWith(threadCardExternalThumbnails: value as bool?),
       SettingsKeys.netClientProxy => copyWith(netClientProxy: value as String?),
       SettingsKeys.netClientUseProxy => copyWith(netClientUseProxy: value as bool?),
       SettingsKeys.autoCheckin => copyWith(autoCheckin: value as bool?),
@@ -153,6 +316,16 @@ class SettingsMap with SettingsMapMappable {
       SettingsKeys.showUnreadBroadcastMessageBadge => copyWith(showUnreadBroadcastMessageBadge: value as bool?),
       SettingsKeys.autoSyncNoticeSeconds => copyWith(autoSyncNoticeSeconds: value as int?),
       SettingsKeys.enableBackgroundMessageService => copyWith(enableBackgroundMessageService: value as bool?),
+      SettingsKeys.backgroundSyncAllAccounts => copyWith(backgroundSyncAllAccounts: value as bool?),
+      SettingsKeys.notificationHideContent => copyWith(notificationHideContent: value as bool?),
+      SettingsKeys.notifyReply => copyWith(notifyReply: value as bool?),
+      SettingsKeys.notifyMention => copyWith(notifyMention: value as bool?),
+      SettingsKeys.notifyRate => copyWith(notifyRate: value as bool?),
+      SettingsKeys.notifyPersonalMessage => copyWith(notifyPersonalMessage: value as bool?),
+      SettingsKeys.notifySystem => copyWith(notifySystem: value as bool?),
+      SettingsKeys.notifyQuietHours => copyWith(notifyQuietHours: value as bool?),
+      SettingsKeys.notifyQuietStart => copyWith(notifyQuietStart: value as int?),
+      SettingsKeys.notifyQuietEnd => copyWith(notifyQuietEnd: value as int?),
       SettingsKeys.enableDebugOperations => copyWith(enableDebugOperations: value as bool?),
       SettingsKeys.fontFamily => copyWith(fontFamily: value as String?),
       SettingsKeys.enableEditorBBCodeParser => copyWith(enableEditorBBCodeParser: value as bool?),
@@ -162,11 +335,32 @@ class SettingsMap with SettingsMapMappable {
       SettingsKeys.enableAutoClearImageCache => copyWith(enableAutoClearImageCache: value as bool?),
       SettingsKeys.autoClearImageCacheDuration => copyWith(autoClearImageCacheDuration: value as int?),
       SettingsKeys.collapseAppBarWhenScroll => copyWith(collapseAppBarWhenScroll: value as bool?),
+      SettingsKeys.threadOpenPosition => copyWith(threadOpenPosition: value as int?),
+      SettingsKeys.threadSwipePaging => copyWith(threadSwipePaging: value as bool?),
+      SettingsKeys.twoPaneLayout => copyWith(twoPaneLayout: value as bool?),
+      SettingsKeys.crossDeviceSync => copyWith(crossDeviceSync: value as bool?),
+      SettingsKeys.crossDeviceSyncRateTemplates => copyWith(crossDeviceSyncRateTemplates: value as bool?),
+      SettingsKeys.crossDeviceSyncSettings => copyWith(crossDeviceSyncSettings: value as bool?),
+      SettingsKeys.crossDeviceSyncDrafts => copyWith(crossDeviceSyncDrafts: value as bool?),
+      SettingsKeys.themeModeScheduled => copyWith(themeModeScheduled: value as bool?),
+      SettingsKeys.darkScheduleStart => copyWith(darkScheduleStart: value as int?),
+      SettingsKeys.darkScheduleEnd => copyWith(darkScheduleEnd: value as int?),
       SettingsKeys.threadFloorInteractionMode => copyWith(
         threadFloorInteractionMode: value as ThreadFloorInteractionMode?,
       ),
       SettingsKeys.textScaleFactor => copyWith(textScaleFactor: value as double?),
       SettingsKeys.threadContentScale => copyWith(threadContentScale: value as double?),
+      SettingsKeys.threadContentLineHeight => copyWith(threadContentLineHeight: value as double?),
+      SettingsKeys.threadContentParagraphSpacing => copyWith(threadContentParagraphSpacing: value as double?),
+      SettingsKeys.threadContentSplitLongParagraphs => copyWith(threadContentSplitLongParagraphs: value as bool?),
+      SettingsKeys.highRefreshRate => copyWith(highRefreshRate: value as bool?),
+      SettingsKeys.offlineThreads => copyWith(offlineThreads: value as bool?),
+      SettingsKeys.offlineThreadsLimit => copyWith(offlineThreadsLimit: value as int?),
+      SettingsKeys.enableAppPostRenderer => copyWith(enableAppPostRenderer: value as bool?),
+      SettingsKeys.homepagePinnedGroup => copyWith(homepagePinnedGroup: value as String?),
+      SettingsKeys.notificationPermissionPrompted => copyWith(notificationPermissionPrompted: value as bool?),
+      SettingsKeys.postImageAutoLoad => copyWith(postImageAutoLoad: value as int?),
+      SettingsKeys.editorQuickPhrases => copyWith(editorQuickPhrases: value as String?),
     };
   }
 }

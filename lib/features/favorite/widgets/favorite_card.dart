@@ -6,26 +6,57 @@ import 'package:tsdm_client/features/favorite/models/models.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/routes/screen_paths.dart';
 import 'package:tsdm_client/widgets/app_surface.dart';
+import 'package:tsdm_client/widgets/two_pane.dart';
 
 /// Card of one favorite record (thread or forum): kind icon, title, time pill, optional note and a remove button.
 class FavoriteCard extends StatelessWidget {
   /// Constructor.
-  const FavoriteCard(this.item, {required this.onRemove, this.removing = false, super.key});
+  const FavoriteCard(
+    this.item, {
+    required this.onRemove,
+    this.removing = false,
+    this.offline = false,
+    this.selected = false,
+    this.onSelect,
+    this.onToggle,
+    super.key,
+  });
+
+  /// A copy of the thread is kept for reading without network.
+  final bool offline;
+
+  /// The record is picked for saving offline.
+  final bool selected;
+
+  /// Long press: start picking records, with this one picked.
+  final VoidCallback? onSelect;
+
+  /// Tap while records are being picked: pick or drop this one, instead of opening it. Null when none is being picked.
+  final VoidCallback? onToggle;
 
   /// Record to show.
   final FavoriteItem item;
 
-  Future<void> _open(BuildContext context) async => switch (item) {
-    FavoriteThread(:final tid, :final title) => context.pushNamed(
-      ScreenPaths.threadV1,
-      queryParameters: {'tid': tid, 'appBarTitle': title},
-    ),
-    FavoriteForum(:final fid, :final title) => context.pushNamed(
-      ScreenPaths.forum,
-      pathParameters: {'fid': fid},
-      queryParameters: {'appBarTitle': title},
-    ),
-  };
+  Future<void> _open(BuildContext context) async {
+    // A thread opens on the right of the wide favorites page, else as a page of its own.
+    if (item case FavoriteThread(
+      :final tid,
+      :final title,
+    ) when openThreadInPane(context, {'tid': tid, 'appBarTitle': title})) {
+      return;
+    }
+    await switch (item) {
+      FavoriteThread(:final tid, :final title) => context.pushNamed(
+        ScreenPaths.threadV1,
+        queryParameters: {'tid': tid, 'appBarTitle': title},
+      ),
+      FavoriteForum(:final fid, :final title) => context.pushNamed(
+        ScreenPaths.forum,
+        pathParameters: {'fid': fid},
+        queryParameters: {'appBarTitle': title},
+      ),
+    };
+  }
 
   /// Called when the user asks to remove this record.
   final VoidCallback onRemove;
@@ -42,11 +73,21 @@ class FavoriteCard extends StatelessWidget {
     final isForum = item is FavoriteForum;
     return AppSurface(
       padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
-      onTap: () async => _open(context),
+      color: selected ? colorScheme.secondaryContainer : null,
+      onLongPress: onSelect,
+      onTap: onToggle ?? () async => _open(context),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          AppIconTile(isForum ? Icons.folder_outlined : Icons.bookmark_outline, size: 36),
+          AppIconTile(
+            switch ((isForum, selected, offline)) {
+              (true, _, _) => Icons.folder_outlined,
+              (_, true, _) => Icons.check_circle_outline,
+              (_, _, true) => Icons.offline_pin_outlined,
+              _ => Icons.bookmark_outline,
+            },
+            size: 36,
+          ),
           sizedBoxW12H12,
           Expanded(
             child: Column(

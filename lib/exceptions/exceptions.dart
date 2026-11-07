@@ -119,14 +119,39 @@ final class ImageResponseNotImageException extends AppException with ImageRespon
 @MappableClass()
 final class HttpHandshakeFailedException extends AppException with HttpHandshakeFailedExceptionMappable {
   /// Constructor.
-  HttpHandshakeFailedException(String message, {this.statusCode, this.headers}) : super(message: message);
+  HttpHandshakeFailedException(
+    String message, {
+    this.statusCode,
+    this.headers,
+    this.connectionFailed = false,
+    this.timedOut = false,
+    this.connectionLost = false,
+  }) : super(message: message);
 
   /// Optional status code.
   final int? statusCode;
 
   /// Optional response headers.
   final Headers? headers;
+
+  /// The forum was never reached: no network, the connection refused, or it timed out while connecting (dio's
+  /// connection error and connection timeout, the Android channel's `HostUnreachableException`). Not set for an answer
+  /// with an error status, a timeout while the answer was coming, a socket failing after the connect, or a failed TLS
+  /// handshake.
+  final bool connectionFailed;
+
+  /// The forum was reached but its answer did not come in time: dio's send and receive timeouts, the Android channel's
+  /// read or write timeout (`RequestTimedOutException`). A connect that timed out is a [connectionFailed] instead.
+  final bool timedOut;
+
+  /// The connection to the forum failed after it was made, with no answer: reset, closed, a failed TLS handshake
+  /// (an `IOException` of the socket, the Android channel's `RequestDroppedException`).
+  final bool connectionLost;
 }
+
+/// Whether [e] means the forum could not be reached at all ([HttpHandshakeFailedException.connectionFailed]): not an
+/// HTTP error, not an answer of the forum (a permission message, a login page), not a dropped request.
+bool isNoNetworkFailure(AppException e) => e is HttpHandshakeFailedException && e.connectionFailed;
 
 /// Server responded an error.
 ///
@@ -232,6 +257,42 @@ final class PostEditFailedToUploadResult extends AppException with PostEditFaile
   final String errorText;
 }
 
+/// The forum took the new thread but a plugin then showed a notice instead of going to it: the red packet of a red
+/// packet thread was not made (`hongbao`'s `newthread_submit_end`, a message with no language key the forum's app
+/// API reports as `ok`). The thread is published; its id is unknown.
+@MappableClass()
+final class ThreadPostedWithNoticeException extends AppException with ThreadPostedWithNoticeExceptionMappable {
+  /// Constructor.
+  ThreadPostedWithNoticeException(this.notice) : super(message: 'thread posted, then the forum said: $notice');
+
+  /// What the forum said, plain text.
+  final String notice;
+}
+
+/// The forum refused a post form because it asks for a captcha or a security question (`submit_seccode_invalid`,
+/// `submit_secqaa_invalid`: none was sent, or the answer was wrong): nothing was posted. [check] is what to answer
+/// before posting again, null when the app cannot tell (continue on the website).
+@MappableClass()
+final class PostVerificationRequiredException extends AppException with PostVerificationRequiredExceptionMappable {
+  /// Constructor.
+  PostVerificationRequiredException({this.check, this.wrongAnswer = false})
+    : super(message: 'post needs a captcha or a security question');
+
+  /// What to answer, with the ids the answers go with.
+  final SecCheck? check;
+
+  /// An answer was posted and the forum did not take it.
+  final bool wrongAnswer;
+}
+
+/// The forum asks for a check the app cannot show (a captcha of a plugin, a sound or Flash captcha): continue on the
+/// website.
+@MappableClass()
+final class SecCheckUnsupportedException extends AppException with SecCheckUnsupportedExceptionMappable {
+  /// Constructor.
+  SecCheckUnsupportedException() : super(message: 'unsupported captcha');
+}
+
 /// Failed to parse purchase info because the parameter in
 /// confirm info is incorrect.
 @MappableClass()
@@ -250,7 +311,24 @@ final class PurchaseInfoInvalidNoticeException extends AppException with Purchas
 
 /// Failed to do the purchase action.
 @MappableClass()
-final class PurchaseActionFailedException extends AppException with PurchaseActionFailedExceptionMappable {}
+final class PurchaseActionFailedException extends AppException with PurchaseActionFailedExceptionMappable {
+  /// Constructor.
+  PurchaseActionFailedException({this.reason});
+
+  /// The forum's message of the refusal (not enough credits, bought already…), null when it gave none.
+  final String? reason;
+}
+
+/// The forum refused the purchase, or showed its message instead of the purchase window: bought already, not enough
+/// credits, not logged in… [reason] is the forum's own text, shown as it is.
+@MappableClass()
+final class PurchaseRefusedException extends AppException with PurchaseRefusedExceptionMappable {
+  /// Constructor.
+  PurchaseRefusedException(this.reason) : super(message: reason);
+
+  /// The forum's message, plain text.
+  final String reason;
+}
 
 /// Basic exception class of rate.
 @MappableClass()
@@ -324,20 +402,70 @@ final class ProfileStatusNotFoundException extends AppException with ProfileStat
   ProfileStatusNotFoundException();
 }
 
-/// Status field is unrecognized in profile response.
-@MappableClass()
-final class ProfileStatusUnknownException extends AppException with ProfileStatusUnknownExceptionMappable {
-  /// Constructor.
-  ProfileStatusUnknownException(this.status);
-
-  /// The unrecognized status message.
-  final String status;
-}
-
 /// Failed to fetch parameters used in replying to a post.
 @MappableClass()
 class ReplyToPostFetchParameterFailedException extends AppException
-    with ReplyToPostFetchParameterFailedExceptionMappable {}
+    with ReplyToPostFetchParameterFailedExceptionMappable {
+  /// Constructor, [message] is the forum's message shown instead of the reply window, if any.
+  ReplyToPostFetchParameterFailedException([String? message]) : super(message: message);
+}
+
+/// The reply window (or its form) a reply to a floor is posted with could not be fetched: only that GET went out,
+/// the reply was never posted. [noNetwork] when nothing came back (the forum may not have been reached, or the answer
+/// timed out), else the HTTP [statusCode] of the answer.
+@MappableClass()
+final class ReplyWindowFetchFailedException extends AppException with ReplyWindowFetchFailedExceptionMappable {
+  /// Constructor.
+  ReplyWindowFetchFailedException({required this.noNetwork, this.statusCode, super.message});
+
+  /// The window of [e], the failure of its GET.
+  factory ReplyWindowFetchFailedException.of(AppException e) => switch (e) {
+    HttpHandshakeFailedException(:final statusCode) || HttpRequestFailedException(:final statusCode) =>
+      ReplyWindowFetchFailedException(noNetwork: statusCode == null, statusCode: statusCode, message: e.message),
+    _ => ReplyWindowFetchFailedException(noNetwork: false, message: e.message),
+  };
+
+  /// Nothing came back.
+  final bool noNetwork;
+
+  /// The HTTP status of the answer, null when none came back.
+  final int? statusCode;
+}
+
+/// Replying here needs the website, nothing was sent: the forum asks for a captcha or a security question
+/// ([verification]), or the reply window has fields the app cannot fill (another plugin's, another editor). [url] is
+/// the page to reply on.
+@MappableClass()
+final class ReplyNeedsBrowserException extends AppException with ReplyNeedsBrowserExceptionMappable {
+  /// Constructor.
+  ReplyNeedsBrowserException({required this.url, required this.verification})
+    : super(message: verification ? 'reply needs a captcha or a security question' : 'reply needs the website');
+
+  /// The page to reply on in the browser.
+  final String url;
+
+  /// The forum asks for a captcha or a security question.
+  final bool verification;
+}
+
+/// The forum asks for a captcha or a security question to take the reply ([check], with the ids the answers go with):
+/// the reply window or the thread page said so, or the forum refused the reply for it ([wrongAnswer]: an answer was
+/// sent and not taken). Nothing was posted; the reply goes again with the answers.
+@MappableClass()
+final class ReplyNeedsVerificationException extends AppException with ReplyNeedsVerificationExceptionMappable {
+  /// Constructor.
+  ReplyNeedsVerificationException({required this.check, required this.url, this.wrongAnswer = false})
+    : super(message: 'reply needs a captcha or a security question');
+
+  /// What to answer.
+  final SecCheck check;
+
+  /// The page to reply on in the browser, for a check the app cannot show.
+  final String url;
+
+  /// An answer was sent and the forum did not take it.
+  final bool wrongAnswer;
+}
 
 /// Reply to a post, but no successful result found in response.
 @MappableClass()
@@ -377,6 +505,38 @@ final class ThreadPublishFailedException extends AppException with ThreadPublish
 @MappableClass()
 final class ThreadPublishLocationNotFoundException extends AppException
     with ThreadPublishLocationNotFoundExceptionMappable {}
+
+/// Why an attachment upload did not happen or was not taken, see [AttachmentUploadFailedException].
+enum AttachmentUploadRefusal {
+  /// The file is not of a type the forum takes (its extension is not in the form's image types).
+  type,
+
+  /// The file is larger than the forum's limit for one upload.
+  size,
+
+  /// The forum's upload script answered an error (`DISCUZUPLOAD|uid|error|…` with an error other than 0).
+  refused,
+
+  /// The answer was not one of the upload script (a login page, a 提示信息 page), or no upload transport is offered.
+  unavailable,
+}
+
+/// The forum did not take an attachment upload (`misc.php?mod=swfupload`), or the file was refused before anything
+/// was sent, see [reason].
+///
+/// [code] is the error of the upload script's answer for [AttachmentUploadRefusal.refused] (no permission or a wrong
+/// hash, a damaged file, too large, a type the forum does not take, the day's quota…), null otherwise.
+@MappableClass()
+final class AttachmentUploadFailedException extends AppException with AttachmentUploadFailedExceptionMappable {
+  /// Constructor.
+  AttachmentUploadFailedException(this.reason, {this.code});
+
+  /// Why.
+  final AttachmentUploadRefusal reason;
+
+  /// The upload script's error code, null without one.
+  final int? code;
+}
 
 /// User not found when trying to operate on that user's notification.
 @MappableClass()
@@ -438,7 +598,11 @@ final class ServerRespFailure extends AppException with ServerRespFailureMappabl
 @MappableClass()
 final class SwitchUserGroupFailed extends AppException with SwitchUserGroupFailedMappable {
   /// Constructor.
-  SwitchUserGroupFailed(String message) : super(message: message);
+  SwitchUserGroupFailed(String message, {this.reason}) : super(message: message);
+
+  /// What to tell the user, as the forum wrote it (its message, the login prompt) or the app's own account notice;
+  /// null for a failure the forum did not explain.
+  final String? reason;
 }
 
 /// Failed to find the avatar url.
@@ -448,18 +612,36 @@ final class EditAvatarUrlNotFound extends AppException with EditAvatarUrlNotFoun
   EditAvatarUrlNotFound() : super(message: 'avatar url not found');
 }
 
+/// The forum did not take the avatar uploaded with its avatar editor.
+@MappableClass()
+final class EditAvatarUploadFailed extends AppException with EditAvatarUploadFailedMappable {
+  /// Constructor.
+  EditAvatarUploadFailed(this.answer) : super(message: 'avatar upload failed: $answer');
+
+  /// What the forum answered, the name of an `AvatarUploadAnswer`.
+  final String answer;
+}
+
 /// Failed to find the user profile form in edit page.
 @MappableClass()
 final class EditUserProfileFormNotFound extends AppException with EditUserProfileFormNotFoundMappable {
   /// Constructor.
-  EditUserProfileFormNotFound() : super(message: 'user profile not found');
+  EditUserProfileFormNotFound({this.reason}) : super(message: 'user profile not found');
+
+  /// The forum's message shown instead of the form (the login prompt, a locked account…) or the app's own account
+  /// notice; null when there is none.
+  final String? reason;
 }
 
 /// Failed to upload user profile data to server.
 @MappableClass()
 final class EditUserProfileUploadFailed extends AppException with EditUserProfileUploadFailedMappable {
   /// Constructor.
-  EditUserProfileUploadFailed() : super();
+  EditUserProfileUploadFailed({this.reason}) : super();
+
+  /// What the forum said: its message, or the field it refused (a required field left empty, a value not among
+  /// its choices); null when it said nothing the app can tell.
+  final String? reason;
 }
 
 /// A request that is not GET/HEAD (typically a form POST) was answered with the antitheft challenge page.

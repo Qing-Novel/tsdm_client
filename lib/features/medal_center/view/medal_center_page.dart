@@ -8,6 +8,7 @@ import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
 import 'package:tsdm_client/features/authentication/repository/models/models.dart';
+import 'package:tsdm_client/features/authentication/utils/account_changes.dart';
 import 'package:tsdm_client/features/medal_center/cubit/medal_center_cubit.dart';
 import 'package:tsdm_client/features/medal_center/models/medal_catalog.dart';
 import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
@@ -50,26 +51,26 @@ class _MedalCenterPageState extends State<MedalCenterPage> {
       final auth = context.read<AuthenticationRepository>();
       _cubit = MedalCenterCubit(
         currentUid: () => auth.effectiveCurrentUid,
-        fetchPage: (url) async {
-          // JSON mode of the forum's app API when the forum has it (see TsdmAppApi); the web page otherwise.
-          final result = await getIt.get<NetClientProvider>().get(withTsdmAppJson(url)).run();
-          return switch (result) {
-            Right(:final value) => tsdmAppPageHtml(value.data),
-            Left(:final value) => throw value,
-          };
-        },
+        // JSON mode of the forum's app API when the forum has it (see TsdmAppApi); the web page otherwise.
+        fetchPage: (url) => fetchTsdmAppPageHtml(getIt.get<NetClientProvider>(), url),
+        fetchApi: (query) => TsdmAppApi.askWaiting(getIt.get<NetClientProvider>(), 'medals', query),
+        // The write result of the forum's app API (plugin 2.6.0) is read as the page it stands for.
         submitForm: (url, data) async {
           final result = await getIt.get<NetClientProvider>().postForm(url, data: data).run();
           return switch (result) {
-            Right(:final value) => value.data as String,
+            Right(:final value) => tsdmAppWriteAnswerHtml(value.data),
             Left(:final value) => throw value,
           };
         },
       );
-      _authSubscription = auth.status.listen((status) {
-        _cubit.invalidate();
-        if (status is! AuthStatusLoading) unawaited(_cubit.load());
-      });
+      _authSubscription = listenAccountChanges(
+        auth,
+        onLoggingIn: _cubit.invalidate,
+        onChanged: () {
+          _cubit.invalidate();
+          unawaited(_cubit.load());
+        },
+      );
     }
     unawaited(_cubit.load());
   }

@@ -5,11 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:rxdart/rxdart.dart' show Rx;
 import 'package:tsdm_client/constants/layout.dart';
 import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
 import 'package:tsdm_client/features/background_sync/background_sync_bridge_cubit.dart';
 import 'package:tsdm_client/features/background_sync/background_sync_events.dart';
+import 'package:tsdm_client/features/background_sync/other_accounts_auto_sync.dart';
 import 'package:tsdm_client/features/blocking/cubit/user_block_cubit.dart';
 import 'package:tsdm_client/features/blocking/repository/user_block_repository.dart';
 import 'package:tsdm_client/features/blocking/widgets/user_block_failure_listener.dart';
@@ -19,10 +21,15 @@ import 'package:tsdm_client/features/checkin/bloc/auto_checkin_bloc.dart';
 import 'package:tsdm_client/features/checkin/bloc/checkin_bloc.dart';
 import 'package:tsdm_client/features/checkin/repository/auto_checkin_repository.dart';
 import 'package:tsdm_client/features/checkin/repository/checkin_repository.dart';
+import 'package:tsdm_client/features/checkin/widgets/checkin_day_watcher.dart';
 import 'package:tsdm_client/features/favorite/repository/favorite_repository.dart';
 import 'package:tsdm_client/features/forum/repository/forum_repository.dart';
 import 'package:tsdm_client/features/home/cubit/init_cubit.dart';
+import 'package:tsdm_client/features/home_widget/bloc/home_widget_sync_cubit.dart';
+import 'package:tsdm_client/features/homepage/repository/guide_feed.dart';
+import 'package:tsdm_client/features/keyboard/widgets/keyboard_shortcuts_host.dart';
 import 'package:tsdm_client/features/local_notice/show.dart';
+import 'package:tsdm_client/features/multi_user/cubit/current_account_cubit.dart';
 import 'package:tsdm_client/features/notification/bloc/auto_notification_cubit.dart';
 import 'package:tsdm_client/features/notification/bloc/notification_bloc.dart';
 import 'package:tsdm_client/features/notification/bloc/notification_state_auto_sync_cubit.dart';
@@ -34,6 +41,8 @@ import 'package:tsdm_client/features/notification/repository/notification_reposi
 import 'package:tsdm_client/features/notification/repository/notification_sync_all_repository.dart';
 import 'package:tsdm_client/features/profile/bloc/current_title_cubit.dart';
 import 'package:tsdm_client/features/profile/repository/profile_repository.dart';
+import 'package:tsdm_client/features/reading_progress/cubit/reading_progress_cubit.dart';
+import 'package:tsdm_client/features/reading_progress/repository/reading_progress_store.dart';
 import 'package:tsdm_client/features/replied_thread/cubit/replied_thread_cubit.dart';
 import 'package:tsdm_client/features/root/bloc/points_changes_cubit.dart';
 import 'package:tsdm_client/features/root/bloc/root_location_cubit.dart';
@@ -41,7 +50,14 @@ import 'package:tsdm_client/features/root/view/singleton.dart';
 import 'package:tsdm_client/features/session_expiry/cubit/session_expiry_cubit.dart';
 import 'package:tsdm_client/features/settings/bloc/settings_bloc.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
+import 'package:tsdm_client/features/share_receive/models/shared_content.dart';
+import 'package:tsdm_client/features/share_receive/share_dispatcher.dart';
+import 'package:tsdm_client/features/share_receive/share_receiver.dart';
+import 'package:tsdm_client/features/shortcuts/widgets/app_shortcuts_watcher.dart';
+import 'package:tsdm_client/features/sync/sync_coordinator.dart';
 import 'package:tsdm_client/features/theme/cubit/theme_cubit.dart';
+import 'package:tsdm_client/features/theme/dark_schedule.dart';
+import 'package:tsdm_client/features/thread/v1/bbcode/smilies.dart';
 import 'package:tsdm_client/features/thread_visit_history/bloc/thread_visit_history_bloc.dart';
 import 'package:tsdm_client/features/thread_visit_history/repository/thread_visit_history_repository.dart';
 import 'package:tsdm_client/features/update/cubit/update_cubit.dart';
@@ -50,10 +66,13 @@ import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/routes/app_routes.dart';
 import 'package:tsdm_client/routes/screen_paths.dart';
 import 'package:tsdm_client/shared/models/models.dart';
+import 'package:tsdm_client/shared/providers/image_cache_provider/image_cache_trim.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/storage_provider.dart';
 import 'package:tsdm_client/shared/repositories/forum_home_repository/forum_home_repository.dart';
 import 'package:tsdm_client/shared/repositories/fragments_repository/fragments_repository.dart';
 import 'package:tsdm_client/themes/app_themes.dart';
+import 'package:tsdm_client/utils/app_text_scale.dart';
+import 'package:tsdm_client/utils/high_refresh_rate.dart';
 import 'package:tsdm_client/utils/logger.dart';
 import 'package:tsdm_client/utils/platform.dart';
 import 'package:tsdm_client/utils/show_dialog.dart';
@@ -125,6 +144,12 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
   /// Which metrics changes get a log line (GitHub #28).
   final _viewMetricsLogGate = ViewMetricsLogGate();
 
+  /// Applies the high refresh rate setting on Android (GitHub #182).
+  HighRefreshRateFollower? _highRefreshRate;
+
+  /// Text, links and images other apps share to this one (Android).
+  ShareReceiver? _shareReceiver;
+
   Future<void> _saveWindowPosition() async {
     final settings = getIt.get<SettingsRepository>().currentSettings;
     if (settings.windowRememberPosition && !settings.windowInCenter && await _hasNormalWindowBounds()) {
@@ -148,6 +173,10 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
     super.initState();
     windowManager.addListener(this);
     WidgetsBinding.instance.addObserver(this);
+
+    if (isAndroid) {
+      _highRefreshRate = HighRefreshRateFollower(getIt.get<SettingsRepository>().settings);
+    }
 
     // 【新增】监听 Deep Link，将链接通过 pushNamed 压入路由栈（仅 Android）
     if (isAndroid) {
@@ -189,15 +218,31 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
           }
         }
       });
+
+      // What other apps share to this one: a forum link opens its page, anything else starts a new thread. The share
+      // the app was launched with arrives before the first frame: the dispatcher waits for the app to be built.
+      final dispatcher = ShareDispatcher.app();
+      _shareReceiver = ShareReceiver(
+        onShare: (content) async {
+          if (await waitForRootNavigatorContext() == null || !mounted) {
+            discardSharedFiles(content.imagePaths);
+            return;
+          }
+          await dispatcher.dispatch(content);
+        },
+      );
+      unawaited(_shareReceiver!.start());
     }
   }
 
   @override
   void dispose() {
+    _shareReceiver?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     windowManager.removeListener(this);
     windowPositionTimer?.cancel();
     windowSizeTimer?.cancel();
+    unawaited(_highRefreshRate?.dispose());
     if (isWindows) {
       unawaited(TrayHelper.instance.dispose());
     }
@@ -211,6 +256,13 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
     // arrives before the resume; a resume with no tap line only says the app came to front without a tap reaching
     // it, whatever brought it there (#14).
     debug('app lifecycle: ${state.name}');
+    if ((state == AppLifecycleState.paused ||
+            state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.detached) &&
+        getIt.isRegistered<StorageProvider>()) {
+      // The times cached images were shown wait in memory for a batch: write them before the app may be killed.
+      unawaited(getIt.get<StorageProvider>().flushImageCacheUsedTimes());
+    }
     if (state == AppLifecycleState.resumed) {
       unawaited(logActiveLocalNotifications());
       _logViewMetrics('resumed', always: true);
@@ -241,6 +293,14 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
     }
   }
 
+  /// Opens a page for a keyboard shortcut, unless that page is the one in view already.
+  void _openFromKeyboard(String path) {
+    if (router.routerDelegate.currentConfiguration.uri.path == path) {
+      return;
+    }
+    unawaited(router.pushNamed(path));
+  }
+
   @override
   Widget build(BuildContext context) {
     final tr = context.t.globalStatePage;
@@ -268,11 +328,20 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
           create: (_) => UserBlockRepository(getIt.get<StorageProvider>()),
           dispose: (repo) async => repo.dispose(),
         ),
+        // The reading progress, the quick phrases and the block list of the account kept on the forum for its other
+        // devices (plugin 3.4.0); not lazy, so the start pulls them.
+        RepositoryProvider<SyncCoordinator>(
+          create: (context) => SyncCoordinator.build(authentication: context.repo(), blocks: context.repo())..start(),
+          dispose: (coordinator) async => coordinator.dispose(),
+          lazy: false,
+        ),
         RepositoryProvider<CheckinRepository>(create: (_) => CheckinRepository(storageProvider: getIt())),
         RepositoryProvider<ForumHomeRepository>(
           create: (_) => ForumHomeRepository(),
           dispose: (repo) async => repo.dispose(),
         ),
+        // The guide of the homepage, asked together with the homepage and saved per account for the next start.
+        RepositoryProvider<GuideFeed>(create: (_) => GuideFeed()),
         RepositoryProvider<FavoriteRepository>(
           create: (_) => FavoriteRepository(),
           dispose: (repo) async => repo.dispose(),
@@ -295,6 +364,33 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
               NotificationSyncAllRepository(storageProvider: getIt(), notificationRepository: context.repo()),
           dispose: (repo) async => repo.dispose(),
         ),
+        // The other logged-in accounts, polled by the in-app auto sync when asked to; only where it posts system
+        // notifications.
+        if (autoSyncPostsNotifications)
+          RepositoryProvider<OtherAccountsAutoSync>(
+            create: (context) => OtherAccountsAutoSync.forApp(
+              storage: getIt(),
+              notificationRepository: context.repo(),
+              announce: (done) => showLocalNotificationWith(
+                plugin: flnp,
+                translations: t,
+                info: done.latest!,
+                account: LocalNoticeAccount(uid: done.uid, username: done.username, named: done.named),
+                hideContent: getIt.get<SettingsRepository>().currentSettings.notificationHideContent,
+              ),
+            ),
+            dispose: (others) async => others.dispose(),
+          ),
+        // Only the experimental app renderer asks it (for a floor showing smilies); it reads its saved table ahead
+        // once that renderer is on, and nothing before.
+        RepositoryProvider<SmiliesRepository>(
+          lazy: false,
+          create: (_) => SmiliesRepository(
+            store: StorageSmiliesStore(getIt.get<StorageProvider>()),
+            preloadWhen: getIt.get<SettingsRepository>().settings.map((e) => e.enableAppPostRenderer),
+          ),
+          dispose: (repo) => repo.dispose(),
+        ),
       ],
       child: MultiBlocProvider(
         providers: [
@@ -307,10 +403,12 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
           BlocProvider(create: (context) => NotificationStateCubit(context.repo())),
           BlocProvider(
             create: (context) {
+              final others = autoSyncPostsNotifications ? context.repo<OtherAccountsAutoSync>() : null;
               final bloc = AutoNotificationCubit(
                 authenticationRepository: context.repo(),
                 notificationRepository: context.repo(),
                 storageProvider: getIt(),
+                afterPoll: others?.afterPoll,
               );
               if (widget.autoSyncNoticeSeconds > 0) {
                 bloc.start(Duration(seconds: widget.autoSyncNoticeSeconds));
@@ -355,6 +453,17 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
               return CurrentTitleCubit(currentUid: () => auth.currentUser?.uid, authStatus: auth.status);
             },
           ),
+          // The account in use and how many are saved, for the avatar in app bars and the editors (#184).
+          BlocProvider(
+            create: (context) {
+              final auth = context.repo<AuthenticationRepository>();
+              return CurrentAccountCubit(
+                currentUser: () => auth.effectiveCurrentUser,
+                authStatus: auth.status,
+                accounts: getIt.get<StorageProvider>().allUsersStream(),
+              );
+            },
+          ),
           // Top level: leaving the progress page must not cancel the run, like the auto checkin.
           BlocProvider(
             create: (context) => NotificationSyncAllCubit(
@@ -366,13 +475,17 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
               notificationBloc: context.read<NotificationBloc>(),
             ),
           ),
-          if (isAndroid)
-            // What the background message service stored shows up in the app without waiting for its own sync (#80).
+          if (autoSyncPostsNotifications)
+            // What the background message service (#80) and the in-app sync of the other accounts stored shows up in
+            // the app without waiting for its own sync: the account switched to meanwhile may be the one synced.
             BlocProvider(
               create: (context) {
                 final auth = context.repo<AuthenticationRepository>();
+                final others = context.repo<OtherAccountsAutoSync>().synced;
                 return BackgroundSyncBridgeCubit(
-                  events: FlutterBackgroundService().on(BackgroundSyncEvents.synced),
+                  events: isAndroid
+                      ? Rx.merge([FlutterBackgroundService().on(BackgroundSyncEvents.synced), others])
+                      : others,
                   notificationBloc: context.read<NotificationBloc>(),
                   infoRepository: context.repo(),
                   currentUid: () => auth.effectiveCurrentUid,
@@ -409,12 +522,31 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
               return bloc;
             },
           ),
-          BlocProvider(
-            create: (context) => ThemeCubit(
-              accentColor: widget.color >= 0 ? Color(widget.color) : null,
-              themeModeIndex: widget.themeModeIndex,
-              fontFamily: widget.fontFamily,
+          if (isAndroid)
+            // The home screen widget follows the unread counts, the check-in record and the account in use.
+            BlocProvider(
+              create: (context) {
+                final auth = context.repo<AuthenticationRepository>();
+                return HomeWidgetSyncCubit(
+                  unread: context.read<NotificationStateCubit>().stream,
+                  accounts: getIt.get<StorageProvider>().allAccountsStream(),
+                  auth: auth.status,
+                  currentUid: () => auth.effectiveCurrentUid,
+                )..start();
+              },
+              lazy: false,
             ),
+          BlocProvider(
+            create: (context) {
+              final settings = getIt.get<SettingsRepository>().currentSettings;
+              return ThemeCubit(
+                accentColor: widget.color >= 0 ? Color(widget.color) : null,
+                themeModeIndex: widget.themeModeIndex,
+                fontFamily: widget.fontFamily,
+                scheduled: settings.themeModeScheduled,
+                schedule: DarkSchedule(start: settings.darkScheduleStart, end: settings.darkScheduleEnd),
+              )..observeLifecycle();
+            },
           ),
           BlocProvider(
             create: (context) {
@@ -433,6 +565,15 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
             create: (context) => RepliedThreadCubit(storageProvider: getIt(), authenticationRepository: context.repo()),
             lazy: false,
           ),
+          // Where the current account stopped reading the threads it visited: the thread lists mark them, the thread
+          // page goes on from there. Not lazy, so the first list shows the marks.
+          BlocProvider(
+            create: (context) => ReadingProgressCubit(
+              store: StorageReadingProgressStore(getIt()),
+              authenticationRepository: context.repo(),
+            ),
+            lazy: false,
+          ),
           // Tells once per run which stored accounts have an expired login, and again when the account in use
           // expires while the app runs (issue #25).
           BlocProvider(
@@ -444,16 +585,22 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
           ),
           BlocProvider(
             create: (context) {
-              final settings = context.read<SettingsBloc>().state.settingsMap;
-
               final cubit = InitCubit();
               // We intend to delete legacy files asynchronously, so do not wait it.
               unawaited(cubit.deleteV0LegacyData());
-              if (settings.enableAutoClearImageCache) {
-                unawaited(cubit.autoClearImageCache(Duration(seconds: settings.autoClearImageCacheDuration)));
-              } else {
-                cubit.skipAutoClearImageCache();
-              }
+              // In the background long after the first frame, with the settings of that moment; the homepage no
+              // longer waits for it.
+              cubit.scheduleImageCacheTrim(() {
+                final now = getIt.get<SettingsRepository>().currentSettings;
+                if (!now.enableAutoClearImageCache) {
+                  return null;
+                }
+                return ImageCacheLimits(
+                  maxAge: now.autoClearImageCacheDuration > 0
+                      ? Duration(seconds: now.autoClearImageCacheDuration)
+                      : null,
+                );
+              });
               unawaited(cubit.autoClearFilePickerCache());
               return cubit;
             },
@@ -471,6 +618,8 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
                       talker.debug(
                         'auto checkin finished: succeeded=${state.succeeded.length} failed=${state.failed.length}',
                       );
+                      // The current account may be one of them: its button shows the recorded check-in.
+                      context.read<CheckinBloc>().add(const CheckinStatusRequested());
                       showSnackBar(
                         context: context,
                         message: tr.autoCheckinFinished,
@@ -548,11 +697,46 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
                 BlocListener<NotificationStateAutoSyncCubit, NotificationAutoSyncInfo?>(
                   listenWhen: (prev, curr) => curr != null && prev != curr,
                   listener: (context, state) async {
-                    await showLocalNotification(context, state!);
+                    // The in-app sync announces the account in use; the notification carries it so a tap after a
+                    // switch opens it as that account. Named like the other accounts' when every account is polled.
+                    final user = context.repo<AuthenticationRepository>().currentUser;
+                    final s = getIt.get<SettingsRepository>().currentSettings;
+                    await showLocalNotification(
+                      context,
+                      state!,
+                      account: user?.uid == null
+                          ? null
+                          : LocalNoticeAccount(
+                              uid: user!.uid!,
+                              username: user.username,
+                              named: s.backgroundSyncAllAccounts,
+                            ),
+                    );
                   },
                 ),
                 // Content of identified authors is held back while the block list can not be read; say why, with a retry.
                 const UserBlockFailureListener(),
+                // The theme settings changed under the settings page (the cross-device sync applied another device's):
+                // each one on its own, as the page saves them one after the other.
+                BlocListener<SettingsBloc, SettingsState>(
+                  listenWhen: (prev, curr) => prev.settingsMap.themeMode != curr.settingsMap.themeMode,
+                  listener: (context, state) =>
+                      context.read<ThemeCubit>().setThemeModeIndex(state.settingsMap.themeMode),
+                ),
+                BlocListener<SettingsBloc, SettingsState>(
+                  listenWhen: (prev, curr) =>
+                      prev.settingsMap.darkScheduleStart != curr.settingsMap.darkScheduleStart ||
+                      prev.settingsMap.darkScheduleEnd != curr.settingsMap.darkScheduleEnd,
+                  listener: (context, state) => context.read<ThemeCubit>().setSchedule(
+                    DarkSchedule(start: state.settingsMap.darkScheduleStart, end: state.settingsMap.darkScheduleEnd),
+                  ),
+                ),
+                BlocListener<SettingsBloc, SettingsState>(
+                  listenWhen: (prev, curr) =>
+                      prev.settingsMap.themeModeScheduled != curr.settingsMap.themeModeScheduled,
+                  listener: (context, state) =>
+                      context.read<ThemeCubit>().setScheduled(scheduled: state.settingsMap.themeModeScheduled),
+                ),
                 BlocListener<InitCubit, InitState>(
                   listenWhen: (prev, curr) => prev.v0LegacyDataDeleted != curr.v0LegacyDataDeleted,
                   listener: (context, state) async {
@@ -569,7 +753,7 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
                 builder: (context, state) {
                   final themeState = context.watch<ThemeCubit>().state;
                   final accentColor = themeState.accentColor;
-                  final themeModeIndex = themeState.themeModeIndex;
+                  final themeMode = themeState.effectiveThemeMode;
                   final fontFamily = themeState.fontFamily;
                   final textScaleFactor = context.select<SettingsBloc, double>(
                     (bloc) => bloc.state.settingsMap.textScaleFactor,
@@ -586,16 +770,17 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
                     localizationsDelegates: GlobalMaterialLocalizations.delegates,
                     theme: lightTheme,
                     darkTheme: darkTheme,
-                    themeMode: ThemeMode.values[themeModeIndex],
+                    themeMode: themeMode,
                     scaffoldMessengerKey: snackbarKey,
                     builder: (context, child) {
                       final data = MediaQuery.of(context);
                       return MediaQuery(
-                        data: data.copyWith(
-                          textScaler: TextScaler.linear(textScaleFactor)
-                            ..clamp(minScaleFactor: 0.7, maxScaleFactor: 1.5),
+                        data: data.copyWith(textScaler: appTextScaler(data.textScaler, textScaleFactor)),
+                        child: KeyboardShortcutsHost(
+                          onSearch: () => _openFromKeyboard(ScreenPaths.search),
+                          onSettings: () => _openFromKeyboard(ScreenPaths.settings.path),
+                          child: DesktopBackHandler(child: child ?? sizedBoxEmpty),
                         ),
-                        child: DesktopBackHandler(child: child ?? sizedBoxEmpty),
                       );
                     },
                   );
@@ -603,6 +788,9 @@ class _AppState extends State<App> with WindowListener, WidgetsBindingObserver, 
               ),
             ),
             const RootSingleton(),
+            CheckinDayWatcher(autoCheckinStarted: widget.autoCheckin),
+            const SyncResumeWatcher(),
+            const AppShortcutsWatcher(),
           ],
         ),
       ),

@@ -30,6 +30,7 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
     this.maxHeight,
     this.fallbackImageUrl,
     this.usage = const ImageUsageInfoOther(),
+    this.cacheOnly = false,
   });
 
   /// Url of image.
@@ -50,8 +51,22 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
   /// Usage of the image.
   final ImageUsageInfo usage;
 
+  /// Only show the image when it is cached already, never fetch it (a picture of a post loaded when tapped): fails
+  /// otherwise.
+  final bool cacheOnly;
+
   /// Get the image url.
   String get url => imageUrl;
+
+  /// Avatars loaded as the placeholder (not available then): the image cache holds the placeholder for them. Oldest
+  /// first, at most [_maxPlaceholders].
+  static final _placeholders = <CachedImageProvider>{};
+
+  static const _maxPlaceholders = 512;
+
+  /// Whether this avatar was loaded as the placeholder last time: once it is cached, the image cache must let it go
+  /// for it to show (see `HeroUserAvatar`).
+  bool get loadedAsPlaceholder => _placeholders.contains(this);
 
   Future<Option<Uint8List>> _onImageError() async {
     final req = switch (usage) {
@@ -59,7 +74,7 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
       ImageUsageInfoUserAvatar(:final username) => ImageCacheUserAvatarRequest(username: username, imageUrl: imageUrl),
     };
 
-    return getIt.get<ImageCacheProvider>().getOrMakeCache(req);
+    return getIt.get<ImageCacheProvider>().getOrMakeCache(req, cacheOnly: cacheOnly);
   }
 
   @override
@@ -75,7 +90,22 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
     final chunkEvents = StreamController<ImageChunkEvent>();
 
     return MultiFrameImageStreamCompleter(
-      codec: _loadAsync(key, chunkEvents, decode: decode),
+      codec: _loadAsync(key, chunkEvents, decode: decode).then((result) {
+        // The image cache holds the placeholder for this avatar from now on, until it is evicted and loaded again.
+        if (result.placeholder) {
+          _placeholders.add(key);
+          // A long run offline would remember every avatar it met: the oldest go, and their placeholder with them from
+          // the image cache (forgotten but still cached, it would show for good): loaded again when shown next.
+          if (_placeholders.length > _maxPlaceholders) {
+            final oldest = _placeholders.first;
+            _placeholders.remove(oldest);
+            PaintingBinding.instance.imageCache.evict(oldest);
+          }
+        } else {
+          _placeholders.remove(key);
+        }
+        return result.codec;
+      }),
       chunkEvents: chunkEvents.stream,
       scale: key.scale,
       debugLabel: key.url,
@@ -86,7 +116,8 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
     );
   }
 
-  Future<ui.Codec> _loadAsync(
+  /// The codec of the image, and whether it is the placeholder shown instead of an avatar not available.
+  Future<({ui.Codec codec, bool placeholder})> _loadAsync(
     CachedImageProvider key,
     StreamController<ImageChunkEvent> chunkEvents, {
     required ImageDecoderCallback decode,
@@ -95,10 +126,24 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
       assert(key == this, 'check instance in load async');
       if (usage is! ImageUsageInfoUserAvatar && imageUrl.isEmpty) {
         // error('failed to make $usage: empty url');
-        return await ui.instantiateImageCodecFromBuffer(await ui.ImmutableBuffer.fromAsset(assetPlaceholderImagePath));
+        return (
+          codec: await ui.instantiateImageCodecFromBuffer(
+            await ui.ImmutableBuffer.fromAsset(assetPlaceholderImagePath),
+          ),
+          placeholder: false,
+        );
       }
       final f = switch (usage) {
-        ImageUsageInfoOther() => getIt.get<ImageCacheProvider>().getOrMakeCache(ImageCacheGeneralRequest(imageUrl)),
+        ImageUsageInfoOther() => getIt.get<ImageCacheProvider>().getOrMakeCache(
+          ImageCacheGeneralRequest(imageUrl),
+          cacheOnly: cacheOnly,
+          // How much arrived, for the progress the image shows while it downloads.
+          onProgress: (received, total) {
+            if (!chunkEvents.isClosed) {
+              chunkEvents.add(ImageChunkEvent(cumulativeBytesLoaded: received, expectedTotalBytes: total));
+            }
+          },
+        ),
         ImageUsageInfoUserAvatar(:final username) => getIt.get<ImageCacheProvider>().getUserAvatarCache(
           username: username,
           imageUrl: imageUrl,
@@ -109,14 +154,23 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
         () => f,
       ).orElse<Uint8List>(() => TaskOption(_onImageError)).run()) {
         case Some(:final value):
-          return decode(await ui.ImmutableBuffer.fromUint8List(value));
+          return (codec: await decode(await ui.ImmutableBuffer.fromUint8List(value)), placeholder: false);
         case None():
           if (usage is ImageUsageInfoUserAvatar) {
-            return await ui.instantiateImageCodecFromBuffer(
-              await ui.ImmutableBuffer.fromAsset(assetPlaceholderImagePath),
+            return (
+              codec: await ui.instantiateImageCodecFromBuffer(
+                await ui.ImmutableBuffer.fromAsset(assetPlaceholderImagePath),
+              ),
+              placeholder: true,
             );
           } else {
-            return Future.error('failed to load image for $imageUrl');
+            if (cacheOnly) {
+              // Not cached is all it says: the image cache must not keep the miss (it would show for good).
+              scheduleMicrotask(() => PaintingBinding.instance.imageCache.evict(key));
+            }
+            // Thrown, not returned: a future returned before the `finally` below ran had no listener yet, and its
+            // error went to the zone as uncaught.
+            throw StateError('failed to load image for $imageUrl');
           }
       }
     } catch (e) {
@@ -128,7 +182,8 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
       // });
       // FIXME: Handle all exceptions.
       // error('CachedImageProvider caught error: $e');
-      return Future.error('failed to render image: $e');
+      // The url in the line: a decode failure ("Invalid image data") names no image by itself in an exported log.
+      throw StateError('failed to render image $imageUrl: $e');
     } finally {
       await chunkEvents.close();
     }
@@ -139,14 +194,18 @@ final class CachedImageProvider extends ImageProvider<CachedImageProvider> with 
     if (other.runtimeType != runtimeType) {
       return false;
     }
-    return other is CachedImageProvider && other.imageUrl == imageUrl && other.usage == usage && other.scale == scale;
+    return other is CachedImageProvider &&
+        other.imageUrl == imageUrl &&
+        other.usage == usage &&
+        other.scale == scale &&
+        other.cacheOnly == cacheOnly;
   }
 
   @override
-  int get hashCode => Object.hash(imageUrl, usage, scale);
+  int get hashCode => Object.hash(imageUrl, usage, scale, cacheOnly);
 
   @override
   String toString() =>
       '${objectRuntimeType(this, 'CachedImageProvider')}'
-      '("$url", scale: $scale, usage: $usage)';
+      '("$url", scale: $scale, usage: $usage${cacheOnly ? ', cache only' : ''})';
 }

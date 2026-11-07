@@ -114,6 +114,7 @@ final class BankServiceForm {
     required this.context,
     required Map<String, String> hidden,
     required List<BankInput> inputs,
+    this.confirmUrl,
   }) : hidden = Map.unmodifiable(hidden),
        inputs = List.unmodifiable(inputs);
 
@@ -137,6 +138,10 @@ final class BankServiceForm {
 
   /// Visible inputs in their original order.
   final List<BankInput> inputs;
+
+  /// A record whose list only links to the forum's own confirmation page (a term withdrawal): the form sent is the
+  /// one that page serves, read just before sending and checked against this record ([confirmedBy]).
+  final String? confirmUrl;
 
   /// Observed operation, not an operation invented from the visible label.
   String get operation => hidden['op'] ?? '';
@@ -167,6 +172,7 @@ final class BankServiceForm {
       service == other.service &&
       bankId == other.bankId &&
       action == other.action &&
+      confirmUrl == other.confirmUrl &&
       label == other.label &&
       context == other.context &&
       inputs.length == other.inputs.length &&
@@ -174,6 +180,26 @@ final class BankServiceForm {
       hidden.keys.where((key) => key != 'formhash').length ==
           other.hidden.keys.where((key) => key != 'formhash').length &&
       hidden.entries.where((entry) => entry.key != 'formhash').every((entry) => other.hidden[entry.key] == entry.value);
+
+  /// The confirmation page's form, if it is the one for this record: same bank, operation and record, only the
+  /// password asked; its own CSRF token, if any, is kept.
+  BankServiceForm? confirmedBy(BankServiceData page) {
+    final forms = page.forms.where((form) => form.confirmUrl == null).toList();
+    if (confirmUrl == null || page.unsupportedForms || page.unavailable.isNotEmpty || forms.length != 1) return null;
+    final form = forms.single;
+    final own = {...hidden}..remove('formhash');
+    final served = {...form.hidden}..remove('formhash');
+    if (form.service != service ||
+        form.bankId != bankId ||
+        form.action != action ||
+        served.length != own.length ||
+        own.entries.any((entry) => served[entry.key] != entry.value) ||
+        form.inputs.length != 1 ||
+        form.inputs.single != BankInput.password) {
+      return null;
+    }
+    return form;
+  }
 
   /// Create the transient body only after all input and confirmation checks pass.
   Map<String, String> body(Map<String, String> values) {
@@ -198,6 +224,7 @@ final class BankServiceData {
     this.walletBalance = '',
     this.unavailable = '',
     this.unsupportedForms = false,
+    this.webOnlyRecords = false,
     this.hasNext = false,
     this.feeRate,
   });
@@ -223,6 +250,10 @@ final class BankServiceData {
   /// At least one form or executable record link cannot be rendered safely.
   final bool unsupportedForms;
 
+  /// Loan records whose repayment or cancellation the forum runs on the link itself, with no confirmation page:
+  /// left to the website, where they are one click.
+  final bool webOnlyRecords;
+
   /// A verified next-page link in the same bank/service.
   final bool hasNext;
 
@@ -231,6 +262,20 @@ final class BankServiceData {
 
   /// Terms and records rechecked before submitting a stale confirmation.
   String get confirmationTerms => blocks.map((block) => block.text).join('\n');
+
+  /// This page with the reason the forum gave instead of a record's confirmation page.
+  BankServiceData withUnavailable(String reason) => BankServiceData(
+    service: service,
+    blocks: blocks,
+    forms: forms,
+    currency: currency,
+    walletBalance: walletBalance,
+    unavailable: reason,
+    unsupportedForms: unsupportedForms,
+    webOnlyRecords: webOnlyRecords,
+    hasNext: hasNext,
+    feeRate: feeRate,
+  );
 
   /// Exact ceiling calculation matching the forum's displayed fee rule.
   String? estimatedFee(String amount) {
@@ -249,6 +294,16 @@ String _serviceText(uh.Element element) {
     node.remove();
   }
   return _text(copy);
+}
+
+/// The text a confirmation form shows around its fields (the withdrawal page's own notice), without the password's
+/// label.
+String _formNotice(uh.Element form) {
+  final copy = form.clone(true) as uh.Element;
+  for (final node in copy.querySelectorAll('script, style, input, button, select, textarea')) {
+    node.remove();
+  }
+  return _text(copy).replaceFirst(RegExp(r'\s*[^\s。！？!?]*密[码碼]\s*[:：]?\s*$'), '');
 }
 
 BankServiceForm? _serviceForm(uh.Element form, BankService service, int bankId) {
@@ -305,6 +360,8 @@ BankServiceForm? _serviceForm(uh.Element form, BankService service, int bankId) 
     BankService.hall when operation.isEmpty => {BankInput.password, BankInput.passwordConfirm},
     BankService.interest when operation == 'ok' => <BankInput>{},
     BankService.term when operation == 'in' => {BankInput.amount, BankInput.days, BankInput.password},
+    // The withdrawal confirmation page, reached from a record's link.
+    BankService.term when operation == 'out' && _positiveId(hidden['noid']) != null => {BankInput.password},
     BankService.remittance when operation == 'ok' => {BankInput.amount, BankInput.recipient, BankInput.password},
     BankService.loans when operation == 'try' => {BankInput.amount, BankInput.days, BankInput.password},
     BankService.account when operation == 'cg' => {
@@ -320,7 +377,11 @@ BankServiceForm? _serviceForm(uh.Element form, BankService service, int bankId) 
   while (record != null && record.localName != 'tr') {
     record = record.parent;
   }
-  final context = service == BankService.interest ? _text(form) : _serviceText(record ?? form.parent ?? form);
+  final context = service == BankService.interest
+      ? _text(form)
+      : service == BankService.term && operation == 'out' && hidden.containsKey('noid')
+      ? _formNotice(form)
+      : _serviceText(record ?? form.parent ?? form);
   if (expectedInputs == null) {
     // Record operations are offered only by an actual, labelled record form. No guessed IDs/ops.
     if (!{BankService.term, BankService.loans}.contains(service) ||
@@ -345,16 +406,70 @@ BankServiceForm? _serviceForm(uh.Element form, BankService service, int bankId) 
   );
 }
 
+/// A term record's withdrawal link (`op=out&noid=…`) of the selected bank, offered as its confirmation page's form.
+BankServiceForm? _termWithdrawal(uh.Element link, int bankId) {
+  final uri = _pluginUri(link.attributes['href']);
+  final query = uri?.queryParameters ?? const {};
+  final record = _positiveId(query['noid']);
+  if (uri == null ||
+      query.length != 5 ||
+      _positiveId(query['bankid']) != bankId ||
+      query['action'] != BankService.term.action ||
+      query['op'] != 'out' ||
+      record == null) {
+    return null;
+  }
+  var row = link.parent;
+  while (row != null && row.localName != 'tr') {
+    row = row.parent;
+  }
+  final cells = row?.children.where((node) => node.localName == 'td' && node.querySelector('a') == null);
+  final context = cells?.map(_serviceText).where((text) => text.isNotEmpty).join('\n') ?? '';
+  final label = _text(link);
+  if (context.isEmpty || !RegExp('取').hasMatch(label)) return null;
+  return BankServiceForm._(
+    service: BankService.term,
+    bankId: bankId,
+    // The confirmation page's own form posts here, written as the plugin writes it.
+    action: _pluginUri('plugin.php?id=$_pluginId')!.toString(),
+    label: label,
+    context: context,
+    hidden: {'bankid': '$bankId', 'action': BankService.term.action, 'op': 'out', 'noid': '$record'},
+    inputs: const [BankInput.password],
+    confirmUrl:
+        Uri.parse(
+              _endpoint,
+            )
+            .replace(
+              queryParameters: {'id': _pluginId, 'bankid': '$bankId', 'action': 'fix', 'op': 'out', 'noid': '$record'},
+            )
+            .toString(),
+  );
+}
+
+/// The text of the forum's message page (`#messagetext`), without the link to go on.
+String _messageText(uh.Element message) {
+  final copy = message.clone(true) as uh.Element;
+  for (final link in copy.querySelectorAll('a')) {
+    link.remove();
+  }
+  return _text(copy);
+}
+
+/// The forum's reply to a transaction: the text of the message page it answered (the bank's 「恭喜您，操作成功。」,
+/// 「银行密码错误，请返回修改。」…), empty for any other answer. Shown as the forum wrote it; it confirms nothing.
+String bankReplyOf(uh.Document document) {
+  final message = document.querySelector('#messagetext');
+  final text = message == null ? '' : _messageText(message);
+  return text.length > 200 ? '${text.substring(0, 200)}…' : text;
+}
+
 /// Parse service content and actual server forms without running any page scripts.
 BankServiceData parseBankService(uh.Document document, BankService service, {int? bankId, int page = 1}) {
   final request = Uri.parse(bankServiceUrl(service, bankId: bankId, page: page));
   final message = document.querySelector('#messagetext');
   if (message != null) {
-    final copy = message.clone(true) as uh.Element;
-    for (final link in copy.querySelectorAll('a')) {
-      link.remove();
-    }
-    final reason = _text(copy);
+    final reason = _messageText(message);
     if (reason.isEmpty) throw const FormatException('Empty bank response');
     return BankServiceData(service: service, blocks: const [], unavailable: reason);
   }
@@ -395,6 +510,7 @@ BankServiceData parseBankService(uh.Document document, BankService service, {int
   final currency = _text(wallet?.querySelector('font')).replaceFirst(RegExp(r'\s*[:：]\s*$'), '');
   final forms = <BankServiceForm>[];
   var unsupported = false;
+  var webOnly = false;
   if (!service.global) {
     for (final form
         in document.querySelectorAll('form').where((form) => form.querySelector('[name="banksubmit"]') != null)) {
@@ -406,17 +522,28 @@ BankServiceData parseBankService(uh.Document document, BankService service, {int
         forms.add(parsed);
       }
     }
-    // JavaScript or state-changing links cannot be treated as read-only navigation.
-    unsupported =
-        unsupported ||
-        roots.any(
-          (root) => root
-              .querySelectorAll('a')
-              .any(
-                (link) =>
-                    (link.attributes['href'] ?? '').startsWith('javascript:') || link.attributes.containsKey('onclick'),
-              ),
-        );
+    for (final link in roots.expand((root) => root.querySelectorAll('a'))) {
+      final href = link.attributes['href'] ?? '';
+      final uri = _pluginUri(href);
+      // JavaScript or state-changing links cannot be treated as read-only navigation. The record operations are
+      // links: a term record's withdrawal only opens the forum's confirmation page and becomes that form; a loan's
+      // repayment and cancellation run on the link itself and are left to the website. A link elsewhere (a bank's
+      // notice is the manager's BBCode) is only text here.
+      if (href.startsWith('javascript:') || link.attributes.containsKey('onclick')) {
+        unsupported = true;
+      } else if (uri != null && uri.queryParameters.containsKey('op')) {
+        if (service == BankService.loans) {
+          webOnly = true;
+        } else if (service == BankService.term) {
+          final withdrawal = _termWithdrawal(link, bankId!);
+          if (withdrawal == null || currency.isEmpty) {
+            unsupported = true;
+          } else {
+            forms.add(withdrawal);
+          }
+        }
+      }
+    }
   }
   final hasNext = roots.any(
     (root) => root.querySelectorAll('.pg a[href]').any((link) {
@@ -444,6 +571,7 @@ BankServiceData parseBankService(uh.Document document, BankService service, {int
     currency: currency,
     walletBalance: _text(wallet?.querySelector('span > b')),
     unsupportedForms: unsupported,
+    webOnlyRecords: webOnly,
     hasNext: hasNext,
     feeRate: feeRate,
   );

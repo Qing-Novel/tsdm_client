@@ -1,6 +1,11 @@
 import 'package:bloc/bloc.dart';
+import 'package:flutter/foundation.dart';
 import 'package:tsdm_client/features/poll/models/forum_poll.dart';
 import 'package:tsdm_client/features/poll/repository/poll_repository.dart';
+import 'package:tsdm_client/features/special_thread/repository/special_thread_repository.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
+import 'package:tsdm_client/shared/models/models.dart';
+import 'package:universal_html/parsing.dart';
 
 /// Ephemeral poll UI state; never saved to disk.
 final class PollState {
@@ -12,6 +17,7 @@ final class PollState {
     this.failed = false,
     this.submissionUnconfirmed = false,
     this.choices = const {},
+    this.refusal,
   });
 
   /// Latest server snapshot.
@@ -31,12 +37,16 @@ final class PollState {
 
   /// Explicitly selected option identifiers.
   final Set<String> choices;
+
+  /// The forum refused the latest vote, with this message (the forum's app API's result, plugin 2.6.0).
+  final String? refusal;
 }
 
 /// Serializes voting and discards completions from obsolete accounts/pages.
 class PollCubit extends Cubit<PollState> {
   /// Constructor.
-  PollCubit({required this.url, required this.currentUid, required this.repository}) : super(const PollState());
+  PollCubit({required this.url, required this.currentUid, required this.repository, this.onVoted})
+    : super(const PollState());
 
   /// Original post URL, resolved by the forum to its thread.
   final String url;
@@ -46,11 +56,36 @@ class PollCubit extends Cubit<PollState> {
 
   /// Creates an identity-bound transport for each new fetch.
   final PollRepository Function() repository;
+
+  /// Called instead of the GET for the results when the forum took a vote (its app API's result, plugin 2.6.0): the
+  /// thread page holding the card reloads, and builds the card again with the poll as the forum now has it. Null
+  /// where nothing reloads (the post of a notice): the card asks for the results itself.
+  final void Function()? onVoted;
   int _generation = 0;
   PollRepository? _loadedRepository;
 
+  /// A vote was taken and [onVoted] asked the thread page to reload; the card waits for it (busy).
+  bool _awaitsReload = false;
+
+  /// Whether the card waits for the reload of its thread page after a vote ([onVoted]): a reload that failed at once
+  /// leaves the card on screen, which then asks for the poll itself.
+  bool get awaitsReload => _awaitsReload;
+
+  /// The polls a vote was sent for since the app started, as (account, [url]); in memory only.
+  ///
+  /// A vote is final, and a page read before it still shows the poll open: the floors a failed reload of the thread
+  /// page puts back on screen (see ThreadBloc) build their cards again from that page, which showed the poll open for
+  /// a second vote the forum refuses. Recorded when the vote is sent: the forum may count it although its answer never
+  /// arrives (a failed request, or the card closed meanwhile).
+  static final _votesSent = <(int, String)>{};
+
+  /// Forget the votes sent, for tests.
+  @visibleForTesting
+  static void forgetVotesSent() => _votesSent.clear();
+
   /// Hide old-account data immediately, including during a login transition.
   void invalidate() {
+    _awaitsReload = false;
     _generation++;
     _loadedRepository = null;
     emit(const PollState(busy: true));
@@ -58,8 +93,66 @@ class PollCubit extends Cubit<PollState> {
 
   bool _current(int generation, int? uid) => !isClosed && generation == _generation && uid == currentUid();
 
+  /// Show the poll [form] of the page the post was read from, a page served to [servedUid], without asking the forum:
+  /// the thread page already loaded it for the account in use.
+  ///
+  /// False when it cannot be shown, the caller then loads instead:
+  ///
+  /// * The page belongs to another account than the current one (the account changed since).
+  /// * The page was served as to a guest, or does not say to whom, while an account is in use. The forum does that when
+  ///   the session of the account expired (issue #25), and the account may have logged in again since; or the page was
+  ///   read before a login: the floors a failed reload of the thread page puts back after a login or a switch are
+  ///   those of the page before (see ThreadBloc). Shown, the card asked an account logged in to log in, and asked the
+  ///   forum nothing. Only such a page costs a request, mostly while the session is expired; a guest gets the page of
+  ///   a guest.
+  /// * The page shows the poll open although this account sent a vote for it since (the page was read before the vote,
+  ///   see [_votesSent]).
+  ///
+  /// The form is checked the way [PollRepository.fetch] checks a page.
+  bool adopt(String form, {required int? servedUid}) {
+    final uid = currentUid();
+    if (servedUid == null && uid != null) {
+      return false;
+    }
+    final ForumPoll poll;
+    try {
+      poll = PollRepository.pollOfPage(parseHtmlDocument(form), servedUid: servedUid, uid: uid);
+    } on FormatException {
+      return false;
+    }
+    if (poll.availability == PollAvailability.available && uid != null && _votesSent.contains((uid, url))) {
+      return false;
+    }
+    _generation++;
+    // Votes go out through a client bound to the account the form belongs to, as after a load.
+    _loadedRepository = repository();
+    emit(PollState(poll: poll, uid: uid));
+    return true;
+  }
+
+  /// Show the poll [special] of the thread page the card is in (the forum's app API, plugin 2.8.0), without asking the
+  /// forum, as [adopt] shows a page's form, under the same conditions: the page belongs to the account in use, and it
+  /// does not show the poll open although this account sent a vote for it since. False when it cannot be shown, the
+  /// caller then loads instead.
+  bool adoptSpecial(PollSpecial special) {
+    final uid = currentUid();
+    final servedUid = special.viewerUid;
+    if ((servedUid == null && uid != null) || (servedUid != null && servedUid != uid)) {
+      return false;
+    }
+    final poll = forumPollFromSpecial(special, loggedIn: uid != null && servedUid == uid);
+    if (poll.availability == PollAvailability.available && uid != null && _votesSent.contains((uid, url))) {
+      return false;
+    }
+    _generation++;
+    _loadedRepository = repository();
+    emit(PollState(poll: poll, uid: uid));
+    return true;
+  }
+
   /// Reload by GET only. Never repeat a failed/ambiguous submission here.
   Future<void> load() async {
+    _awaitsReload = false;
     final generation = ++_generation;
     final uid = currentUid();
     final repo = repository();
@@ -108,12 +201,31 @@ class PollCubit extends Cubit<PollState> {
     }
     final generation = ++_generation;
     emit(PollState(poll: poll, uid: snapshot.uid, busy: true, choices: snapshot.choices));
+    _votesSent.add((snapshot.uid!, url));
+    TsdmAppWriteResult? result;
     try {
-      await repo.vote(poll, snapshot.choices);
+      result = await repo.vote(poll, snapshot.choices);
     } on Exception {
       // A failed response can still mean the server accepted the vote. Only GET next.
     }
     if (!_current(generation, snapshot.uid)) return;
+    // The forum's verdict when its app API gave one (a `page` tells nothing by itself): a vote taken reloads the
+    // thread page where there is one, a refusal is shown with the forum's words and the poll read again.
+    String? refusal;
+    if (result != null && result.kind != TsdmAppWriteKind.page) {
+      switch (specialOutcomeOfResult(result, doneKeys: const {'thread_poll_succeed'})) {
+        case SpecialActionDone() when onVoted != null:
+          _awaitsReload = true;
+          onVoted!();
+          return;
+        case SpecialActionRefused(:final message):
+          refusal = message;
+          // The forum said no: the vote was not counted.
+          _votesSent.remove((snapshot.uid!, url));
+        case SpecialActionDone() || SpecialActionUnknown():
+          break;
+      }
+    }
     try {
       final refreshed = await repo.fetch(url, snapshot.uid);
       if (!_current(generation, snapshot.uid)) return;
@@ -121,13 +233,14 @@ class PollCubit extends Cubit<PollState> {
         PollState(
           poll: refreshed,
           uid: snapshot.uid,
-          submissionUnconfirmed: refreshed.availability != PollAvailability.voted,
+          submissionUnconfirmed: refusal == null && refreshed.availability != PollAvailability.voted,
+          refusal: refusal,
         ),
       );
     } on Exception {
       if (_current(generation, snapshot.uid)) {
         _loadedRepository = null;
-        emit(PollState(uid: snapshot.uid, failed: true, submissionUnconfirmed: true));
+        emit(PollState(uid: snapshot.uid, failed: true, submissionUnconfirmed: refusal == null, refusal: refusal));
       }
     }
   }

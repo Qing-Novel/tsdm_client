@@ -13,14 +13,18 @@ import 'package:material_design_icons_flutter/material_design_icons_flutter.dart
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:system_theme/system_theme.dart';
 import 'package:tsdm_client/constants/layout.dart';
+import 'package:tsdm_client/extensions/build_context.dart';
 import 'package:tsdm_client/extensions/color.dart';
 import 'package:tsdm_client/extensions/duration.dart';
+import 'package:tsdm_client/features/authentication/repository/authentication_repository.dart';
 import 'package:tsdm_client/features/background_sync/background_sync_controller.dart';
 import 'package:tsdm_client/features/checkin/models/models.dart';
+import 'package:tsdm_client/features/local_notice/notification_permission_prompt.dart';
 import 'package:tsdm_client/features/local_notice/show.dart';
 import 'package:tsdm_client/features/notification/bloc/auto_notification_cubit.dart';
 import 'package:tsdm_client/features/notification/models/models.dart';
-import 'package:tsdm_client/features/root/stream/scroll_to_top_stream.dart';
+import 'package:tsdm_client/features/notification/utils/push_rules.dart';
+import 'package:tsdm_client/features/offline_thread/repository/offline_thread_repository.dart';
 import 'package:tsdm_client/features/root/view/root_page.dart';
 import 'package:tsdm_client/features/settings/bloc/android_permission_cubit.dart';
 import 'package:tsdm_client/features/settings/bloc/settings_bloc.dart';
@@ -34,21 +38,30 @@ import 'package:tsdm_client/features/settings/widgets/backup_secrets_dialogs.dar
 import 'package:tsdm_client/features/settings/widgets/check_in_dialog.dart';
 import 'package:tsdm_client/features/settings/widgets/clear_cache_bottom_sheet.dart';
 import 'package:tsdm_client/features/settings/widgets/color_picker_dialog.dart';
+import 'package:tsdm_client/features/settings/widgets/dark_schedule_dialog.dart';
 import 'package:tsdm_client/features/settings/widgets/font_family_dialog.dart';
 import 'package:tsdm_client/features/settings/widgets/font_scale_dialog.dart';
 import 'package:tsdm_client/features/settings/widgets/language_dialog.dart';
+import 'package:tsdm_client/features/settings/widgets/offline_threads_limit_dialog.dart';
 import 'package:tsdm_client/features/settings/widgets/proxy_settings_dialog.dart';
+import 'package:tsdm_client/features/settings/widgets/select_post_image_auto_load_dialog.dart';
 import 'package:tsdm_client/features/settings/widgets/select_thread_floor_interaction_mode_dialog.dart';
+import 'package:tsdm_client/features/settings/widgets/select_thread_open_position_dialog.dart';
+import 'package:tsdm_client/features/settings/widgets/thread_content_layout_dialog.dart';
 import 'package:tsdm_client/features/settings/widgets/thread_content_scale_dialog.dart';
 import 'package:tsdm_client/features/theme/cubit/theme_cubit.dart';
+import 'package:tsdm_client/features/theme/dark_schedule.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/routes/screen_paths.dart';
 import 'package:tsdm_client/shared/models/models.dart';
+import 'package:tsdm_client/shared/models/post_image_auto_load.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/models/database/connection/native.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/models/database/database.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/storage_provider.dart';
 import 'package:tsdm_client/utils/clipboard.dart';
+import 'package:tsdm_client/utils/html/post_typography.dart';
 import 'package:tsdm_client/utils/log_redaction.dart';
 import 'package:tsdm_client/utils/platform.dart';
 import 'package:tsdm_client/utils/show_bottom_sheet.dart';
@@ -61,8 +74,15 @@ import 'package:tsdm_client/widgets/section_list_tile.dart';
 import 'package:tsdm_client/widgets/section_switch_list_tile.dart';
 import 'package:tsdm_client/widgets/shutdown.dart';
 
-/// Width of the theme mode switch: three compact icon segments.
-const _themeSwitchWidth = 156.0;
+/// Width of the theme mode switch: four icon segments, each a 48 tap target (plus the outlines).
+const _themeSwitchWidth = 200.0;
+
+/// Width of the theme mode switch where the full one leaves no room for its title on the same row (a 384dp phone,
+/// feedback 111): segments of 43, the whole switch still beside the title.
+const _themeSwitchWidthNarrow = 172.0;
+
+/// The value of the fourth segment of the theme mode switch, by time; the other three are the indexes of [ThemeMode].
+const _scheduledSegment = 3;
 
 /// Width of a settings row that is not text: side paddings (16 + 16), leading icon with its gap (24 + 16) and the gap
 /// before the trailing widget (16), plus a little slack.
@@ -85,7 +105,6 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver {
   final scrollController = ScrollController();
-  late final StreamSubscription<ScrollToTopEvent> _scrollToTopSub; // 新增
 
   final _permissionCubit = AndroidPermissionCubit();
   String? _logExportPath;
@@ -142,23 +161,66 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
           trailing: const Icon(Icons.chevron_right),
           onTap: () async => context.pushNamed(ScreenPaths.manageAccount),
         ),
+        SectionSwitchListTile(
+          key: const ValueKey('settings-cross-device-sync'),
+          secondary: const Icon(Icons.sync_outlined),
+          title: Text(tr.crossDeviceSync.title),
+          value: state.settingsMap.crossDeviceSync,
+          onChanged: (v) async =>
+              context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.crossDeviceSync, v)),
+        ),
+        if (state.settingsMap.crossDeviceSync)
+          for (final (key, icon, title, value) in [
+            (
+              SettingsKeys.crossDeviceSyncRateTemplates,
+              Icons.star_border_outlined,
+              tr.crossDeviceSync.rateTemplates,
+              state.settingsMap.crossDeviceSyncRateTemplates,
+            ),
+            (
+              SettingsKeys.crossDeviceSyncSettings,
+              Icons.tune_outlined,
+              tr.crossDeviceSync.settings,
+              state.settingsMap.crossDeviceSyncSettings,
+            ),
+            (
+              SettingsKeys.crossDeviceSyncDrafts,
+              Icons.drafts_outlined,
+              tr.crossDeviceSync.drafts,
+              state.settingsMap.crossDeviceSyncDrafts,
+            ),
+          ])
+            SectionSwitchListTile(
+              key: ValueKey('settings-${key.name}'),
+              secondary: Padding(padding: const EdgeInsetsDirectional.only(start: 24), child: Icon(icon)),
+              title: Text(title),
+              value: value,
+              onChanged: (v) async => context.read<SettingsBloc>().add(SettingsValueChanged(key, v)),
+            ),
       ],
     );
   }
 
-  Widget _buildThemeModeTile(BuildContext context, int themeModeIndex) {
+  Widget _buildThemeModeTile(BuildContext context, int themeModeIndex, {required bool scheduled}) {
     final tr = context.t.settingsPage.appearanceSection;
     final title = tr.themeMode.title;
-    final subtitle = <String>[tr.themeMode.system, tr.themeMode.light, tr.themeMode.dark][themeModeIndex];
-    // Icons only: three labels do not fit a phone at a large text scale; each segment has a tooltip. Compact and of a
-    // fixed width, so the row can tell whether the title still fits beside it.
-    final themeSwitch = SizedBox(
-      width: _themeSwitchWidth,
+    final selected = scheduled ? _scheduledSegment : themeModeIndex;
+    final subtitle = <String>[
+      tr.themeMode.system,
+      tr.themeMode.light,
+      tr.themeMode.dark,
+      tr.themeMode.scheduled,
+    ][selected];
+    // Icons only: four labels do not fit a phone at a large text scale; each segment has a tooltip. Of a fixed width,
+    // so the row can tell whether the title still fits beside it; standard density and tap targets, so every segment
+    // can be hit on 48 where the row has the room (compact and shrink wrapped they were 52 by 32).
+    Widget themeSwitch(double width) => SizedBox(
+      width: width,
       child: SegmentedButton<int>(
         showSelectedIcon: false,
         style: const ButtonStyle(
-          visualDensity: VisualDensity.compact,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          // Four icons: a little less room around each, so the row still fits beside the title on a 384dp phone.
+          padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 8)),
         ),
         segments: [
           ButtonSegment(
@@ -176,12 +238,31 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             icon: const Icon(Icons.dark_mode_outlined),
             tooltip: tr.themeMode.dark,
           ),
+          ButtonSegment(
+            value: _scheduledSegment,
+            icon: const Icon(Icons.schedule_outlined),
+            tooltip: tr.themeMode.scheduled,
+          ),
         ],
-        selected: {themeModeIndex},
+        selected: {selected},
         onSelectionChanged: (selection) {
-          final themeIndex = selection.first;
-          context.read<ThemeCubit>().setThemeModeIndex(themeIndex);
-          context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.themeMode, themeIndex));
+          final value = selection.first;
+          final cubit = context.read<ThemeCubit>();
+          final bloc = context.read<SettingsBloc>();
+          // By time is its own setting, the theme mode stays what it was: a backup of this version restored on an
+          // older one still has a theme mode the older one knows.
+          if (value == _scheduledSegment) {
+            cubit.setScheduled(scheduled: true);
+            bloc.add(const SettingsValueChanged(SettingsKeys.themeModeScheduled, true));
+            return;
+          }
+          cubit
+            ..setThemeModeIndex(value)
+            ..setScheduled(scheduled: false);
+          bloc.add(SettingsValueChanged(SettingsKeys.themeMode, value));
+          if (scheduled) {
+            bloc.add(const SettingsValueChanged(SettingsKeys.themeModeScheduled, false));
+          }
         },
       ),
     );
@@ -206,13 +287,15 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
         }
 
         final textWidth = math.max(widthOf(title, textTheme.bodyLarge), widthOf(subtitle, textTheme.bodyMedium));
-        final beside = constraints.maxWidth - _themeTileChromeWidth - _themeSwitchWidth >= textWidth;
-        if (beside) {
+        final room = constraints.maxWidth - _themeTileChromeWidth - textWidth;
+        // The full switch where it fits beside the title, the narrow one where only that does.
+        final switchWidth = room >= _themeSwitchWidth ? _themeSwitchWidth : _themeSwitchWidthNarrow;
+        if (room >= switchWidth) {
           return SectionListTile(
             leading: const Icon(Icons.contrast_outlined),
             title: Text(title, maxLines: 1),
             subtitle: Text(subtitle, maxLines: 1),
-            trailing: themeSwitch,
+            trailing: themeSwitch(switchWidth),
           );
         }
         return SectionListTile(
@@ -220,11 +303,47 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
           title: Text(title),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: [Text(subtitle), sizedBoxW8H8, themeSwitch, sizedBoxW4H4],
+            children: [Text(subtitle), sizedBoxW8H8, themeSwitch(_themeSwitchWidth), sizedBoxW4H4],
           ),
         );
       },
     );
+  }
+
+  /// The hours of the day the app is dark, shown under the theme mode while the clock decides it.
+  Widget _buildDarkScheduleTile(BuildContext context, DarkSchedule schedule) => SectionListTile(
+    key: const ValueKey('settings-dark-schedule'),
+    leading: const Icon(Icons.bedtime_outlined),
+    title: Text(context.t.settingsPage.appearanceSection.darkSchedule.title),
+    subtitle: Text(schedule.text),
+    trailing: const Icon(Icons.chevron_right),
+    onTap: () async {
+      final picked = await showDarkScheduleDialog(context, schedule);
+      if (picked == null || picked == schedule || !context.mounted) return;
+      context.read<ThemeCubit>().setSchedule(picked);
+      // Both at once: one notification of the settings, the page and the cubit see the new window once.
+      await getIt.get<SettingsRepository>().setValues<int>([
+        (SettingsKeys.darkScheduleStart, picked.start),
+        (SettingsKeys.darkScheduleEnd, picked.end),
+      ]);
+    },
+  );
+
+  /// Pick the line height and the paragraph spacing of the post content ([ThreadContentLayoutDialog]) and save them.
+  Future<void> _pickThreadContentLayout(BuildContext context, PostTypography current, double contentScale) async {
+    final picked = await showDialog<PostTypography>(
+      context: context,
+      builder: (_) => RootPage(
+        DialogPaths.threadContentLayoutPicker,
+        ThreadContentLayoutDialog(initial: current, contentScale: contentScale),
+      ),
+    );
+    if (!context.mounted || picked == null) return;
+    // Both at once: the floors kept alive are laid out again once, not twice.
+    await getIt.get<SettingsRepository>().setValues<double>([
+      (SettingsKeys.threadContentLineHeight, picked.lineHeight),
+      (SettingsKeys.threadContentParagraphSpacing, picked.paragraphSpacing),
+    ]);
   }
 
   Widget _buildAppearanceSection(BuildContext context, SettingsState state) {
@@ -233,18 +352,26 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     final locale = AppLocale.values.firstWhereOrNull((v) => v.languageTag == settingsLocale);
     final localeName = locale == null ? tr.languages.followSystem : context.t.locale;
     final themeModeIndex = state.settingsMap.themeMode;
+    final themeModeScheduled = state.settingsMap.themeModeScheduled;
     final showForumCardShortcut = state.settingsMap.showShortcutInForumCard;
+    final highRefreshRate = state.settingsMap.highRefreshRate;
     final accentColor = state.settingsMap.accentColor;
     final accentColorFollowSystem = state.settingsMap.accentColorFollowSystem;
     final fontFamily = state.settingsMap.fontFamily;
     final textScaleFactor = state.settingsMap.textScaleFactor;
     final threadContentScale = state.settingsMap.threadContentScale;
+    final postTypography = state.settingsMap.postTypography;
 
     return AppTileGroup(
       title: tr.title,
       icon: Icons.palette_outlined,
       children: [
-        _buildThemeModeTile(context, themeModeIndex),
+        _buildThemeModeTile(context, themeModeIndex, scheduled: themeModeScheduled),
+        if (themeModeScheduled)
+          _buildDarkScheduleTile(
+            context,
+            DarkSchedule(start: state.settingsMap.darkScheduleStart, end: state.settingsMap.darkScheduleEnd),
+          ),
         SectionListTile(
           leading: const Icon(Icons.translate_outlined),
           title: Text(tr.languages.title),
@@ -352,6 +479,29 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.threadContentScale, selectedScale));
           },
         ),
+        // Line height and paragraph spacing of the post content: one dialog with both and a preview.
+        SectionListTile(
+          leading: const Icon(Icons.format_line_spacing_outlined),
+          title: Text(tr.threadContentLineHeight.title),
+          subtitle: Text(tr.threadContentLineHeight.detail),
+          trailing: _trailingValue(context, postTypography.lineHeight.toStringAsFixed(1)),
+          onTap: () async => _pickThreadContentLayout(context, postTypography, threadContentScale),
+        ),
+        SectionListTile(
+          leading: const Icon(Icons.segment_outlined),
+          title: Text(tr.threadContentParagraphSpacing.title),
+          subtitle: Text(tr.threadContentParagraphSpacing.detail),
+          trailing: _trailingValue(context, postTypography.paragraphSpacing.toStringAsFixed(0)),
+          onTap: () async => _pickThreadContentLayout(context, postTypography, threadContentScale),
+        ),
+        SectionSwitchListTile(
+          secondary: const Icon(Icons.wrap_text_outlined),
+          title: Text(tr.threadContentSplitLongParagraphs.title),
+          subtitle: Text(tr.threadContentSplitLongParagraphs.detail),
+          value: postTypography.splitLongParagraphs,
+          onChanged: (v) =>
+              context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.threadContentSplitLongParagraphs, v)),
+        ),
         SectionListTile(
           leading: const Icon(Icons.article_outlined),
           title: Text(tr.threadCard.title),
@@ -367,6 +517,21 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
           onChanged: (v) async =>
               context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.showShortcutInForumCard, v)),
         ),
+        SectionSwitchListTile(
+          key: const ValueKey('settings-two-pane-layout'),
+          secondary: const Icon(Icons.vertical_split_outlined),
+          title: Text(tr.twoPaneLayout.title),
+          value: state.settingsMap.twoPaneLayout,
+          onChanged: (v) async => context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.twoPaneLayout, v)),
+        ),
+        if (isAndroid)
+          SectionSwitchListTile(
+            secondary: const Icon(Icons.speed_outlined),
+            title: Text(tr.highRefreshRate.title),
+            subtitle: Text(tr.highRefreshRate.detail),
+            value: highRefreshRate,
+            onChanged: (v) => context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.highRefreshRate, v)),
+          ),
       ],
     );
   }
@@ -424,6 +589,12 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       icon: Icons.desktop_windows_outlined,
       footer: AppNoticeBanner(message: tr.disableHint, selectable: true),
       children: [
+        SectionListTile(
+          leading: const Icon(Icons.keyboard_alt_outlined),
+          title: Text(tr.keyboardShortcuts),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.pushNamed(ScreenPaths.keyboardShortcuts),
+        ),
         SectionSwitchListTile(
           secondary: const Icon(Icons.settings_overscan_outlined),
           title: Text(tr.windowRememberSize.title),
@@ -458,10 +629,25 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
 
   Future<void> _toggleBackgroundSync(BuildContext context, {required bool enable}) async {
     await getIt.get<SettingsRepository>().setValue(SettingsKeys.enableBackgroundMessageService, enable);
-    if (enable) {
-      unawaited(_permissionCubit.requestNotification(openSettingsWhenPermanentlyDenied: false));
+    if (enable && context.mounted) {
+      unawaited(
+        askNotificationPermission(
+          context,
+          trigger: NotificationPermissionTrigger.settings,
+          loggedIn: context.readOrNull<AuthenticationRepository>()?.currentUser != null,
+          cubit: _permissionCubit,
+        ),
+      );
     }
     if (!context.mounted) return;
+    await _applyBackgroundSyncSettings(context);
+  }
+
+  /// Let the auto sync poll every saved account, or the account in use only. The in-app auto sync reads it on its next
+  /// poll; a running background service (Android) reads the settings again and ticks right away.
+  Future<void> _toggleBackgroundSyncAllAccounts(BuildContext context, {required bool enable}) async {
+    await getIt.get<SettingsRepository>().setValue(SettingsKeys.backgroundSyncAllAccounts, enable);
+    if (!isAndroid || !context.mounted) return;
     await _applyBackgroundSyncSettings(context);
   }
 
@@ -471,6 +657,8 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     final threadReverseOrder = state.settingsMap.threadReverseOrder;
     final enableBBCodeParser = state.settingsMap.enableEditorBBCodeParser;
     final threadFloorInteractionMode = state.settingsMap.threadFloorInteractionMode;
+    final collapseAppBarWhenScroll = state.settingsMap.collapseAppBarWhenScroll;
+    final postImageAutoLoad = PostImageAutoLoad.fromIndex(state.settingsMap.postImageAutoLoad);
 
     return AppTileGroup(
       title: tr.title,
@@ -485,6 +673,18 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
               context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.threadReverseOrder, v)),
         ),
         SectionListTile(
+          key: const ValueKey('settings-thread-open-position'),
+          leading: const Icon(Icons.bookmark_outline),
+          title: Text(tr.threadOpenPosition.title),
+          subtitle: Text(threadOpenPositionLabel(context, state.settingsMap.openPosition)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            final result = await showSelectThreadOpenPosition(context, state.settingsMap.openPosition);
+            if (result == null || !context.mounted) return;
+            context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.threadOpenPosition, result.index));
+          },
+        ),
+        SectionListTile(
           leading: const Icon(Icons.touch_app_outlined),
           title: Text(tr.threadFloorInteractionMode.title),
           subtitle: Text(tr.threadFloorInteractionMode.detail),
@@ -494,6 +694,34 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             if (result == null) return;
             if (!context.mounted) return;
             context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.threadFloorInteractionMode, result));
+          },
+        ),
+        SectionSwitchListTile(
+          secondary: const Icon(Icons.vertical_align_top_outlined),
+          title: Text(tr.collapseAppBarWhenScroll.title),
+          subtitle: Text(tr.collapseAppBarWhenScroll.detail),
+          value: collapseAppBarWhenScroll,
+          onChanged: (v) async =>
+              context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.collapseAppBarWhenScroll, v)),
+        ),
+        SectionSwitchListTile(
+          key: const ValueKey('settings-thread-swipe-paging'),
+          secondary: const Icon(Icons.swipe_outlined),
+          title: Text(tr.threadSwipePaging.title),
+          value: state.settingsMap.threadSwipePaging,
+          onChanged: (v) async =>
+              context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.threadSwipePaging, v)),
+        ),
+        SectionListTile(
+          key: const ValueKey('settings-post-image-auto-load'),
+          leading: const Icon(Icons.image_outlined),
+          title: Text(tr.postImageAutoLoad.title),
+          subtitle: Text(postImageAutoLoadLabel(context, postImageAutoLoad)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            final result = await showSelectPostImageAutoLoad(context, postImageAutoLoad);
+            if (result == null || !context.mounted) return;
+            context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.postImageAutoLoad, result.index));
           },
         ),
         SectionSwitchListTile(
@@ -532,6 +760,15 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
           trailing: const Icon(Icons.chevron_right),
           onTap: () async => context.pushNamed(ScreenPaths.fastReplyTemplate, pathParameters: {'pick': 'false'}),
         ),
+        // What the editors kept and did not send, for the current account.
+        SectionListTile(
+          key: const ValueKey('settings-local-drafts'),
+          leading: const Icon(Icons.history_edu_outlined),
+          title: Text(context.t.localDraft.title),
+          subtitle: Text(context.t.localDraft.details),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async => context.pushNamed(ScreenPaths.localDrafts),
+        ),
       ],
     );
   }
@@ -562,7 +799,14 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             if (seconds == null || !context.mounted) return;
             if (seconds > 0) {
               context.read<AutoNotificationCubit>().start(Duration(seconds: seconds));
-              unawaited(_permissionCubit.requestNotification(openSettingsWhenPermanentlyDenied: false));
+              unawaited(
+                askNotificationPermission(
+                  context,
+                  trigger: NotificationPermissionTrigger.settings,
+                  loggedIn: context.readOrNull<AuthenticationRepository>()?.currentUser != null,
+                  cubit: _permissionCubit,
+                ),
+              );
             } else {
               context.read<AutoNotificationCubit>().stop();
             }
@@ -581,6 +825,97 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             value: state.settingsMap.enableBackgroundMessageService,
             onChanged: (v) async => _toggleBackgroundSync(context, enable: v),
           ),
+        // Only where the auto sync posts system notifications: nothing would change elsewhere.
+        if (autoSyncPostsNotifications)
+          SectionSwitchListTile(
+            key: const ValueKey('background-sync-all-accounts'),
+            secondary: const Icon(Icons.switch_account_outlined),
+            title: Text(tr.backgroundSyncAllAccounts.title),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(tr.backgroundSyncAllAccounts.detail),
+                Text(
+                  tr.backgroundSyncAllAccounts.seenNote,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            value: state.settingsMap.backgroundSyncAllAccounts,
+            onChanged: (v) async => _toggleBackgroundSyncAllAccounts(context, enable: v),
+          ),
+        // What the system notifications show, on the lock screen too.
+        if (autoSyncPostsNotifications)
+          SectionSwitchListTile(
+            key: const ValueKey('notification-hide-content'),
+            secondary: const Icon(Icons.visibility_off_outlined),
+            title: Text(tr.notificationHideContent.title),
+            subtitle: Text(tr.notificationHideContent.detail),
+            value: state.settingsMap.notificationHideContent,
+            onChanged: (v) async => getIt.get<SettingsRepository>().setValue(SettingsKeys.notificationHideContent, v),
+          ),
+      ],
+    );
+  }
+
+  /// Which categories the system notifications announce, and the quiet hours.
+  Widget _buildNoticeCategoriesSection(BuildContext context, SettingsState state) {
+    final tr = context.t.settingsPage.behaviorSection.noticeCategories;
+    final map = state.settingsMap;
+    final repo = getIt.get<SettingsRepository>();
+    Widget category(NoticeCategory c, IconData icon, String title, {required bool value}) => SectionSwitchListTile(
+      key: ValueKey('notice-category-${c.name}'),
+      secondary: Icon(icon),
+      title: Text(title),
+      value: value,
+      onChanged: (v) async => repo.setValue(c.settingsKey, v),
+    );
+    Future<void> pick(SettingsKeys<int> key, int minutes) async {
+      final picked = await showTimePicker(
+        context: context,
+        initialTime: TimeOfDay(hour: minutes ~/ 60 % 24, minute: minutes % 60),
+        builder: (context, child) =>
+            MediaQuery(data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true), child: child!),
+      );
+      if (picked != null) {
+        await repo.setValue(key, picked.hour * 60 + picked.minute);
+      }
+    }
+
+    return AppTileGroup(
+      title: tr.title,
+      icon: Icons.notifications_active_outlined,
+      children: [
+        category(NoticeCategory.reply, Icons.reply_outlined, tr.reply, value: map.notifyReply),
+        category(NoticeCategory.mention, Icons.alternate_email_outlined, tr.mention, value: map.notifyMention),
+        category(NoticeCategory.rate, Icons.star_outline, tr.rate, value: map.notifyRate),
+        category(NoticeCategory.pm, Icons.mail_outline, tr.pm, value: map.notifyPersonalMessage),
+        category(NoticeCategory.system, Icons.campaign_outlined, tr.system, value: map.notifySystem),
+        SectionSwitchListTile(
+          key: const ValueKey('notice-quiet-hours'),
+          secondary: const Icon(Icons.bedtime_outlined),
+          title: Text(tr.quietHours),
+          value: map.notifyQuietHours,
+          onChanged: (v) async => repo.setValue(SettingsKeys.notifyQuietHours, v),
+        ),
+        if (map.notifyQuietHours) ...[
+          SectionListTile(
+            key: const ValueKey('notice-quiet-start'),
+            leading: const Icon(Icons.nightlight_outlined),
+            title: Text(tr.quietStart),
+            trailing: _trailingValue(context, DarkSchedule.timeText(map.notifyQuietStart)),
+            onTap: () async => pick(SettingsKeys.notifyQuietStart, map.notifyQuietStart),
+          ),
+          SectionListTile(
+            key: const ValueKey('notice-quiet-end'),
+            leading: const Icon(Icons.wb_sunny_outlined),
+            title: Text(tr.quietEnd),
+            trailing: _trailingValue(context, DarkSchedule.timeText(map.notifyQuietEnd)),
+            onTap: () async => pick(SettingsKeys.notifyQuietEnd, map.notifyQuietEnd),
+          ),
+        ],
       ],
     );
   }
@@ -655,6 +990,8 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     final tr = context.t.settingsPage.storageSection;
     final enableAutoClearImageCache = state.settingsMap.enableAutoClearImageCache;
     final autoClearImageDurationSec = state.settingsMap.autoClearImageCacheDuration;
+    final offlineThreads = state.settingsMap.offlineThreads;
+    final offlineThreadsLimit = state.settingsMap.offlineThreadsLimit;
     Duration? autoClearImageDuration;
     if (autoClearImageDurationSec > 0) {
       autoClearImageDuration = Duration(seconds: autoClearImageDurationSec);
@@ -695,6 +1032,35 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             );
             if (seconds == null || !context.mounted) return;
             context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.autoClearImageCacheDuration, seconds));
+          },
+        ),
+        SectionSwitchListTile(
+          secondary: const Icon(Icons.cloud_download_outlined),
+          title: Text(tr.offlineThreads.title),
+          subtitle: Text(tr.offlineThreads.detail),
+          value: offlineThreads,
+          onChanged: (v) async {
+            context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.offlineThreads, v));
+            if (!v) {
+              // Off means nothing kept: what was saved goes too.
+              await appOfflineThreads.clear();
+            }
+          },
+        ),
+        SectionListTile(
+          enabled: offlineThreads,
+          leading: const Icon(Icons.format_list_numbered_outlined),
+          title: Text(tr.offlineThreads.limit.title),
+          subtitle: Text(tr.offlineThreads.limit.detail),
+          trailing: _trailingValue(context, tr.offlineThreads.limit.value(count: offlineThreadsLimit)),
+          onTap: () async {
+            final limit = await showDialog<int>(
+              context: context,
+              builder: (_) => RootPage(DialogPaths.offlineThreadsLimit, OfflineThreadsLimitDialog(offlineThreadsLimit)),
+            );
+            if (limit == null || !context.mounted) return;
+            context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.offlineThreadsLimit, limit));
+            await appOfflineThreads.trim(limit);
           },
         ),
       ],
@@ -770,7 +1136,41 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
               barrierDismissible: false,
             ),
           ),
+        _buildForumApiTile(context),
+        SectionSwitchListTile(
+          key: const ValueKey('settings-app-post-renderer'),
+          secondary: const Icon(Icons.science_outlined),
+          title: Text(tr.appPostRenderer.title),
+          subtitle: Text(tr.appPostRenderer.detail),
+          value: state.settingsMap.enableAppPostRenderer,
+          onChanged: (v) =>
+              context.read<SettingsBloc>().add(SettingsValueChanged(SettingsKeys.enableAppPostRenderer, v)),
+        ),
       ],
+    );
+  }
+
+  /// The forum's app API: the plugin version the forum last named ([TsdmAppApi.pluginInfo], from a `status` or
+  /// `notify` answer of this run; nothing is asked here) beside the version this app was written against
+  /// ([expectedTsdmAppVersion]), and a line telling that some pages are parsed from the web page when the forum's is
+  /// older.
+  Widget _buildForumApiTile(BuildContext context) {
+    final tr = context.t.settingsPage.advancedSection.forumApi;
+    return ValueListenableBuilder<TsdmAppPluginInfo?>(
+      valueListenable: TsdmAppApi.pluginInfo,
+      builder: (context, info, _) {
+        final older = info?.olderThanExpected ?? false;
+        final line = info == null
+            ? tr.notDetected(expected: expectedTsdmAppVersion)
+            : tr.detected(seen: info.version, expected: expectedTsdmAppVersion);
+        return SectionListTile(
+          key: const ValueKey('settings-forum-api'),
+          leading: const Icon(Icons.api_outlined),
+          title: Text(tr.title),
+          subtitle: Text(older ? '$line\n${tr.olderNote}' : line),
+          isThreeLine: older,
+        );
+      },
     );
   }
 
@@ -788,20 +1188,28 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
           onTap: () async {
             final choice = await showExportBackupDialog(context);
             if (choice == null || !context.mounted) return;
-            final data = await const BackupRepository().exportSanitized(
-              await databaseFile,
-              secretsPassword: choice.password,
-            );
-            final stamp = DateTime.now().microsecondsSinceEpoch;
-            final name = choice.password == null
-                ? 'tsdm_client_data_$stamp.db'
-                : 'tsdm_client_data_${stamp}_accounts.db';
-            if (isDesktop) {
-              final filePath = await FilePicker.platform.saveFile(dialogTitle: tr.exportData, fileName: name);
-              if (filePath == null) return;
-              await File(filePath).writeAsBytes(data, flush: true);
-            } else {
-              await FilePicker.platform.saveFile(dialogTitle: tr.exportData, fileName: name, bytes: data);
+            try {
+              final data = await const BackupRepository().exportSanitized(
+                await databaseFile,
+                secretsPassword: choice.password,
+              );
+              final stamp = DateTime.now().microsecondsSinceEpoch;
+              final name = choice.password == null
+                  ? 'tsdm_client_data_$stamp.db'
+                  : 'tsdm_client_data_${stamp}_accounts.db';
+              if (isDesktop) {
+                final filePath = await FilePicker.platform.saveFile(dialogTitle: tr.exportData, fileName: name);
+                if (filePath == null) return;
+                await File(filePath).writeAsBytes(data, flush: true);
+              } else {
+                await FilePicker.platform.saveFile(dialogTitle: tr.exportData, fileName: name, bytes: data);
+              }
+            } on Object catch (e, st) {
+              // The copy failed (the database busy for too long, no space left…): say so, the data stays as it was.
+              talker.handle(e, st, 'failed to export the backup');
+              if (context.mounted) {
+                showSnackBar(context: context, message: tr.exportDataFailed);
+              }
             }
           },
         ),
@@ -1040,20 +1448,12 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_permissionCubit.refresh());
-
-    // 新增：监听返回顶部事件
-    _scrollToTopSub = scrollToTopStream.stream.listen((event) {
-      if (event.tabIndex == 2 && mounted && scrollController.hasClients && scrollController.offset > 0) {
-        unawaited(scrollController.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut));
-      }
-    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_permissionCubit.close());
-    unawaited(_scrollToTopSub.cancel()); // 新增
     scrollController.dispose();
     super.dispose();
   }
@@ -1088,6 +1488,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
         final end = [
           _buildBehaviorSection(context, state),
           _buildNoticeSyncSection(context, state),
+          if (autoSyncPostsNotifications) _buildNoticeCategoriesSection(context, state),
           _buildStorageSection(context, state),
           _buildAdvanceSection(context, state),
           _buildBackupSection(context, state),

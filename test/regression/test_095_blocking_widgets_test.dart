@@ -36,6 +36,7 @@ import 'package:tsdm_client/features/settings/bloc/settings_bloc.dart';
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
 import 'package:tsdm_client/features/thread/v1/bloc/thread_bloc.dart';
 import 'package:tsdm_client/features/thread/v1/view/thread_page.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/models/models.dart';
@@ -52,7 +53,6 @@ import 'package:tsdm_client/widgets/card/post_card/post_card.dart';
 import 'package:tsdm_client/widgets/card/thread_card/thread_card.dart';
 import 'package:tsdm_client/widgets/indicator.dart';
 import 'package:tsdm_client/widgets/reply_bar/reply_bar.dart';
-import 'package:universal_html/html.dart' as uh;
 import 'package:universal_html/parsing.dart';
 
 /// Widget level regressions of the local block and the forum notice rules, on the real pages and cards:
@@ -226,9 +226,9 @@ final class _FixtureRepository extends LatestThreadRepository {
   final urls = <String>[];
 
   @override
-  AsyncEither<uh.Document> fetchDocument(String url) {
+  AsyncEither<TsdmAppPageAnswer> fetchPage(String url) {
     urls.add(url);
-    return AsyncEither.of(parseHtmlDocument(File('test/data/$name').readAsStringSync()));
+    return AsyncEither.of(TsdmAppWebPage(parseHtmlDocument(File('test/data/$name').readAsStringSync())));
   }
 }
 
@@ -636,18 +636,13 @@ void main() {
       for (final title in threads.map((e) => e.title!)) {
         expect(find.text(title), findsNothing, reason: 'topic of a blocked author: $title');
       }
-      // Not turned into the empty page: the list keeps its rows (built as nothing) and its load-more.
+      // Not turned into the empty page: the list keeps its rows (built as nothing) and its load-more. With every row
+      // built as nothing the end of the list is in view, and it asks the next page by itself (no pull needed).
       expect(find.text(tr.latestThreadPage.empty), findsNothing);
       expect(find.byType(LatestThreadCard), findsWidgets);
-      expect(page().threadList, hasLength(threads.length));
-
-      // Pulling up past the end still loads the next page.
-      expect(repository.urls, hasLength(1));
-      await tester.drag(find.byType(ListView), const Offset(0, -400));
-      await settle(tester);
-      await tester.pumpAndSettle();
-      expect(repository.urls, hasLength(2));
-      expect(repository.urls.last, contains('page=2'));
+      expect(page().threadList.take(threads.length).map((e) => e.title), threads.map((e) => e.title));
+      expect(repository.urls.length, greaterThan(1));
+      expect(repository.urls[1], contains('page=2'));
       expect(page().threadList.length, greaterThan(threads.length));
     });
   });

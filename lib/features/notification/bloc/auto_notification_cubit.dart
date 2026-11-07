@@ -40,19 +40,27 @@ part 'auto_notification_state.dart';
 /// Now we try to solve the chaos by adding mutex and state flag.
 final class AutoNotificationCubit extends Cubit<AutoNoticeState> with LoggerMixin {
   /// Constructor.
+  ///
+  /// [afterPoll] is called after every poll of the account in use, whatever came of it (fetched, skipped because the
+  /// background service polled moments ago, failed), once the cubit is back to ticking; it is not waited for. The app
+  /// polls the other logged-in accounts there when asked to (`OtherAccountsAutoSync`): a login or an account switch,
+  /// which wait for a pending poll, never wait for those.
   AutoNotificationCubit({
     required AuthenticationRepository authenticationRepository,
     required NotificationRepository notificationRepository,
     required StorageProvider storageProvider,
     this.duration = Duration.zero,
+    void Function()? afterPoll,
   }) : _authenticationRepository = authenticationRepository,
        _notificationRepository = notificationRepository,
        _storageProvider = storageProvider,
+       _afterPoll = afterPoll,
        super(const AutoNoticeStateStopped());
 
   final AuthenticationRepository _authenticationRepository;
   final NotificationRepository _notificationRepository;
   final StorageProvider _storageProvider;
+  final void Function()? _afterPoll;
 
   /// Duration between auto fetch actions.
   Duration duration;
@@ -79,7 +87,8 @@ final class AutoNotificationCubit extends Cubit<AutoNoticeState> with LoggerMixi
   ///
   /// The bound is written unconditionally on purpose: a device clock that ran ahead may have stored a bound in the
   /// future, and only a fetch that writes what the forum says can bring it back (GitHub #71). `NotificationBloc`
-  /// separately keeps the latest message time and never moves it backwards.
+  /// records the bound of its own fetches the same way, but never moves it backwards (unless the stored one lies too
+  /// far ahead of the device clock).
   AsyncVoidEither _emitDataState(int uid, DateTime? serverTime) {
     return AsyncVoidEither(() async {
       debug('auto fetch finished with data');
@@ -125,7 +134,15 @@ final class AutoNotificationCubit extends Cubit<AutoNoticeState> with LoggerMixi
 
     // Mark as pending data.
     emit(AutoNoticeStatePending(DateTime.now()));
+    try {
+      await _pollCurrent(uid);
+    } finally {
+      _afterPoll?.call();
+    }
+  }
 
+  /// Poll the account in use [uid], the cubit pending meanwhile.
+  Future<void> _pollCurrent(int uid) async {
     // The Android background service may have polled moments ago (GitHub #173); its rows reach the page by itself.
     final slot = await NotificationPollSlot.take(_storageProvider, uid, duration);
     if (slot == null) {

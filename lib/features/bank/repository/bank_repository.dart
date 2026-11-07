@@ -1,6 +1,7 @@
 import 'package:fpdart/fpdart.dart';
 import 'package:tsdm_client/features/authentication/utils/logged_user_parser.dart';
 import 'package:tsdm_client/features/bank/models/bank_data.dart';
+import 'package:tsdm_client/features/tsdmapp/tsdmapp_api.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
 import 'package:universal_html/html.dart' as uh;
 import 'package:universal_html/parsing.dart';
@@ -16,8 +17,9 @@ class BankRepository {
       Right(:final value) => value.data as String,
       Left(:final value) => throw value,
     },
+    // The write result of the forum's app API (plugin 2.6.0) is read as the page it stands for.
     postForm: (url, body) async => switch (await client.postForm(url, data: body, singleAttempt: true).run()) {
-      Right(:final value) => value.data as String,
+      Right(:final value) => tsdmAppWriteAnswerHtml(value.data),
       Left(:final value) => throw value,
     },
   );
@@ -63,14 +65,21 @@ class BankRepository {
         page: page,
       );
 
-  /// Submit one freshly validated service form. Transport never retries it.
-  Future<void> submitService(BankServiceForm form, Map<String, String> values) async {
-    await postForm(form.action, form.body(values));
+  /// Reads the forum's confirmation page a record links to (a term withdrawal); nothing is sent.
+  Future<BankServiceData> fetchConfirmation(BankServiceForm form, int uid) async {
+    final url = form.confirmUrl;
+    if (url == null) throw const FormatException('No bank confirmation page');
+    return parseBankService(await _fetch(url, uid), form.service, bankId: form.bankId);
   }
 
+  /// Submit one freshly validated service form. Transport never retries it. Answers the forum's reply
+  /// ([bankReplyOf]).
+  Future<String> submitService(BankServiceForm form, Map<String, String> values) async =>
+      bankReplyOf(parseHtmlDocument(await postForm(form.action, form.body(values))));
+
   /// A response, including HTTP 200, is not evidence that a transaction succeeded.
-  /// The caller must show an unconfirmed result and refresh via GET only.
-  Future<void> submit(BankTransactionForm form, BankOperation operation, String amount, String password) async {
-    await postForm(form.action, form.body(operation, amount, password));
-  }
+  /// The caller must show an unconfirmed result and refresh via GET only. Answers the forum's reply ([bankReplyOf]),
+  /// shown as it is.
+  Future<String> submit(BankTransactionForm form, BankOperation operation, String amount, String password) async =>
+      bankReplyOf(parseHtmlDocument(await postForm(form.action, form.body(operation, amount, password))));
 }

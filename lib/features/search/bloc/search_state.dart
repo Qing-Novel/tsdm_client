@@ -12,7 +12,8 @@ enum SearchStatus {
   success,
 
   /// Load failed.
-  failed;
+  failed
+  ;
 
   /// Is in searching.
   bool isSearching() => this == SearchStatus.loading;
@@ -28,10 +29,17 @@ class SearchState with SearchStateMappable {
     this.fid = '0',
     this.uid = '0',
     this.authorName = '',
+    this.filter = const SearchFilter(),
     this.searchResult,
     this.pageNumber = 1,
     this.hasNextPage = false,
     this.hasPreviousPage = false,
+    this.failedMessage,
+    this.retryAfterSeconds,
+    this.failedAt,
+    this.loadingMore = false,
+    this.loadMoreFailed = false,
+    this.failure,
   });
 
   /// Status.
@@ -49,6 +57,9 @@ class SearchState with SearchStateMappable {
   /// Search for which user, by name. Empty for any user.
   final String authorName;
 
+  /// Time range, order and title only of the search.
+  final SearchFilter filter;
+
   /// Current search page number.
   final int pageNumber;
 
@@ -60,4 +71,25 @@ class SearchState with SearchStateMappable {
 
   /// Search result.
   final SearchResult? searchResult;
+
+  /// The forum's own words when the last search failed with them (too frequent, expired, no permission), null for
+  /// any other failure (the network).
+  final String? failedMessage;
+
+  /// The forum allows one search in so many seconds and the last one came too early ([searchRateLimitSeconds]): the
+  /// seconds to wait from [failedAt]. Null for any other failure.
+  final int? retryAfterSeconds;
+
+  /// When the last search failed.
+  final DateTime? failedAt;
+
+  /// The next page of the results is on its way, appended to them once it came.
+  final bool loadingMore;
+
+  /// The next page of the results failed: the results shown stay, the end of the list retries.
+  final bool loadMoreFailed;
+
+  /// Why the last search ([SearchStatus.failed]) or the next page of it ([loadMoreFailed]) failed, as the user is
+  /// told; null once one succeeded.
+  final LoadFailure? failure;
 }

@@ -16,6 +16,7 @@ import 'package:tsdm_client/features/notification/repository/notification_sync_a
 import 'package:tsdm_client/features/settings/repositories/settings_repository.dart';
 import 'package:tsdm_client/i18n/strings.g.dart';
 import 'package:tsdm_client/instance.dart';
+import 'package:tsdm_client/shared/models/models.dart';
 import 'package:tsdm_client/shared/providers/cookie_provider/cookie_provider.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_error_saver.dart';
@@ -23,6 +24,7 @@ import 'package:tsdm_client/shared/providers/providers.dart';
 import 'package:tsdm_client/shared/providers/proxy_provider/proxy_provider.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/models/database/connection/connection.dart' as conn;
 import 'package:tsdm_client/shared/providers/storage_provider/models/database/database.dart';
+import 'package:tsdm_client/shared/providers/storage_provider/saved_answer_store.dart';
 import 'package:tsdm_client/shared/providers/storage_provider/storage_provider.dart';
 import 'package:tsdm_client/utils/log_redaction.dart';
 import 'package:tsdm_client/utils/logger.dart';
@@ -60,7 +62,9 @@ final class _BackgroundSyncRuntime {
       ..registerSingleton(storage)
       ..registerSingleton(settingsRepo)
       ..registerFactory(CookieProvider.buildEmpty, instanceName: ServiceKeys.empty)
-      ..registerSingleton(NetErrorSaver());
+      ..registerSingleton(NetErrorSaver())
+      // An account removed here takes the pages saved for it along, as in the app.
+      ..registerSingleton(SavedAnswerStore());
     final repository = NotificationSyncAllRepository(
       storageProvider: storage,
       notificationRepository: NotificationRepository(storageProvider: storage),
@@ -69,6 +73,7 @@ final class _BackgroundSyncRuntime {
         dio: settingsRepo.buildDefaultDio(nativeHttp: false),
         cookie: cookie,
       ),
+      // One account per call: the tick spaces the accounts itself (`backgroundSyncAccountGap`).
       gap: Duration.zero,
     );
     final plugin = FlutterLocalNotificationsPlugin();
@@ -133,6 +138,9 @@ Future<IOSink> _initBackgroundLogger() async {
   return sink;
 }
 
+/// ` for uid 12**` in a log line about one account, nothing for the whole tick.
+String _ofUid(int? uid) => uid == null ? '' : ' for uid ${"$uid".obscured(4)}';
+
 /// Entry point of the service isolate.
 @pragma('vm:entry-point')
 Future<void> backgroundSyncEntryPoint(ServiceInstance service) async {
@@ -167,7 +175,12 @@ Future<void> backgroundSyncEntryPoint(ServiceInstance service) async {
     await service.stopSelf();
   }
 
-  /// Act on what a tick (or a fetch given up by one, answered later) brought.
+  /// Act on what a tick (or a fetch given up by one, answered later) brought, one account at a time.
+  ///
+  /// A notification carries its account ([LocalNoticeAccount]): a tap opens the notice page as that account. With
+  /// every account announced it names the account and is that account's own, see [BackgroundSyncDone.named]. An
+  /// expired login of any account was recorded for that account by the sync itself; nothing else is done here, the
+  /// account in use is never logged out by the service.
   Future<void> report(BackgroundSyncOutcome outcome) async {
     if (stopping) {
       // The app asked for the stop while the fetch was in flight: whatever came back is stored, not announced.
@@ -178,15 +191,23 @@ Future<void> backgroundSyncEntryPoint(ServiceInstance service) async {
       switch (outcome) {
         case BackgroundSyncDisabled():
           await stop('switched off');
-        case BackgroundSyncSkipped(:final reason):
-          talker.debug('background sync: skipped, $reason');
-        case BackgroundSyncStale(:final reason):
-          talker.info('background sync: not announced, $reason');
-        case BackgroundSyncDone(:final uid, :final result):
+        case BackgroundSyncSkipped(:final reason, :final uid):
+          talker.debug('background sync: skipped${_ofUid(uid)}, $reason');
+        case BackgroundSyncStale(:final reason, :final uid):
+          talker.info('background sync: not announced${_ofUid(uid)}, $reason');
+        case BackgroundSyncDone(:final uid, :final username, :final named, :final result):
           talker.debug('background sync: ${result.runtimeType} for uid ${"$uid".obscured(4)}');
           if (result case NotificationSyncResultSuccess(:final latest)) {
             if (latest != null) {
-              await showLocalNotificationWith(plugin: runtime.plugin, translations: t, info: latest);
+              await showLocalNotificationWith(
+                plugin: runtime.plugin,
+                translations: t,
+                info: latest,
+                account: LocalNoticeAccount(uid: uid, username: username, named: named),
+                hideContent:
+                    await runtime.storage.getBool(SettingsKeys.notificationHideContent.name) ??
+                    SettingsKeys.notificationHideContent.defaultValue,
+              );
             }
             service.invoke(BackgroundSyncEvents.synced, {
               'uid': uid,
@@ -213,13 +234,14 @@ Future<void> backgroundSyncEntryPoint(ServiceInstance service) async {
     }
     ticking = true;
     try {
-      final outcome = await backgroundSyncTick(
+      // Each account is announced as soon as it is done; the account in use only, unless every account is asked for.
+      await backgroundSyncAccountsTick(
         storage: runtime.storage,
         repository: runtime.repository,
         prepareNetwork: runtime.refreshNetwork,
         onLate: (late) => unawaited(report(late)),
+        onOutcome: report,
       );
-      await report(outcome);
     } on Object catch (e, st) {
       talker.handle(e, st, 'background sync: tick failed');
     } finally {

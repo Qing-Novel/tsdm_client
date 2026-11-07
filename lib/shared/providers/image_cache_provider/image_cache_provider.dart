@@ -1,8 +1,11 @@
 import 'dart:io' if (dart.libaray.js) 'package:web/web.dart';
+import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/painting.dart' as painting;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_avif/flutter_avif.dart';
@@ -19,6 +22,7 @@ import 'package:tsdm_client/features/cache/models/models.dart';
 import 'package:tsdm_client/features/settings/models/models.dart';
 import 'package:tsdm_client/instance.dart';
 import 'package:tsdm_client/shared/models/models.dart';
+import 'package:tsdm_client/shared/providers/image_cache_provider/image_cache_trim.dart';
 import 'package:tsdm_client/shared/providers/image_cache_provider/models/image_cache_info.dart';
 import 'package:tsdm_client/shared/providers/image_cache_provider/models/models.dart';
 import 'package:tsdm_client/shared/providers/net_client_provider/net_client_provider.dart';
@@ -103,6 +107,39 @@ final class ImageCacheProvider with LoggerMixin {
   /// cached for the user at that moment, so a new avatar is never hidden behind an old one.
   final _avatarWithoutFile = <String, String>{};
 
+  /// Avatar urls the server answered 404 for, with no avatar cached for the user to show instead, and when: not asked
+  /// again for [missingAvatarTtl] (nor before the image is reloaded on purpose, `force`). Every card of such an author
+  /// asked the server again on every build, and a thread list is full of authors without an uploaded avatar; an author
+  /// who uploads one later shows it after the time is over.
+  final _missingAvatarUrls = <String, DateTime>{};
+
+  /// How long an avatar answering 404 is not asked again.
+  static const missingAvatarTtl = Duration(minutes: 10);
+
+  /// Source of the current time, for [missingAvatarTtl].
+  @visibleForTesting
+  static DateTime Function() clock = DateTime.now;
+
+  /// Whether [e] is the server's 404 for an image.
+  static bool _isNotFound(Object e) => switch (e) {
+    HttpRequestFailedException(statusCode: HttpStatus.notFound) => true,
+    HttpHandshakeFailedException(statusCode: HttpStatus.notFound) => true,
+    _ => false,
+  };
+
+  /// Whether the avatar at [url] answered 404 less than [missingAvatarTtl] ago (see [_missingAvatarUrls]).
+  bool isKnownMissingAvatar(String url) {
+    final since = _missingAvatarUrls[url];
+    if (since == null) {
+      return false;
+    }
+    if (clock().difference(since) < missingAvatarTtl) {
+      return true;
+    }
+    _missingAvatarUrls.remove(url);
+    return false;
+  }
+
   /// The avatar cached for [username] when [imageUrl] is known to have no file on the server.
   ///
   /// Forgets [imageUrl] when nothing is cached for the user any more, so the next load asks the server again.
@@ -137,13 +174,30 @@ final class ImageCacheProvider with LoggerMixin {
   /// Use this list to avoid duplicate requests.
   final List<String> _loadingImages = [];
 
+  /// Who is told the progress of the images downloading now, by url (`onProgress` of [getOrMakeCache]).
+  final _progressListeners = <String, Set<ImageLoadProgress>>{};
+
   /// Dispose the repository.
   Future<void> dispose() async {
     await _controller.close();
   }
 
-  /// Get the cache info related to [imageUrl].
-  ImageEntity? _getCacheInfo(String imageUrl) => getIt.get<StorageProvider>().getImageCacheSync(imageUrl);
+  /// Get the cache info related to [imageUrl]: looked up by its key, never by reading the whole table.
+  Future<ImageEntity?> _getCacheInfo(String imageUrl) => getIt.get<StorageProvider>().getImageCache(imageUrl);
+
+  /// The bytes of [file], null when it can not be read (deleted meanwhile: by the clean up of the cache, by Android
+  /// clearing the cache directory): the image is then fetched again.
+  Future<Uint8List?> _readCacheFile(File file) async {
+    try {
+      final data = await file.readAsBytes();
+      // An empty file is no image (an empty answer saved by an earlier version): read as not cached, so it is asked
+      // again instead of failing to decode every time it shows.
+      return data.isEmpty ? null : data;
+    } on FileSystemException catch (e) {
+      warning('cached image file can not be read: ${e.message}');
+      return null;
+    }
+  }
 
   /// Query the state of user avatar cache specified by [req], the result will be pended as a cache response.
   Future<void> queryUserAvatarCacheState(ImageCacheUserAvatarRequest req) async {
@@ -164,18 +218,31 @@ final class ImageCacheProvider with LoggerMixin {
       }
       return;
     }
+    final cacheData = await _readCacheFile(cacheFile);
+    if (cacheData == null) {
+      _controller.add(ImageCacheFailedResponse(req.imageId, ImageCacheResponseType.userAvatar));
+      return;
+    }
     if (cacheInfo.imageUrl != null) {
       // Update cache used time as used if cache file exists.
-      await _updateCacheUsedTime(cacheInfo.imageUrl!);
+      _updateCacheUsedTime(cacheInfo.imageUrl!);
     }
-    final cacheData = await cacheFile.readAsBytes();
     _controller.add(ImageCacheSuccessResponse(req.imageId, ImageCacheResponseType.userAvatar, cacheData));
   }
 
   /// Get the cache image data related to [req].
   ///
   /// Only return the image data.
-  Future<Option<Uint8List>> getOrMakeCache(ImageCacheRequest req, {bool force = false}) async {
+  ///
+  /// [cacheOnly]: only what is cached already, nothing is fetched (a picture of a post loaded when tapped, to save
+  /// data). [onProgress] is told how much of the image arrived while it downloads, also when it waits for another
+  /// request downloading the same image.
+  Future<Option<Uint8List>> getOrMakeCache(
+    ImageCacheRequest req, {
+    bool force = false,
+    bool cacheOnly = false,
+    ImageLoadProgress? onProgress,
+  }) async {
     final respType = switch (req) {
       ImageCacheGeneralRequest() => ImageCacheResponseType.general,
       ImageCacheUserAvatarRequest() => ImageCacheResponseType.userAvatar,
@@ -184,44 +251,44 @@ final class ImageCacheProvider with LoggerMixin {
     final imageUrl = req.imageUrl;
 
     if (!force) {
-      final cacheInfo = _getCacheInfo(req.imageUrl);
-      if (cacheInfo != null) {
-        final cacheFile = getCacheFile(cacheInfo.fileName);
-        if (cacheFile != null && cacheFile.existsSync()) {
-          final imageData = await cacheFile.readAsBytes();
+      final cacheInfo = await _getCacheInfo(req.imageUrl);
+      final cacheFile = cacheInfo == null ? null : getCacheFile(cacheInfo.fileName);
+      final imageData = cacheFile != null && cacheFile.existsSync() ? await _readCacheFile(cacheFile) : null;
+      if (imageData != null) {
+        // Cached loaded from disk, update last used time.
+        _updateCacheUsedTime(imageUrl);
 
-          // Cached loaded from disk, update last used time.
-          await _updateCacheUsedTime(imageUrl);
+        // Cache file may be deleted by external operations.
+        // Only reply a success response when cache is valid.
+        _controller.add(ImageCacheSuccessResponse(imageId, respType, imageData));
 
-          // Cache file may be deleted by external operations.
-          // Only reply a success response when cache is valid.
-          _controller.add(ImageCacheSuccessResponse(imageId, respType, imageData));
-
-          // Here the cache update progress is for some special situation:
-          //
-          // Assume an user's avatar is already cached ever before where was
-          // recognized as general image (not specialized as user avatar), here
-          // the cache reusing logic just loaded the image and leave the cache
-          // info, which is between user avatar cache file, in empty state.
-          // This made all same-user avatar cache loading logic in future end
-          // with failure because the image is cached while the relationship
-          // not.
-          //
-          // So add a check and update the reference if necessary.
-          if (req case ImageCacheUserAvatarRequest()) {
-            final cache = await getIt.get<StorageProvider>().getUserAvatarEntityCache(
-              username: req.username,
-              imageUrl: req.imageUrl,
-            );
-            if (cache == null) {
-              debug('save unrecorded user avatar for user ${req.username}');
-              await _saveCache(imageUrl, imageData, usage: ImageUsageInfoUserAvatar(req.username));
-            }
+        // Here the cache update progress is for some special situation:
+        //
+        // Assume an user's avatar is already cached ever before where was
+        // recognized as general image (not specialized as user avatar), here
+        // the cache reusing logic just loaded the image and leave the cache
+        // info, which is between user avatar cache file, in empty state.
+        // This made all same-user avatar cache loading logic in future end
+        // with failure because the image is cached while the relationship
+        // not.
+        //
+        // So add a check and update the reference if necessary.
+        if (req case ImageCacheUserAvatarRequest()) {
+          final cache = await getIt.get<StorageProvider>().getUserAvatarEntityCache(
+            username: req.username,
+            imageUrl: req.imageUrl,
+          );
+          if (cache == null) {
+            debug('save unrecorded user avatar for user ${req.username}');
+            await _saveCache(imageUrl, imageData, usage: ImageUsageInfoUserAvatar(req.username));
           }
-
-          return Option.of(imageData);
         }
+
+        return Option.of(imageData);
       }
+    }
+    if (cacheOnly) {
+      return const Option.none();
     }
     if (imageUrl.isEmpty) {
       return const Option.none();
@@ -235,24 +302,52 @@ final class ImageCacheProvider with LoggerMixin {
       }
     }
 
+    if (req is ImageCacheUserAvatarRequest && !force && isKnownMissingAvatar(imageUrl)) {
+      // The server has no file there (404 earlier in this run) and the user has no avatar cached either.
+      _controller.add(ImageCacheFailedResponse(imageId, respType));
+      return const Option.none();
+    }
+
     if (_loadingImages.contains(imageUrl)) {
       // If already loading, do nothing.
-      final x = await response.firstWhere(
-        (e) => e.imageId == imageUrl && (e is ImageCacheSuccessResponse || e is ImageCacheFailedResponse),
-      );
-      return switch (x) {
-        ImageCacheSuccessResponse(:final imageData) => Option.of(imageData),
-        ImageCacheFailedResponse() => const Option.none(),
-        final _ => const Option.none(),
-      };
+      if (onProgress != null) {
+        (_progressListeners[imageUrl] ??= {}).add(onProgress);
+      }
+      try {
+        final x = await response.firstWhere(
+          (e) => e.imageId == imageUrl && (e is ImageCacheSuccessResponse || e is ImageCacheFailedResponse),
+        );
+        return switch (x) {
+          ImageCacheSuccessResponse(:final imageData) => Option.of(imageData),
+          ImageCacheFailedResponse() => const Option.none(),
+          final _ => const Option.none(),
+        };
+      } finally {
+        _progressListeners[imageUrl]?.remove(onProgress);
+      }
     }
 
     // Enter loading state.
     _loadingImages.add(imageUrl);
+    if (onProgress != null) {
+      (_progressListeners[imageUrl] ??= {}).add(onProgress);
+    }
     _controller.add(ImageCacheLoadingResponse(imageId, respType));
 
     try {
-      final respEither = await _netClientProvider.getImage(imageUrl).run();
+      final respEither = await _netClientProvider
+          .getImage(
+            imageUrl,
+            // Only asked for when someone follows it: the Android client then reads the body in pieces.
+            onReceiveProgress: onProgress == null
+                ? null
+                : (received, total) {
+                    for (final listener in [...?_progressListeners[imageUrl]]) {
+                      listener(received, total > 0 ? total : null);
+                    }
+                  },
+          )
+          .run();
       if (respEither.isLeft()) {
         final err = respEither.unwrapErr();
         if (err is ImageResponseNotImageException) {
@@ -301,6 +396,11 @@ final class ImageCacheProvider with LoggerMixin {
       } else {
         imageData = resp.data as Uint8List;
       }
+      if (imageData.isEmpty) {
+        // A zero-byte file on the server (some avatars answer 200 with nothing), or an avif without a frame: no
+        // image, never cached, or every later load would fail to decode it without asking again.
+        throw const _EmptyImageException();
+      }
 
       final usage = switch (req) {
         ImageCacheGeneralRequest() => const ImageUsageInfoOther(),
@@ -331,11 +431,15 @@ final class ImageCacheProvider with LoggerMixin {
           return Option.of(value);
         }
       }
+      if (req is ImageCacheUserAvatarRequest && (_isNotFound(e) || e is _EmptyImageException)) {
+        _missingAvatarUrls[imageUrl] = clock();
+      }
       _controller.add(ImageCacheFailedResponse(imageId, respType));
       return const Option.none();
     } finally {
       // Leave loading state.
       _loadingImages.remove(imageUrl);
+      _progressListeners.remove(imageUrl);
     }
   }
 
@@ -357,11 +461,14 @@ final class ImageCacheProvider with LoggerMixin {
 
     // Cache data still alive.
 
-    if (url != null) {
-      await _updateCacheUsedTime(url);
+    final data = await _readCacheFile(cacheFile);
+    if (data == null) {
+      return const Option.none();
     }
-
-    return Option.of(await cacheFile.readAsBytes());
+    if (url != null) {
+      _updateCacheUsedTime(url);
+    }
+    return Option.of(data);
   }
 
   /// The cache file called [fileName] inside the image cache directory.
@@ -424,12 +531,11 @@ final class ImageCacheProvider with LoggerMixin {
     }
   }
 
-  /// Update image last used time.
+  /// Update image last used time: in memory now, in the table with the next batch
+  /// ([StorageProvider.markImageCacheUsed]).
   ///
   /// Not update the cached file.
-  Future<void> _updateCacheUsedTime(String imageUrl) async {
-    await getIt.get<StorageProvider>().updateImageCacheUsedTime(imageUrl);
-  }
+  void _updateCacheUsedTime(String imageUrl) => getIt.get<StorageProvider>().markImageCacheUsed(imageUrl);
 
   int _calculateDirectorySize(Directory dir) {
     final fileList = dir.listSync(recursive: true);
@@ -462,20 +568,200 @@ final class ImageCacheProvider with LoggerMixin {
     }
   }
 
-  /// Clear all image cache with last used time older than [dateTime].
-  ///
-  ///
-  /// Return the count of deleted cache.
-  Future<int> clearOutdatedCache(DateTime dateTime) async {
-    final storage = getIt.get<StorageProvider>();
-    final clearedCache = await storage.clearImageCacheOutdated(dateTime);
-    for (final cache in clearedCache) {
-      final cacheFile = getCacheFile(cache.fileName);
-      if (cacheFile != null && cacheFile.existsSync()) {
-        await cacheFile.delete();
+  /// Rows of the table read at once by [trimCache].
+  static const _trimRowsPage = 5000;
+
+  /// Offline thread pages read at once by [trimCache].
+  static const _trimBodiesPage = 20;
+
+  /// Images deleted at once by [trimCache], and the pause after each batch.
+  static const _trimBatch = 250;
+  static const _trimPause = Duration(milliseconds: 100);
+
+  // The work of [trimCache] in other isolates, each through a function of its own: a closure sent to an isolate takes
+  // the variables of the scope it was made in along, and those of [trimCache] hold the whole table.
+
+  static Future<Map<String, ImageCacheFileStat>> _listFilesIn(String dir) =>
+      Isolate.run(() => listImageCacheFiles(dir));
+
+  static Future<Set<String>> _keysOfPagesIn(List<String> bodies) => Isolate.run(() => imageKeysOfPages(bodies));
+
+  static Future<int> _deleteFilesIn(String dir, List<String> names) =>
+      Isolate.run(() => deleteImageCacheFiles(dir, names));
+
+  static Future<ImageCacheTrimPlan> _planIn({
+    required List<ImageCacheTrimRow> rows,
+    required Map<String, ImageCacheFileStat> files,
+    required Set<String> keptUrls,
+    required Set<String> keptFiles,
+    required Set<String> keptKeys,
+    required int nowMs,
+    required int? maxAgeMs,
+    required int maxEntries,
+    required int maxBytes,
+  }) => Isolate.run(
+    () => planImageCacheTrim(
+      rows: rows,
+      files: files,
+      keptUrls: keptUrls,
+      keptFiles: keptFiles,
+      keptKeys: keptKeys,
+      nowMs: nowMs,
+      maxAgeMs: maxAgeMs,
+      maxEntries: maxEntries,
+      maxBytes: maxBytes,
+    ),
+  );
+
+  /// The keys ([imageCacheKeyOf]) of [rows], a few thousand at a time so that the isolate keeps drawing frames.
+  static Future<Set<String>> _keysOfRows(List<ImageCacheTrimRow> rows) async {
+    final keys = <String>{};
+    for (var i = 0; i < rows.length; i++) {
+      keys.add(imageCacheKeyOf(rows[i].url));
+      if (i % _trimRowsPage == _trimRowsPage - 1) {
+        await Future<void>.delayed(Duration.zero);
       }
     }
-    return clearedCache.length;
+    return keys;
+  }
+
+  /// Clean up the image cache within [limits] ([planImageCacheTrim]): the images not shown for its age and the least
+  /// recently shown ones beyond its count or size go, with the rows whose file is gone and the files no row names.
+  ///
+  /// The pictures of the offline thread pages stay (the saved pages are read a few at a time, and an image of the cache
+  /// is kept when one of them names it, [imageKeysOfPage]), with the user's image stickers and the avatars of the
+  /// accounts saved on this device.
+  ///
+  /// Meant to run in the background long after the first frame. When the cache is within its limits only a listing
+  /// of the directory (in another isolate) and two counts run; the table is never read again whole. Otherwise the
+  /// table is read page by page through its key, the plan made in another isolate, and at most
+  /// [ImageCacheLimits.maxDeletesPerRun] images deleted, the least recently shown first, in small batches with a pause
+  /// after each: the files of a batch first (in another isolate), then its rows. A run stopped halfway leaves rows
+  /// without their file, which load the image again when shown and go with the next run, never a file no run would
+  /// find. A row shown or cached again meanwhile stays ([StorageProvider.beginImageCacheTouchLog]); the rows in memory
+  /// only lose the deleted ones. Null when it failed (logged).
+  Future<ImageCacheTrimResult?> trimCache(ImageCacheLimits limits) async {
+    final storage = getIt.get<StorageProvider>();
+    final dirPath = _imageCacheDirectory.path;
+    storage.beginImageCacheTouchLog();
+    try {
+      // The rows must tell when their images were last shown.
+      await storage.flushImageCacheUsedTimes();
+      final now = DateTime.now();
+      final files = await _listFilesIn(dirPath);
+      var bytes = 0;
+      for (final file in files.values) {
+        bytes += file.size;
+      }
+      final count = await storage.countImageCache();
+      final maxAge = limits.maxAge;
+      final outdated = maxAge == null ? 0 : await storage.countImageCacheUsedNoLaterThan(now.subtract(maxAge));
+      if (outdated == 0 && count <= limits.maxEntries && bytes <= limits.maxBytes && files.length == count) {
+        debug('image cache within its limits: $count images, $bytes bytes');
+        return (countBefore: count, bytesBefore: bytes, deletedRows: 0, deletedFiles: 0, more: false);
+      }
+
+      final rows = <ImageCacheTrimRow>[];
+      String? after;
+      while (true) {
+        final page = await storage.imageCacheRowsAfter(after, _trimRowsPage);
+        rows.addAll(
+          page.map((e) => (url: e.url, fileName: e.fileName, lastUsedMs: e.lastUsedTime.millisecondsSinceEpoch)),
+        );
+        if (page.length < _trimRowsPage) {
+          break;
+        }
+        after = page.last.url;
+      }
+      final keepers = await storage.imageCacheKeepers();
+      // Only the keys of images in the cache are kept: a saved page names many more urls (every link) than pictures,
+      // and a thousand pages would hold hundreds of thousands of them.
+      final keptKeys = <String>{};
+      Set<String>? rowKeys;
+      var afterRow = 0;
+      while (true) {
+        final page = await storage.offlineThreadBodiesAfter(afterRow, _trimBodiesPage);
+        if (page.isEmpty) {
+          break;
+        }
+        rowKeys ??= await _keysOfRows(rows);
+        final bodies = [for (final e in page) e.body];
+        final keys = await _keysOfPagesIn(bodies);
+        keptKeys.addAll(keys.where(rowKeys.contains));
+        afterRow = page.last.rowId;
+      }
+
+      final nowMs = now.millisecondsSinceEpoch;
+      final plan = await _planIn(
+        rows: rows,
+        files: files,
+        keptUrls: keepers.urls,
+        keptFiles: keepers.fileNames,
+        keptKeys: keptKeys,
+        nowMs: nowMs,
+        maxAgeMs: maxAge?.inMilliseconds,
+        maxEntries: limits.maxEntries,
+        maxBytes: limits.maxBytes,
+      );
+
+      var budget = limits.maxDeletesPerRun;
+      var deletedRows = 0;
+      var deletedFiles = 0;
+      final doomedRows = plan.rows.take(budget).toList();
+      budget -= doomedRows.length;
+      for (var i = 0; i < doomedRows.length; i += _trimBatch) {
+        final batch = doomedRows.sublist(i, math.min(i + _trimBatch, doomedRows.length));
+        // Shown or cached again since the table was read: stays.
+        final touched = storage.touchedImageUrls;
+        final targets = [
+          for (final e in batch)
+            if (!touched.contains(e.url)) e,
+        ];
+        if (targets.isEmpty) {
+          continue;
+        }
+        // Files first: a run stopped here leaves rows without their file (the image loads again when shown, the
+        // next run deletes the row), never a file no row names.
+        final names = [for (final e in targets) e.fileName];
+        deletedFiles += await _deleteFilesIn(dirPath, names);
+        deletedRows += await storage.deleteImageCacheRows(
+          [for (final e in targets) e.url],
+          usedNoLaterThan: DateTime.fromMillisecondsSinceEpoch(targets.map((e) => e.lastUsedMs).reduce(math.max)),
+        );
+        await Future<void>.delayed(_trimPause);
+      }
+      final orphans = plan.orphanFiles.take(math.max(0, budget)).toList();
+      for (var i = 0; i < orphans.length; i += _trimBatch) {
+        // Not a file of an image cached again meanwhile: its row may be on its way.
+        final saved = {for (final url in storage.touchedImageUrls) url.fileNameV5()};
+        final batch = [
+          for (final name in orphans.sublist(i, math.min(i + _trimBatch, orphans.length)))
+            if (!saved.contains(name)) name,
+        ];
+        deletedFiles += await _deleteFilesIn(dirPath, batch);
+        await Future<void>.delayed(_trimPause);
+      }
+      final more = plan.rows.length > doomedRows.length || plan.orphanFiles.length > orphans.length;
+      info(
+        'image cache cleaned up: ${plan.countBefore} images ($bytes bytes, ${files.length} files), '
+        '$deletedRows rows and $deletedFiles files deleted${more ? ', more left for the next run' : ''}; kept '
+        '${keepers.urls.length} stickers, ${keepers.fileNames.length} account avatars, ${keptKeys.length} offline '
+        'page keys',
+      );
+      return (
+        countBefore: plan.countBefore,
+        bytesBefore: bytes,
+        deletedRows: deletedRows,
+        deletedFiles: deletedFiles,
+        more: more,
+      );
+    } on Object catch (e, st) {
+      error('failed to clean up the image cache: $e');
+      handleRaw(e, st);
+      return null;
+    } finally {
+      storage.endImageCacheTouchLog();
+    }
   }
 
   ///////////////////////// Emoji Cache /////////////////////////
@@ -574,7 +860,8 @@ final class ImageCacheProvider with LoggerMixin {
   /// Check have the cache file for emoji with [groupId] and [id].
   bool hasEmojiCacheFile(String groupId, String id) {
     final cachePath = _formatEmojiCachePath(groupId, id);
-    return cachePath != null && File(cachePath).existsSync();
+    // An empty file is no emoji (an empty answer saved by an earlier version): not cached, asked again.
+    return cachePath != null && File(cachePath).existsSync() && File(cachePath).lengthSync() > 0;
   }
 
   /// Try get the emoji cache from raw bbcode.
@@ -614,7 +901,8 @@ final class ImageCacheProvider with LoggerMixin {
       warning('$cacheFile cache file not exists');
       return null;
     }
-    return cacheFile.readAsBytes();
+    final data = await cacheFile.readAsBytes();
+    return data.isEmpty ? null : data;
   }
 
   /// Get the cached file of emoji with specified [groupId] and [id].
@@ -628,7 +916,8 @@ final class ImageCacheProvider with LoggerMixin {
       warning('$cacheFile cache file not exists');
       return null;
     }
-    return cacheFile.readAsBytesSync();
+    final data = cacheFile.readAsBytesSync();
+    return data.isEmpty ? null : data;
   }
 
   /// Clear all emoji cache files.
@@ -640,6 +929,11 @@ final class ImageCacheProvider with LoggerMixin {
 
   /// Update emoji cache.
   Future<void> updateEmojiCache(String groupId, String id, List<int> imageData) async {
+    if (imageData.isEmpty) {
+      // As for images: an empty answer is no emoji, never cached (it would fail to decode every time it shows).
+      warning('refuse to cache an empty emoji $groupId/$id');
+      return;
+    }
     final fileName = _formatEmojiCachePath(groupId, id);
     if (fileName == null) {
       warning('refuse to cache emoji with unsafe id (${groupId.length}/${id.length} chars)');
@@ -664,7 +958,7 @@ final class ImageCacheProvider with LoggerMixin {
       return null;
     }
     final uiImage = await painting.decodeImageFromList(imageData);
-    final cacheInfo = _getCacheInfo(url);
+    final cacheInfo = await _getCacheInfo(url);
     if (cacheInfo == null) {
       return null;
     }
@@ -682,4 +976,12 @@ final class ImageCacheProvider with LoggerMixin {
       ).statSync().size.withSizeHint(),
     );
   }
+}
+
+/// An image request answered with no bytes: a zero-byte file on the server, or an avif image without a frame.
+final class _EmptyImageException implements Exception {
+  const _EmptyImageException();
+
+  @override
+  String toString() => 'empty image';
 }

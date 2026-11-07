@@ -27,7 +27,11 @@ class SpoilerCard extends StatefulWidget {
 }
 
 class _SpoilerCardState extends State<SpoilerCard> {
-  bool _visible = false;
+  /// Spoilers opened, by the card: a floor built again (floors are not kept alive) shows its content munched before
+  /// (MunchCache), the same cards, opened as they were left.
+  static final _opened = Expando<bool>('spoiler opened');
+
+  late bool _visible = _opened[widget] ?? false;
 
   @override
   Widget build(BuildContext context) {
@@ -47,10 +51,12 @@ class _SpoilerCardState extends State<SpoilerCard> {
             onPressed: () {
               setState(() {
                 _visible = !_visible;
+                _opened[widget] = _visible;
               });
             },
           ),
-          if (_visible) ...[sizedBoxW8H8, Text.rich(widget.content)],
+          // An empty spoiler (the forum's, a fold of the post) opens nothing, as on the web page.
+          if (_visible && widget.content.toPlainText().isNotEmpty) ...[sizedBoxW8H8, Text.rich(widget.content)],
         ].insertBetween(sizedBoxW4H4),
       ),
     );
